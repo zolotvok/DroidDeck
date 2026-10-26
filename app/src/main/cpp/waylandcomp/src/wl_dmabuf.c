@@ -118,7 +118,14 @@ static void dmabuf_build_formats(void) {
     char line[320];
     int pos = 0, compressed = 0;
     g_dmabuf_fmts_ready = 1;
-    g_dmabuf_nfmt = droiddeck_color_hdr_open() ? DMABUF_NFMT_MAX : DMABUF_NFMT_SDR;
+    int hdr = droiddeck_color_hdr_open();
+    g_dmabuf_nfmt = hdr ? DMABUF_NFMT_MAX : DMABUF_NFMT_SDR;
+    if (!hdr) {
+        uint64_t got10[DMABUF_NMOD];
+        if (vkp_dmabuf_modifiers(DRM_ABGR2101010, got10, DMABUF_NMOD) > 0 &&
+            vkp_dmabuf_modifiers(DRM_XBGR2101010, got10, DMABUF_NMOD) > 0)
+            g_dmabuf_nfmt = DMABUF_NFMT_MAX;
+    }
     for (int f = 0; f < g_dmabuf_nfmt; f++) {
         uint64_t got[DMABUF_NMOD];
         int n = vkp_dmabuf_modifiers(g_dmabuf_fmts[f].fmt, got, DMABUF_NMOD), k = 0;
@@ -148,8 +155,9 @@ static void dmabuf_build_formats(void) {
         uint64_t got[DMABUF_NMOD];
         int n = vkp_dmabuf_modifiers(DRM_XBGR2101010, got, DMABUF_NMOD), ubwc10 = 0;
         for (int i = 0; i < n; i++) if (got[i] == VKP_MOD_QCOM_COMPRESSED) ubwc10 = 1;
-        droiddeck_log("color", "10-bit dma-buf formats AB30/XB30 advertised for HDR10; the compositor's driver (%s) "
-                   "imports XB30 %s", vkp_gpu_name(),
+        droiddeck_log("color", "10-bit dma-buf formats AB30/XB30 advertised %s; the compositor's driver (%s) "
+                   "imports XB30 %s", hdr ? "for HDR10" : "for 10-bit SDR swapchains",
+                   vkp_gpu_name(),
                    n == 0 ? "with no layout it reports (copy path unlikely; display layer only)"
                           : ubwc10 ? "linear and UBWC" : "linear only (UBWC 10-bit frames: display layer only)");
     }

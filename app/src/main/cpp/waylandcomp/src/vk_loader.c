@@ -35,6 +35,7 @@ int vk_loader_open(const char *driver_path, const char *library_name,
     }
     if (!g_handle) return -1;
     g_gip = (PFN_vkGetInstanceProcAddr)dlsym(g_handle, "vkGetInstanceProcAddr");
+    if (!g_gip) g_gip = (PFN_vkGetInstanceProcAddr)dlsym(g_handle, "vk_icdGetInstanceProcAddr");
     if (!g_gip) {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "no vkGetInstanceProcAddr");
         return -1;
