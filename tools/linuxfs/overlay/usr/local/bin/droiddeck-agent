@@ -164,6 +164,12 @@ class X:
         r = self.request(struct.pack("<BxHI", 14, 2, window))
         return struct.unpack_from("<hhHH", r, 12) if r else None
 
+    def move(self, window, x, y):
+        """ConfigureWindow x/y. On a managed window the WM (gamescope) gets it as a
+        ConfigureRequest, like a client moving its own window."""
+        self.s.sendall(struct.pack("<BxHIHxxii", 12, 5, window, 0x3, x, y))
+        self.request(struct.pack("<BxH", 43, 1))  # GetInputFocus round trip: processed
+
     def prop(self, window, name, length=1024):
         atom = self.atom(name)
         if not atom:
@@ -259,6 +265,35 @@ class FocusWatcher(threading.Thread):
         self.changed = threading.Event()
         self.last = None
         self.seq = 0
+        self.nudged = set()
+
+    def nudge_dialog(self, snap):
+        """A game's launcher dialog (a window smaller than the screen) that gamescope focuses
+        does not take pad/keyboard input until it is moved once (Oblivion's launcher). Move it
+        by one pixel and back, once per window. BL_NUDGE_DIALOGS=0 turns this off."""
+        win = snap.get("focusedWindow")
+        if not win or win in self.nudged or os.environ.get("BL_NUDGE_DIALOGS", "1") == "0":
+            return
+        for d, wins in snap["displays"].items():
+            entry = next((w for w in wins if w["window"] == win), None)
+            if entry is None:
+                continue
+            if entry["map"] != "viewable" or entry["overrideRedirect"] or entry["appId"] == 769:
+                return
+            gx, gy, w, h = entry["geometry"]
+            x = X(d)
+            try:
+                root = x.geometry(x.root)
+                if not root or not w or not h or (w >= root[2] and h >= root[3]):
+                    return
+                self.nudged.add(win)
+                x.move(win, gx + 1, gy)
+                time.sleep(0.15)
+                x.move(win, gx, gy)
+            finally:
+                x.close()
+            log("nudged dialog window 0x%x (app %s, %dx%d) on %s" % (win, entry["appId"], w, h, d))
+            return
 
     def run(self):
         threading.Thread(target=self.listen, daemon=True, name="focus-events").start()
@@ -272,6 +307,10 @@ class FocusWatcher(threading.Thread):
                 log("focus snapshot failed: %s" % e)
                 time.sleep(2)
                 continue
+            try:
+                self.nudge_dialog(snap)
+            except OSError as e:
+                log("dialog nudge failed: %s" % e)
             body = {k: v for k, v in snap.items() if k != "t"}
             if body == self.last:
                 continue
