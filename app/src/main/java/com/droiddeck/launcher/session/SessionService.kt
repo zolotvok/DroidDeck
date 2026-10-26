@@ -521,7 +521,7 @@ class SessionService : Service() {
         guest.add("GALLIUM_DRIVER=zink")
         guest.add("LIBGL_KOPPER_DRI2=true")
         LinuxRuntime.vulkanIcd(this)?.let { guest.add("VK_ICD_FILENAMES=" + it.path) }
-        val linuxDriverId = SessionPrefs.linuxDriver(this)
+        val linuxDriverId = LinuxVulkanDriver.effective(this, SessionPrefs.linuxDriver(this))
         LinuxVulkanDriver.resolveIcdPath(this, linuxDriverId)
             ?.let { guest.add(LinuxVulkanDriver.ENV + "=" + it) }
         tuDebug(linuxDriverId)?.let { guest.add("TU_DEBUG=$it") }

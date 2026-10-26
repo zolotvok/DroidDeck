@@ -24,6 +24,7 @@ public final class LinuxRuntime {
     public static final String MODE_RUN = "run";
     public static final String EXTRA_LINUX_MODE = "linux_mode";
     private static final String KGSL_DEVICE = "/dev/kgsl-3d0";
+    private static final String MALI_DEVICE = com.droiddeck.launcher.core.DeviceSupport.MALI_DEVICE;
     public static final String GUEST_RUNTIME_DIR = "/run/droiddeck";
     private static final String SYSTEM_FONTS = "/system/fonts";
     private static final String GUEST_SYSTEM_FONTS = "/usr/local/share/fonts/android";
@@ -200,6 +201,9 @@ public final class LinuxRuntime {
                 bind(cmd, fake.getPath() + ":" + entry[1]);
             }
         }
+        if (new File("/sys/bus/pci/devices").list() == null) {
+            bind(cmd, new File(root, "etc/droiddeck/empty").getPath() + ":/sys/bus/pci/devices");
+        }
         bindGpuNode(context, cmd);
         bindAdrenoStats(cmd, extraBinds);
         bindCpuTemps(cmd, root);
@@ -212,11 +216,21 @@ public final class LinuxRuntime {
     }
 
     private static void bindGpuNode(Context context, List<String> cmd) {
+        String gpuDevice = KGSL_DEVICE;
+        String driverName = "kgsl-3d0";
+        String driverLink = "/sys/bus/platform/drivers/msm_drm";
         StructStat st;
         try {
             st = Os.stat(KGSL_DEVICE);
         } catch (ErrnoException e) {
-            return;
+            try {
+                st = Os.stat(MALI_DEVICE);
+            } catch (ErrnoException e2) {
+                return;
+            }
+            gpuDevice = MALI_DEVICE;
+            driverName = "mali";
+            driverLink = "/sys/bus/platform/drivers/mali";
         }
         long dev = st.st_rdev;
         long major = ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfffL);
@@ -234,21 +248,21 @@ public final class LinuxRuntime {
             Files.write(new File(drm, "dev").toPath(),
                     (major + ":" + minor + "\n").getBytes(StandardCharsets.UTF_8));
             Files.write(new File(device, "uevent").toPath(),
-                    "DRIVER=kgsl-3d0\nMODALIAS=platform:kgsl-3d0\n".getBytes(StandardCharsets.UTF_8));
+                    ("DRIVER=" + driverName + "\nMODALIAS=platform:" + driverName + "\n").getBytes(StandardCharsets.UTF_8));
             File subsystem = new File(device, "subsystem");
             if (!Files.isSymbolicLink(subsystem.toPath())) {
                 Os.symlink("/sys/bus/platform", subsystem.getPath());
             }
             File driver = new File(device, "driver");
             if (!Files.isSymbolicLink(driver.toPath())) {
-                Os.symlink("/sys/bus/platform/drivers/msm_drm", driver.getPath());
+                Os.symlink(driverLink, driver.getPath());
             }
         } catch (IOException | ErrnoException e) {
             return;
         }
         bind(cmd, new File(base, "sys").getPath() + ":/sys/dev/char");
         bind(cmd, dri.getPath() + ":/dev/dri");
-        bind(cmd, KGSL_DEVICE + ":/dev/dri/" + node);
+        bind(cmd, gpuDevice + ":/dev/dri/" + node);
         bindDrmClass(base, cmd, node, major + ":" + minor);
     }
 

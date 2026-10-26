@@ -33,6 +33,19 @@ public final class LinuxVulkanDriver {
         return m.getDriverName(value) + (ver.isEmpty() ? "" : " " + ver) + " (imported)";
     }
 
+    public static String effective(Context context, String value) {
+        if (value != null && !value.isEmpty()) return value;
+        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return "";
+        LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
+        for (String id : m.enumerateInstalledDrivers()) {
+            if (m.isPanvk(id)) {
+                Log.i(TAG, "Mali GPU and no Linux driver chosen; using imported PanVK " + id);
+                return id;
+            }
+        }
+        return "";
+    }
+
     public static String resolveIcdPath(Context context, String value) {
         if (value == null || value.isEmpty()) return null;
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
