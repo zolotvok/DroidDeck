@@ -5,6 +5,8 @@
   </picture>
 </p>
 
+> **This is an unofficial fork of [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck) that adds experimental Mali GPU support through [PanVK-kbase](https://github.com/zenithblue-oss/panvk-kbase-android)** (branch `mali-panvk`, modified since 2026-10-26). It is not made or supported by the DroidDeck team: report Mali problems in this fork's issues, not to upstream. Everything else below is the upstream README, with the Mali notes added.
+
 DroidDeck brings the SteamOS experience to Android: Steam Gaming Mode, full Linux desktop, integration with GOG, Epic Games, Xbox, and other storefronts, Steam VR, and more!
 
 <p align="center"><b>100% open source. No ads. No telemetry. No source withheld.</b></p>
@@ -34,14 +36,51 @@ DroidDeck brings the SteamOS experience to Android: Steam Gaming Mode, full Linu
   <img src="docs/releases/media/0.6.7/ubuntu-desktop-discover.jpg" width="49%" alt="The Kubuntu desktop with Discover open">
 </p>
 
+## Mali (PanVK), experimental
+
+On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an open Vulkan driver that runs on the vendor's Mali kernel driver (`/dev/mali0`). The Android side uses the phone's own Vulkan driver.
+
+**Tested:** one device only.
+- vivo X300 Pro: MediaTek Dimensity 9500, Mali-G1-Ultra MC12 (arch v14), Android 16.
+
+**Untested:** other Mali CSF GPUs (G610-G925). PanVK-kbase supports them, but they have not been tried with DroidDeck.
+
+**Setup:**
+- This fork has no release APKs yet. Build it as described in [Build](#build).
+- You need an aarch64 **glibc (Linux)** build of PanVK-kbase. The upstream PanVK-kbase releases ship Android builds only.
+- On the vivo X300 Pro the driver also needs three kbase patches:
+  - report the DRM render node (gamescope needs it);
+  - close imported sync files (fd leak);
+  - fast exported fences.
+
+  These are being submitted to PanVK-kbase upstream.
+- Import the driver zip (with `libvulkan_panfrost.so`) under **Linux runtime driver**. With no Linux driver chosen, a Mali device uses the imported PanVK automatically.
+
+**Done for you on PanVK:**
+- `ENABLE_GAMESCOPE_WSI=0` is set automatically: through gamescope's WSI layer, games showed only their first frames, then a black screen.
+- Launcher dialogs smaller than the screen are moved by one pixel once, so they take input. This is for Oblivion's launcher; turn it off with `BL_NUDGE_DIALOGS=0`.
+
+**Session environment to set yourself:** use `tools/droiddeckctl env set --persistent` from a PC with adb.
+- `VKD3D_DISABLE_EXTENSIONS=VK_EXT_present_timing`: Horizon Zero Dawn otherwise crashes in Mesa's X11 WSI.
+- `PANVK_KBASE_HEAP_RENEW_INTERVAL=32`: Oblivion otherwise freezes after a few minutes at a high frame rate (tiler heap out of memory).
+
+**Status:**
+- Steam starts in the gamescope session. It sometimes stalls at start.
+- Oblivion (DXVK) runs at about 90 FPS in game.
+- The Witcher 3 (DXVK) reaches the main menu (47 FPS), then hits a GPU fault in the prologue.
+- Horizon Zero Dawn reaches the menu, then hits the same GPU fault at the first in-game frame. That fault is an open PanVK bug.
+
+
 ## Install
 
-1. Android 9 or newer on Adreno 730 or newer, or any 8xx. Adreno 6xx is experimental. Mali, Xclipse, PowerVR and Adreno 710 are unsupported. No root needed.
+1. Android 9 or newer on Adreno 730 or newer, or any 8xx. Adreno 6xx is experimental. Mali is experimental in this fork (see [Mali (PanVK), experimental](#mali-panvk-experimental)). Xclipse, PowerVR and Adreno 710 are unsupported. No root needed.
 2. About 3 GB free for the runtime, plus 1.1 GB for the desktop and emulators.
 3. Install the [APK](https://github.com/Droid-Deck/DroidDeck/releases/download/0.6.7/DroidDeck-0.6.7.apk), install the Linux runtime, press **Play** and sign in to Steam.
 4. On Android 14 and newer, turn on **Disable child process restrictions** in Developer options. On Android 12 and 13, Steam's first launch shows a **Fix it for me** button that walks you through it.
 
 Smart glasses setup is in the [support matrix](docs/smart-glasses-support.md). Release notes are in [docs/releases](docs/releases).
+
+Mali/PanVK problems: open an issue in this fork. The upstream Discord and bug forum are for the official, Adreno-only builds.
 
 Help, Preview builds and device reports are on [Discord](https://discord.gg/JRGAvawjsm). For bugs, post in **#bug-reports** with the zip from **Share logs**.
 
@@ -69,6 +108,7 @@ DroidDeck is [GPL-3.0](LICENSE). Steam and Proton belong to Valve Corporation. V
 <summary><b>Runtime, Wine and Proton</b></summary>
 
 - Runtime, shim, input and controller work build on WinNative and Bannerlator by maxjivi05.
+- Mali support uses [PanVK-kbase](https://github.com/zenithblue-oss/panvk-kbase-android) (Mesa's PanVK on the Mali kbase kernel driver, MIT).
 - mmap ring buffer controller input by ribbit384 ([WinNative #345](https://github.com/WinNative-Emu/WinNative/pull/345)).
 - [FEX](https://github.com/FEX-Emu/FEX) (MIT) runs x86 code. DroidDeck's build puts the platform name under `AT_PLATFORM` so [sharun](https://github.com/VHSgunzo/sharun) AppImages by VHSgunzo (MIT) start through its [userland-execve](https://crates.io/crates/userland-execve) loader (MIT). FEX's code disk cache was checked in its source.
 - x86 AppImages, and arm64 ones whose runtime can't unpack on Android, are unpacked with [uruntime](https://github.com/VHSgunzo/uruntime) by VHSgunzo (MIT), shipped unmodified with its licence.
