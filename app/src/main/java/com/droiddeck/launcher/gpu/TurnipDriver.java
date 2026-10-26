@@ -281,6 +281,10 @@ public final class TurnipDriver {
             if (forced.startsWith("a7")) return DRIVER_A7XX;
             if (forced.startsWith("a6")) return DRIVER_A6XX;
         }
+        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.adreno()) {
+            Log.i(TAG, "not an Adreno GPU: the display uses the system Vulkan driver");
+            return null;
+        }
         String model = gpuModel();
         Log.i(TAG, "gpu model: " + (model == null ? "unknown" : model));
         if (model != null) {
