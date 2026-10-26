@@ -5,7 +5,9 @@
   </picture>
 </p>
 
-DroidDeck brings the SteamOS experience to Android: Valve's Steam client in Big Picture on your Adreno handheld, with Windows games through Valve's ARM64 Proton.
+> **This is an unofficial fork of [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck) that adds experimental Mali GPU support through [PanVK-kbase](https://github.com/zenithblue-oss/panvk-kbase-android)** (branch `mali-panvk`, modified since 2026-10-26). It is not made or supported by the DroidDeck team: report Mali problems in this fork's issues, not to upstream. Everything else below is the upstream README, with the Mali notes added.
+
+DroidDeck brings the SteamOS experience to Android: Valve's Steam client in Big Picture on your Adreno or Mali handheld, with Windows games through Valve's ARM64 Proton.
 
 <p align="center"><a href="https://discord.gg/JRGAvawjsm"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join the DroidDeck Discord"></a></p>
 
@@ -15,11 +17,47 @@ DroidDeck brings the SteamOS experience to Android: Valve's Steam client in Big 
 
 ## Requirements and install
 
-Use Android 9 or newer on a supported Adreno device (730 or newer, or 8xx). Adreno 6xx is experimental: DirectX 11 uses DXVK 2 and may run, and DirectX 12 games can still crash. Mali, Xclipse, PowerVR, and Adreno 710 are unsupported. No root is required. Allow about 3 GB for the runtime and 1.1 GB more for the desktop and emulators. Install the APK from [Releases](https://github.com/Droid-Deck/DroidDeck/releases), install the Linux runtime, then press **Play** and sign in. Steam downloads on first launch. Install **Desktop & apps** to use the desktop and emulators. The **Store** installs Linux apps and games from Flathub (ARM64 builds) with Flatpak; with additional options to install Appimages and set up scripts. **Stores** (Setup › Stores › "Show Stores in the rail") signs in to GOG, Epic Games and Amazon Games, browses their catalogs and libraries, downloads games into the Games storage and adds each one to the Steam client as a non-Steam game, so it launches through Proton like everything else; the cog on its chip row sets which tab a store opens on and the download speed tier.
+Use Android 9 or newer on a supported Adreno device (730 or newer, or 8xx). Adreno 6xx is experimental: DirectX 11 uses DXVK 2 and may run, and DirectX 12 games can still crash. Mali is experimental in this fork (see [Mali (PanVK), experimental](#mali-panvk-experimental)). Xclipse, PowerVR, and Adreno 710 are unsupported. No root is required. Allow about 3 GB for the runtime and 1.1 GB more for the desktop and emulators. Install the APK from [Releases](https://github.com/Droid-Deck/DroidDeck/releases), install the Linux runtime, then press **Play** and sign in. Steam downloads on first launch. Install **Desktop & apps** to use the desktop and emulators. The **Store** installs Linux apps and games from Flathub (ARM64 builds) with Flatpak; with additional options to install Appimages and set up scripts. **Stores** (Setup › Stores › "Show Stores in the rail") signs in to GOG, Epic Games and Amazon Games, browses their catalogs and libraries, downloads games into the Games storage and adds each one to the Steam client as a non-Steam game, so it launches through Proton like everything else; the cog on its chip row sets which tab a store opens on and the download speed tier.
 
 Before Steam launches, you must turn off **Restrict child processes** in Developer options. If this option is not available in developer settings (Android 12 and 13 devices), first launch of Steam will present a "Fix it for me" button, which will help automate the setup process.
 
+## Mali (PanVK), experimental
+
+On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an open Vulkan driver that runs on the vendor's Mali kernel driver (`/dev/mali0`). The Android side uses the phone's own Vulkan driver.
+
+**Tested:** one device only.
+- vivo X300 Pro: MediaTek Dimensity 9500, Mali-G1-Ultra MC12 (arch v14), Android 16.
+
+**Untested:** other Mali CSF GPUs (G610-G925). PanVK-kbase supports them, but they have not been tried with DroidDeck.
+
+**Setup:**
+- This fork has no release APKs yet. Build it as described in [Build](#build).
+- You need an aarch64 **glibc (Linux)** build of PanVK-kbase. The upstream PanVK-kbase releases ship Android builds only.
+- On the vivo X300 Pro the driver also needs three kbase patches:
+  - report the DRM render node (gamescope needs it);
+  - close imported sync files (fd leak);
+  - fast exported fences.
+
+  These are being submitted to PanVK-kbase upstream.
+- Import the driver zip (with `libvulkan_panfrost.so`) under **Linux runtime driver**. With no Linux driver chosen, a Mali device uses the imported PanVK automatically.
+
+**Done for you on PanVK:**
+- `ENABLE_GAMESCOPE_WSI=0` is set automatically: through gamescope's WSI layer, games showed only their first frames, then a black screen.
+- Launcher dialogs smaller than the screen are moved by one pixel once, so they take input. This is for Oblivion's launcher; turn it off with `BL_NUDGE_DIALOGS=0`.
+
+**Session environment to set yourself:** use `tools/droiddeckctl env set --persistent` from a PC with adb.
+- `VKD3D_DISABLE_EXTENSIONS=VK_EXT_present_timing`: Horizon Zero Dawn otherwise crashes in Mesa's X11 WSI.
+- `PANVK_KBASE_HEAP_RENEW_INTERVAL=32`: Oblivion otherwise freezes after a few minutes at a high frame rate (tiler heap out of memory).
+
+**Status:**
+- Steam starts in the gamescope session. It sometimes stalls at start.
+- Oblivion (DXVK) runs at about 90 FPS in game.
+- The Witcher 3 (DXVK) reaches the main menu (47 FPS), then hits a GPU fault in the prologue.
+- Horizon Zero Dawn reaches the menu, then hits the same GPU fault at the first in-game frame. That fault is an open PanVK bug.
+
 ## Community
+
+Mali/PanVK problems: open an issue in this fork. The upstream Discord and bug forum are for the official, Adreno-only builds.
 
 Join the [DroidDeck Discord](https://discord.gg/JRGAvawjsm) for help, Preview builds, and device reports. Bug reports go in its **#bug-reports** forum; attach the zip from **Share logs** (Setup, or the session drawer) so the logs come with it.
 
@@ -37,4 +75,4 @@ Compatibility and performance vary by device; hardware validation is limited. De
 
 ## Credits and licence
 
-GPL-3.0. Runtime, shim, input, and controller work build on WinNative and Bannerlator (maxjivi05). Epic Games and GOG support build on [Phobos’s](https://github.com/phobos665) adaptation of [Legendary](https://github.com/legendary-gl/legendary) and [gogdl](https://github.com/Heroic-Games-Launcher/heroic-gogdl), respectively. LSFG frame generation is from the work of Camille LaVey and the [Eden](https://eden-emu.dev) emulator project, following [lsfg-vk](https://github.com/PancakeTAS/lsfg-vk), ported to WinNative and DroidDeck by [@maxjivi05](https://github.com/maxjivi05); it needs your own copy of [Lossless Scaling](https://store.steampowered.com/app/993090/) and ships none of its shaders. x86 AppImages, and any whose own runtime cannot unpack them, are unpacked with [uruntime](https://github.com/VHSgunzo/uruntime) by VHSgunzo (MIT), shipped unmodified with its licence. See [LICENSE](LICENSE). Steam and Proton belong to Valve Corporation; this project is not affiliated with Valve.
+GPL-3.0. Runtime, shim, input, and controller work build on WinNative and Bannerlator (maxjivi05). Epic Games and GOG support build on [Phobos’s](https://github.com/phobos665) adaptation of [Legendary](https://github.com/legendary-gl/legendary) and [gogdl](https://github.com/Heroic-Games-Launcher/heroic-gogdl), respectively. LSFG frame generation is from the work of Camille LaVey and the [Eden](https://eden-emu.dev) emulator project, following [lsfg-vk](https://github.com/PancakeTAS/lsfg-vk), ported to WinNative and DroidDeck by [@maxjivi05](https://github.com/maxjivi05); it needs your own copy of [Lossless Scaling](https://store.steampowered.com/app/993090/) and ships none of its shaders. x86 AppImages, and any whose own runtime cannot unpack them, are unpacked with [uruntime](https://github.com/VHSgunzo/uruntime) by VHSgunzo (MIT), shipped unmodified with its licence. Mali support uses [PanVK-kbase](https://github.com/zenithblue-oss/panvk-kbase-android) (Mesa's PanVK on the Mali kbase kernel driver, MIT). See [LICENSE](LICENSE). Steam and Proton belong to Valve Corporation; this project is not affiliated with Valve.
