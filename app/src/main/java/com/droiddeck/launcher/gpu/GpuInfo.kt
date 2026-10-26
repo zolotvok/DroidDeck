@@ -3,6 +3,7 @@ package com.droiddeck.launcher.gpu
 import android.content.Context
 import android.os.Build
 import com.droiddeck.launcher.R
+import com.droiddeck.launcher.core.DeviceSupport
 import com.droiddeck.launcher.core.FileUtils
 import java.io.File
 
@@ -24,6 +25,7 @@ data class GpuInfo(
         A7XX("Adreno 7xx"),
         A6XX("Adreno 6xx"),
         ADRENO_UNKNOWN("Adreno"),
+        MALI("Mali (PanVK)"),
         NOT_ADRENO("Not an Adreno GPU");
 
         fun label(context: Context): String = if (this == NOT_ADRENO) context.getString(R.string.gpuinfo_not_adreno) else label
@@ -36,6 +38,7 @@ data class GpuInfo(
     val support: Support
         get() = when {
             family == Family.NOT_ADRENO -> Support.UNSUPPORTED
+            family == Family.MALI -> Support.UNTESTED
             isA850 -> Support.UNTESTED
             verifiedDevice -> Support.TESTED
             family == Family.A6XX && model == 650 -> Support.TESTED
@@ -48,7 +51,7 @@ data class GpuInfo(
         get() = when (support) {
             Support.TESTED -> "Supported"
             Support.UNTESTED -> if (isA850) "Experimental Adreno 850 support: requires compatible experimental display and game drivers; not verified on this device"
-                else if (family == Family.A7XX_LOW) "Experimental: its drivers are test builds"
+                else if (family == Family.A7XX_LOW || family == Family.MALI) "Experimental: its drivers are test builds"
                 else "Outside tested hardware (Adreno 650, 725 and newer): it may not run"
             Support.UNSUPPORTED -> "Not supported: DroidDeck needs an Adreno (Snapdragon) GPU"
         }
@@ -57,7 +60,7 @@ data class GpuInfo(
         Support.TESTED -> R.string.gpuinfo_supported
         Support.UNTESTED -> when {
             isA850 -> R.string.gpuinfo_a850_experimental
-            family == Family.A7XX_LOW -> R.string.gpuinfo_experimental
+            family == Family.A7XX_LOW || family == Family.MALI -> R.string.gpuinfo_experimental
             else -> R.string.gpuinfo_below_tested
         }
         Support.UNSUPPORTED -> R.string.gpuinfo_unsupported
@@ -79,10 +82,16 @@ data class GpuInfo(
                 { VulkanInfo.cachedOrNull()?.get("device") },
                 { platformGpuModel },
             ) else 0 to ""
-            val family = familyOf(adreno, model)
+            val mali = !adreno && File(DeviceSupport.MALI_DEVICE).exists()
+            val family = if (mali) Family.MALI else familyOf(adreno, model)
             val samsung = Build.MANUFACTURER.equals("samsung", ignoreCase = true)
             return GpuInfo(
-                name = if (!adreno) Build.HARDWARE.ifBlank { UNNAMED } else if (model > 0) "Adreno $model" else "Adreno",
+                name = when {
+                    mali -> VulkanInfo.cachedOrNull()?.get("device")?.takeIf { it.startsWith("Mali") } ?: "Mali"
+                    !adreno -> Build.HARDWARE.ifBlank { UNNAMED }
+                    model > 0 -> "Adreno $model"
+                    else -> "Adreno"
+                },
                 model = model, family = family, soc = soc,
                 oneUi8Gen2 = samsung && model == 740,
                 kgslName = raw.orEmpty(), modelSource = source, kgslChipId = chipId,

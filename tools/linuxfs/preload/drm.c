@@ -27,18 +27,18 @@ struct handle_entry {
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct handle_entry handle_entries[MAX_HANDLES];
 static uint32_t next_handle = 1;
-static dev_t kgsl_dev;
-static int kgsl_state;
+static dev_t gpu_dev;
+static int gpu_state;
 
-static int is_kgsl(int fd) {
+static int is_gpu_node(int fd) {
   struct stat st;
   pthread_mutex_lock(&lock);
-  if (kgsl_state == 0) {
-    kgsl_state = stat("/dev/kgsl-3d0", &st) == 0 ? 1 : -1;
-    kgsl_dev = st.st_rdev;
+  if (gpu_state == 0) {
+    gpu_state = stat("/dev/kgsl-3d0", &st) == 0 || stat("/dev/mali0", &st) == 0 ? 1 : -1;
+    gpu_dev = st.st_rdev;
   }
   pthread_mutex_unlock(&lock);
-  return kgsl_state > 0 && fstat(fd, &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == kgsl_dev;
+  return gpu_state > 0 && fstat(fd, &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == gpu_dev;
 }
 
 static void *real(const char *name) {
@@ -97,7 +97,7 @@ static uint32_t alloc_handle_locked(void) {
 }
 
 int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle) {
-  if (!is_kgsl(fd)) {
+  if (!is_gpu_node(fd)) {
     int (*fn)(int, int, uint32_t *) = (int (*)(int, int, uint32_t *)) real("drmPrimeFDToHandle");
     return fn ? fn(fd, prime_fd, handle) : -ENOSYS;
   }
@@ -129,7 +129,7 @@ int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle) {
 }
 
 int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd) {
-  if (!is_kgsl(fd)) {
+  if (!is_gpu_node(fd)) {
     int (*fn)(int, uint32_t, uint32_t, int *) = (int (*)(int, uint32_t, uint32_t, int *)) real("drmPrimeHandleToFD");
     return fn ? fn(fd, handle, flags, prime_fd) : -ENOSYS;
   }
@@ -158,7 +158,7 @@ static int release_handle(int fd, uint32_t handle) {
 }
 
 int drmCloseBufferHandle(int fd, uint32_t handle) {
-  if (!is_kgsl(fd)) {
+  if (!is_gpu_node(fd)) {
     int (*fn)(int, uint32_t) = (int (*)(int, uint32_t)) real("drmCloseBufferHandle");
     return fn ? fn(fd, handle) : -ENOSYS;
   }
@@ -166,7 +166,7 @@ int drmCloseBufferHandle(int fd, uint32_t handle) {
 }
 
 __attribute__((visibility("hidden"))) int bl_drm_gem_close(int fd, unsigned long request, void *arg, int *rc) {
-  if (request != GEM_CLOSE || !arg || !is_kgsl(fd)) {
+  if (request != GEM_CLOSE || !arg || !is_gpu_node(fd)) {
     return 0;
   }
   if (release_handle(fd, ((struct gem_close *) arg)->handle)) {

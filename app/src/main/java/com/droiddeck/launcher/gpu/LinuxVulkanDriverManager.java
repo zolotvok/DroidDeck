@@ -26,6 +26,7 @@ public class LinuxVulkanDriverManager {
     private static final String TAG = "LinuxVulkanDriver";
     public static final String DIR_NAME = "linux_vulkan_drivers";
     public static final String LIB_NAME = "libvulkan_freedreno.so";
+    public static final String PANVK_LIB_NAME = "libvulkan_panfrost.so";
     public static final String ICD_NAME = "icd.json";
     public static final String META_NAME = "meta.json";
 
@@ -45,7 +46,25 @@ public class LinuxVulkanDriverManager {
     public boolean isInstalled(String id) {
         if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return false;
         File dir = getDriverDir(id);
-        return new File(dir, LIB_NAME).isFile() && new File(dir, ICD_NAME).isFile();
+        return (new File(dir, LIB_NAME).isFile() || new File(dir, PANVK_LIB_NAME).isFile())
+                && new File(dir, ICD_NAME).isFile();
+    }
+
+    public boolean isPanvk(String id) {
+        return isInstalled(id) && new File(getDriverDir(id), PANVK_LIB_NAME).isFile();
+    }
+
+    public boolean hasPanvk() {
+        for (String id : enumerateInstalledDrivers()) if (isPanvk(id)) return true;
+        return false;
+    }
+
+    static String slotFor(String soName) {
+        return soName != null && soName.startsWith("libvulkan_panfrost") ? PANVK_LIB_NAME : LIB_NAME;
+    }
+
+    static boolean isDriverLibrary(String name) {
+        return (name.startsWith("libvulkan_freedreno") || name.startsWith("libvulkan_panfrost")) && name.endsWith(".so");
     }
 
     public String getIcdPath(String id) {
@@ -107,10 +126,10 @@ public class LinuxVulkanDriverManager {
                     if (entry.isDirectory()) continue;
                     String base = new File(entry.getName()).getName();
                     if (base.isEmpty()) continue;
-                    if (base.startsWith("libvulkan_freedreno") && base.endsWith(".so")) {
-                        if (soName != null) Log.w(TAG, "zip has several libvulkan_freedreno*.so; using the first (" + soName + ")");
+                    if (isDriverLibrary(base)) {
+                        if (soName != null) Log.w(TAG, "zip has several Vulkan driver libraries; using the first (" + soName + ")");
                         else {
-                            Files.copy(zis, new File(tmpDir, LIB_NAME).toPath(), StandardCopyOption.REPLACE_EXISTING);
+                            Files.copy(zis, new File(tmpDir, slotFor(base)).toPath(), StandardCopyOption.REPLACE_EXISTING);
                             soName = base;
                         }
                     } else if (base.equals(META_NAME)) {
@@ -142,7 +161,7 @@ public class LinuxVulkanDriverManager {
             if (soName == null) {
                 throw new IllegalArgumentException(context.getString(R.string.lvd_no_library));
             }
-            File so = new File(tmpDir, LIB_NAME);
+            File so = new File(tmpDir, slotFor(soName));
             if (!isAarch64Elf(so)) {
                 throw new IllegalArgumentException(context.getString(R.string.lvd_not_aarch64, soName));
             }
@@ -167,7 +186,7 @@ public class LinuxVulkanDriverManager {
             JSONObject icd = new JSONObject();
             icd.put("file_format_version", "1.0.0");
             JSONObject icdBody = new JSONObject();
-            icdBody.put("library_path", new File(dir, LIB_NAME).getAbsolutePath());
+            icdBody.put("library_path", new File(dir, slotFor(soName)).getAbsolutePath());
             icdBody.put("api_version", "1.1.274");
             icd.put("ICD", icdBody);
             if (!FileUtils.writeString(new File(tmpDir, ICD_NAME), icd.toString(2))) throw new IOException("cannot write icd.json");

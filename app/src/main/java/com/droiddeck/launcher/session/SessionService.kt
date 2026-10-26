@@ -803,7 +803,7 @@ class SessionService : Service() {
         guest.add("GALLIUM_DRIVER=zink")
         guest.add("LIBGL_KOPPER_DRI2=true")
         LinuxRuntime.vulkanIcd(this)?.let { guest.add("VK_ICD_FILENAMES=" + it.path) }
-        val linuxDriverId = SessionPrefs.linuxDriver(this)
+        val linuxDriverId = LinuxVulkanDriver.effective(this, SessionPrefs.linuxDriver(this))
         SessionState.runtimeDriver = linuxDriverId
         com.droiddeck.launcher.gpu.AutoDriverTrial.sessionStarting(
             this,
