@@ -87,6 +87,10 @@ if [ -n "${BL_VK_DRIVER:-}" ]; then
     export VK_DRIVER_FILES="$BL_VK_DRIVER"
     export VK_ICD_FILENAMES="$BL_VK_DRIVER"
     echo "== vulkan driver: imported $bl_icd_lib (via $BL_VK_DRIVER)"
+    if [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ] && [ -z "${ENABLE_GAMESCOPE_WSI+set}" ]; then
+      export ENABLE_GAMESCOPE_WSI=0
+      echo "== vulkan driver: PanVK, games present through Xwayland (ENABLE_GAMESCOPE_WSI=0): through gamescope's WSI layer only their first frames reach the screen"
+    fi
   else
     echo "== vulkan driver: IGNORING $BL_VK_DRIVER (manifest or ${bl_icd_lib:-library} unreadable); using the runtime's own"
   fi
