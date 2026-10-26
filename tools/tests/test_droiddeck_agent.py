@@ -335,5 +335,86 @@ class AgentTest(unittest.TestCase):
         self.assertIn(child.pid, agent.game_pids(424242))
 
 
+class TestNudgeDialog(unittest.TestCase):
+    def setUp(self):
+        self.moved = []
+        moved = self.moved
+
+        class MockX:
+            def __init__(self, display):
+                self.display = display
+                self.root = 1
+
+            def geometry(self, win):
+                return (0, 0, 1600, 720)
+
+            def move(self, win, x, y):
+                moved.append((self.display, win, x, y))
+
+            def close(self):
+                pass
+
+        self.mock_x = MockX
+
+    def nudge(self, watcher, snap):
+        with patch.object(agent, "X", side_effect=self.mock_x), patch("time.sleep"):
+            watcher.nudge_dialog(snap)
+
+    def snapshot(self, focusable=()):
+        win = lambda w, geo, app=22330, pid=10449, **kw: dict(dict(
+            window=w, appId=app, pid=pid, map="viewable", overrideRedirect=False, inputOnly=False, geometry=geo), **kw)
+        return {
+            "focusedWindow": 0x2000035,
+            "focusableWindows": [{"window": 0x2000035, "appId": 769, "pid": 8750}]
+            + [{"window": w, "appId": 22330, "pid": 10449} for w in focusable],
+            "displays": {
+                ":1": [
+                    win(0x1c00003, [479, 120, 640, 480]),  # Oblivion's launcher, not focusable
+                    win(0x1c00006, [661, 322, 278, 76]),  # a message box, not focusable
+                    win(0x1c00009, [0, 0, 1600, 720]),  # fullscreen game window
+                    win(0x1c0000a, [100, 100, 200, 200], overrideRedirect=True),  # a menu
+                    win(0x600004, [0, 0, 1, 1], app=None, pid=None),  # 1x1 helper
+                ],
+                ":0": [win(0x2000035, [0, 0, 1600, 720], app=769, pid=8750)],  # Steam
+            },
+        }
+
+    def test_moves_unfocusable_dialogs_one_pixel_and_back(self):
+        watcher = agent.FocusWatcher(Path("/tmp/focus.json"))
+        self.nudge(watcher, self.snapshot())
+        self.assertEqual([
+            (":1", 0x1c00003, 480, 121), (":1", 0x1c00003, 479, 120),
+            (":1", 0x1c00006, 662, 323), (":1", 0x1c00006, 661, 322),
+        ], self.moved)
+
+    def test_leaves_windows_gamescope_already_focuses(self):
+        watcher = agent.FocusWatcher(Path("/tmp/focus.json"))
+        self.nudge(watcher, self.snapshot(focusable=(0x1c00003, 0x1c00006)))
+        self.assertEqual([], self.moved)
+
+    def test_same_window_id_on_another_server_is_not_focusable(self):
+        watcher = agent.FocusWatcher(Path("/tmp/focus.json"))
+        snap = self.snapshot()
+        snap["focusableWindows"].append({"window": 0x1c00003, "appId": 769, "pid": 8750})
+        self.nudge(watcher, snap)
+        self.assertIn((":1", 0x1c00003, 480, 121), self.moved)
+
+    def test_gives_up_after_three_tries_and_forgets_closed_windows(self):
+        watcher = agent.FocusWatcher(Path("/tmp/focus.json"))
+        snap = self.snapshot()
+        for _ in range(5):
+            self.nudge(watcher, snap)
+        self.assertEqual(agent.FocusWatcher.NUDGE_TRIES * 4, len(self.moved))
+        snap["displays"][":1"] = []
+        self.nudge(watcher, snap)
+        self.assertEqual({}, watcher.nudged)
+
+    def test_can_be_turned_off(self):
+        watcher = agent.FocusWatcher(Path("/tmp/focus.json"))
+        with patch.dict(os.environ, {"BL_NUDGE_DIALOGS": "0"}):
+            self.nudge(watcher, self.snapshot())
+        self.assertEqual([], self.moved)
+
+
 if __name__ == "__main__":
     unittest.main()

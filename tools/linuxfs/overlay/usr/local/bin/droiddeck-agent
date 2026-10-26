@@ -265,35 +265,58 @@ class FocusWatcher(threading.Thread):
         self.changed = threading.Event()
         self.last = None
         self.seq = 0
-        self.nudged = set()
+        self.nudged = {}
+
+    NUDGE_TRIES = 3
 
     def nudge_dialog(self, snap):
-        """A game's launcher dialog (a window smaller than the screen) that gamescope focuses
-        does not take pad/keyboard input until it is moved once (Oblivion's launcher). Move it
-        by one pixel and back, once per window. BL_NUDGE_DIALOGS=0 turns this off."""
-        win = snap.get("focusedWindow")
-        if not win or win in self.nudged or os.environ.get("BL_NUDGE_DIALOGS", "1") == "0":
+        """Wine maps a launcher dialog (Oblivion's, or a message box) that gamescope still caches
+        as override-redirect, so it is missing from GAMESCOPE_FOCUSABLE_WINDOWS and stays hidden
+        behind Steam without input. A move makes gamescope re-read the flag from ConfigureNotify.
+        Move such a window (viewable, managed, not Steam's, smaller than the screen, not focusable)
+        by one pixel and back, up to NUDGE_TRIES times. BL_NUDGE_DIALOGS=0 turns this off."""
+        if os.environ.get("BL_NUDGE_DIALOGS", "1") == "0":
             return
-        for d, wins in snap["displays"].items():
-            entry = next((w for w in wins if w["window"] == win), None)
-            if entry is None:
+        shown = snap.get("displays", {})
+        existing = {(d, e["window"]) for d, wins in shown.items() for e in wins}
+        self.nudged = {k: n for k, n in self.nudged.items() if k in existing}
+        focusable = {(f.get("window"), f.get("pid")) for f in snap.get("focusableWindows", [])}
+
+        def is_focusable(entry):
+            return any(win == entry["window"] and (not pid or not entry.get("pid") or pid == entry["pid"])
+                       for win, pid in focusable)
+
+        for d, wins in shown.items():
+            candidates = [
+                e for e in wins
+                if e.get("window") and self.nudged.get((d, e["window"]), 0) < self.NUDGE_TRIES
+                and e.get("map") == "viewable" and not e.get("overrideRedirect") and not e.get("inputOnly")
+                and e.get("appId") != 769 and not is_focusable(e)
+            ]
+            if not candidates:
                 continue
-            if entry["map"] != "viewable" or entry["overrideRedirect"] or entry["appId"] == 769:
-                return
-            gx, gy, w, h = entry["geometry"]
             x = X(d)
             try:
                 root = x.geometry(x.root)
-                if not root or not w or not h or (w >= root[2] and h >= root[3]):
-                    return
-                self.nudged.add(win)
-                x.move(win, gx + 1, gy)
-                time.sleep(0.15)
-                x.move(win, gx, gy)
+                if not root:
+                    continue
+                for entry in candidates:
+                    win = entry["window"]
+                    gx, gy, w, h = entry.get("geometry", (0, 0, 0, 0))
+                    if w <= 1 or h <= 1 or (w >= root[2] and h >= root[3]):
+                        continue
+                    tries = self.nudged.get((d, win), 0) + 1
+                    self.nudged[(d, win)] = tries
+                    try:
+                        x.move(win, gx + 1, gy + 1)
+                        time.sleep(0.15)
+                        x.move(win, gx, gy)
+                        log("nudged dialog window 0x%x (app %s, %dx%d) on %s, try %d"
+                            % (win, entry.get("appId"), w, h, d, tries))
+                    except OSError as e:
+                        log("failed to nudge window 0x%x: %s" % (win, e))
             finally:
                 x.close()
-            log("nudged dialog window 0x%x (app %s, %dx%d) on %s" % (win, entry["appId"], w, h, d))
-            return
 
     def run(self):
         threading.Thread(target=self.listen, daemon=True, name="focus-events").start()
