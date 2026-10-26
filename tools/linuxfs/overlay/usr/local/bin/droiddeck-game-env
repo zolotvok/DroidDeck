@@ -104,10 +104,16 @@ def skip_red_launcher(command):
     game runs. The game is started itself instead; the prelauncher's own --launcher-skip started it
     twice."""
     if len(command) > 2 and os.path.basename(command[2]).lower() == "redprelauncher.exe":
-        game = os.path.join(os.path.dirname(command[2]), "bin", "x64", "Cyberpunk2077.exe")
-        if os.path.isfile(game):
-            print("droiddeck-game-env: REDlauncher skipped", file=sys.stderr)
-            return command[:2] + [game] + command[3:]
+        for exe in ("Cyberpunk2077.exe", "witcher3.exe"):
+            game = os.path.join(os.path.dirname(command[2]), "bin", "x64", exe)
+            if os.path.isfile(game):
+                if exe == "witcher3.exe":
+                    try:
+                        os.chdir(os.path.dirname(game))
+                    except OSError:
+                        pass
+                print("droiddeck-game-env: REDlauncher skipped (%s)" % exe, file=sys.stderr)
+                return command[:2] + [game] + command[3:]
     return command
 
 
@@ -299,6 +305,11 @@ def main():
     command = sys.argv[1:]
     if not command:
         return 2
+    try:
+        with open("/proc/self/oom_score_adj", "w", encoding="utf-8") as adj:
+            adj.write("0\n")
+    except OSError:
+        pass
     env = os.environ.copy()
     mic_enabled = env.get("BL_MIC_ENABLED")
     mark_install_scripts(command, env)
