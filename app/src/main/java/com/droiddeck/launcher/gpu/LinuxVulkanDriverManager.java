@@ -27,6 +27,9 @@ public class LinuxVulkanDriverManager {
     public static final String DIR_NAME = "linux_vulkan_drivers";
     public static final String LIB_NAME = "libvulkan_freedreno.so";
     public static final String PANVK_LIB_NAME = "libvulkan_panfrost.so";
+    // The Mali bridge (bridge/ in the Mali fork): a Khronos ICD shim that runs the phone's own Android Vulkan HAL
+    // through libhybris, which stays in the runtime at /usr/lib/hybris. Games only, see LinuxVulkanDriver.
+    public static final String BRIDGE_LIB_NAME = "libvulkan_mali_bridge.so";
     public static final String ICD_NAME = "icd.json";
     public static final String META_NAME = "meta.json";
 
@@ -46,8 +49,13 @@ public class LinuxVulkanDriverManager {
     public boolean isInstalled(String id) {
         if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return false;
         File dir = getDriverDir(id);
-        return (new File(dir, LIB_NAME).isFile() || new File(dir, PANVK_LIB_NAME).isFile())
+        return (new File(dir, LIB_NAME).isFile() || new File(dir, PANVK_LIB_NAME).isFile()
+                || new File(dir, BRIDGE_LIB_NAME).isFile())
                 && new File(dir, ICD_NAME).isFile();
+    }
+
+    public boolean isBridge(String id) {
+        return isInstalled(id) && new File(getDriverDir(id), BRIDGE_LIB_NAME).isFile();
     }
 
     public boolean isPanvk(String id) {
@@ -60,11 +68,13 @@ public class LinuxVulkanDriverManager {
     }
 
     static String slotFor(String soName) {
+        if (soName != null && soName.startsWith("libvulkan_mali_bridge")) return BRIDGE_LIB_NAME;
         return soName != null && soName.startsWith("libvulkan_panfrost") ? PANVK_LIB_NAME : LIB_NAME;
     }
 
     static boolean isDriverLibrary(String name) {
-        return (name.startsWith("libvulkan_freedreno") || name.startsWith("libvulkan_panfrost")) && name.endsWith(".so");
+        return (name.startsWith("libvulkan_freedreno") || name.startsWith("libvulkan_panfrost")
+                || name.startsWith("libvulkan_mali_bridge")) && name.endsWith(".so");
     }
 
     public String getIcdPath(String id) {

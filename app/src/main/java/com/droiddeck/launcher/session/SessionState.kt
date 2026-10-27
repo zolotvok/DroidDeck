@@ -37,6 +37,13 @@ object SessionState {
     @Volatile
     var installing: String? = null
 
+    /** Ids of the Linux Vulkan drivers the running session was started with: its own, and the games' if different. */
+    @Volatile
+    var sessionDriver: String? = null
+
+    @Volatile
+    var gameDriver: String? = null
+
     @Volatile
     var installCancellation: com.droiddeck.launcher.core.Downloader.Cancellation? = null
 

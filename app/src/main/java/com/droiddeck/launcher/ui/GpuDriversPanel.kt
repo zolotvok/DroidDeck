@@ -118,6 +118,7 @@ class GpuDriversState(
     val checking: Boolean = false,
     val linuxRows: List<DriverRow> = emptyList(),
     val linuxSelected: String = "",
+    val linuxHint: String = "",
     val androidRows: List<DriverRow> = emptyList(),
     val androidSelected: String = "",
     val linuxDownloads: List<DownloadRow> = emptyList(),

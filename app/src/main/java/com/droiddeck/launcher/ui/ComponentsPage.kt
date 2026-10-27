@@ -841,7 +841,7 @@ fun ComponentsPage(
             val body: @Composable () -> Unit = {
                 Box(Modifier.fillMaxSize().background(colors.background).pointerInput(Unit) { detectTapGestures { } }) {
                     if (d == SLOT_RUNTIME) DriverPage(
-                        title = stringResource(R.string.comp_runtime_driver), hint = stringResource(R.string.comp_runtime_driver_hint),
+                        title = stringResource(R.string.comp_runtime_driver), hint = gpu.linuxHint.ifEmpty { stringResource(R.string.comp_runtime_driver_hint) },
                         rows = gpu.linuxRows, selected = gpu.linuxSelected, downloads = gpu.linuxDownloads,
                         status = gpu.releaseStatus, checking = gpu.checking, checkedAt = gpu.checkedAt, importLabel = stringResource(R.string.comp_import_turnip), canRestore = false,
                         onSelect = gpuActions.onSelectLinux, onDelete = gpuActions.onRemoveLinux, onRefresh = gpuActions.onRefresh,
