@@ -3,12 +3,19 @@ package com.droiddeck.launcher.gpu;
 import android.content.Context;
 import android.util.Log;
 
+import com.droiddeck.launcher.runtime.LinuxRuntime;
+
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
 public final class LinuxVulkanDriver {
     private static final String TAG = "LinuxVulkanDriver";
     public static final String ENV = "BL_VK_DRIVER";
+    // The Mali bridge ("Mali system driver"): chosen as the Linux driver, the session (Steam, gamescope, the desktop)
+    // stays on PanVK and only the game processes get this ICD, through droiddeck-game-env.
+    public static final String ENV_GAMES = "BL_VK_GAME_DRIVER";
+    private static final String HYBRIS_COMMON = "usr/lib/hybris/libhybris-common.so.1";
 
     public static final String HELP_TEXT =
             "The driver the Steam client, the games it launches and the desktop's programs render on, "
@@ -33,8 +40,13 @@ public final class LinuxVulkanDriver {
         return m.getDriverName(value) + (ver.isEmpty() ? "" : " " + ver) + " (imported)";
     }
 
+    public static boolean isBridge(Context context, String value) {
+        return value != null && !value.isEmpty() && new LinuxVulkanDriverManager(context).isBridge(value);
+    }
+
+    /** The driver the session itself (Steam, gamescope, the desktop) draws with. */
     public static String effective(Context context, String value) {
-        if (value != null && !value.isEmpty()) return value;
+        if (value != null && !value.isEmpty() && !isBridge(context, value)) return value;
         if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return "";
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
         for (String id : m.enumerateInstalledDrivers()) {
@@ -44,6 +56,16 @@ public final class LinuxVulkanDriver {
             }
         }
         return "";
+    }
+
+    /** The driver the game processes draw with when it is not the session's: the bridge, or "" for the session's own. */
+    public static String gameDriver(Context context, String value) {
+        if (!isBridge(context, value)) return "";
+        if (!new File(LinuxRuntime.rootDir(context), HYBRIS_COMMON).isFile()) {
+            Log.w(TAG, "Mali bridge chosen but libhybris is not in the runtime (" + HYBRIS_COMMON + "); games stay on the session driver");
+            return "";
+        }
+        return value;
     }
 
     public static String resolveIcdPath(Context context, String value) {

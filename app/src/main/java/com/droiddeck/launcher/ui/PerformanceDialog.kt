@@ -39,6 +39,9 @@ fun PerformancePage(
     glThread: Boolean,
     noGlError: Boolean,
     noXalia: Boolean,
+    bridgeNoDescriptorBuffer: Boolean,
+    bridgeNoPipelineLibrary: Boolean,
+    bridgeDebugLogs: Boolean,
     fastSync: Boolean,
     syncFallback: Boolean,
     fsyncFirst: Boolean,
@@ -54,6 +57,9 @@ fun PerformancePage(
     onGlThread: (Boolean) -> Unit,
     onNoGlError: (Boolean) -> Unit,
     onNoXalia: (Boolean) -> Unit,
+    onBridgeNoDescriptorBuffer: (Boolean) -> Unit,
+    onBridgeNoPipelineLibrary: (Boolean) -> Unit,
+    onBridgeDebugLogs: (Boolean) -> Unit,
     onFastSync: (Boolean) -> Unit,
     onSyncFallback: (Boolean) -> Unit,
     onFsyncFirst: (Boolean) -> Unit,
@@ -157,6 +163,23 @@ fun PerformancePage(
                 if (prootNoSeccomp) stringResource(R.string.perf_fastpath_needs_seccomp)
                 else stringResource(R.string.perf_fastpath_hint),
                 prootFastPath && !prootNoSeccomp, enabled = !prootNoSeccomp, onChange = onProotFastPath,
+            )
+        }
+        SettingsGroup(stringResource(R.string.perf_bridge)) {
+            ToggleRow(
+                host, "bridgedescbuf", stringResource(R.string.perf_bridge_descbuf),
+                stringResource(R.string.perf_bridge_descbuf_hint),
+                bridgeNoDescriptorBuffer, onChange = onBridgeNoDescriptorBuffer,
+            )
+            ToggleRow(
+                host, "bridgegpl", stringResource(R.string.perf_bridge_gpl),
+                stringResource(R.string.perf_bridge_gpl_hint),
+                bridgeNoPipelineLibrary, onChange = onBridgeNoPipelineLibrary,
+            )
+            ToggleRow(
+                host, "bridgedebuglogs", stringResource(R.string.perf_bridge_debuglogs),
+                stringResource(R.string.perf_bridge_debuglogs_hint),
+                bridgeDebugLogs, onChange = onBridgeDebugLogs,
             )
         }
         SettingsGroup(stringResource(R.string.perf_identity)) {

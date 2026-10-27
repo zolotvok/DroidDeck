@@ -14,11 +14,14 @@ import android.os.Process
 import android.util.Base64
 import com.droiddeck.launcher.BuildConfig
 import com.droiddeck.launcher.frontend.GameLaunchLink
+import com.droiddeck.launcher.gpu.LinuxVulkanDriver
+import com.droiddeck.launcher.gpu.LinuxVulkanDriverManager
 import com.droiddeck.launcher.runtime.LinuxRuntime
 import com.droiddeck.launcher.runtime.LinuxRuntimeInstaller
 import com.droiddeck.launcher.session.SessionArtifacts
 import com.droiddeck.launcher.session.SessionEvents
 import com.droiddeck.launcher.session.SessionPhase
+import com.droiddeck.launcher.session.SessionPrefs
 import com.droiddeck.launcher.session.SessionService
 import com.droiddeck.launcher.session.SessionState
 import org.json.JSONArray
@@ -116,6 +119,7 @@ class AgentBridgeProvider : ContentProvider() {
             .put("lastTransitionAt", SessionState.lastTransitionAt)
             .put("guestPid", SessionState.guestPid.takeIf { it > 1 } ?: JSONObject.NULL)
             .put("installing", SessionState.installing ?: JSONObject.NULL)
+            .put("drivers", drivers(context))
             .put("logDir", dir?.absolutePath ?: JSONObject.NULL)
             .put("eventsFile", dir?.let { File(it, "events.jsonl").absolutePath } ?: JSONObject.NULL)
             .put("artifactsAvailable", dir?.isDirectory ?: false)
@@ -151,6 +155,25 @@ class AgentBridgeProvider : ContentProvider() {
                 .put("guestFocus", hello?.optBoolean("focus") ?: false)
                 .put("commands", AgentAccess.commandsAllowed(context)))
             .put("session", session)
+    }
+
+    /**
+     * The Linux Vulkan drivers: what a session started now would use ("selected" is the Runtime driver page's choice) and,
+     * while one runs, what it was started with. "games" is null when the games use the session's own driver.
+     */
+    private fun drivers(context: Context): JSONObject {
+        val chosen = SessionPrefs.linuxDriver(context)
+        val manager = LinuxVulkanDriverManager(context)
+        fun label(id: String?) = if (id.isNullOrEmpty()) JSONObject.NULL else manager.getDriverName(id)
+        val session = if (SessionState.running) SessionState.sessionDriver
+            else LinuxVulkanDriver.effective(context, chosen).ifEmpty { null }
+        val games = if (SessionState.running) SessionState.gameDriver
+            else LinuxVulkanDriver.gameDriver(context, chosen).ifEmpty { null }
+        return JSONObject()
+            .put("selected", chosen.ifEmpty { JSONObject.NULL })
+            .put("session", session ?: JSONObject.NULL).put("sessionName", label(session))
+            .put("games", games ?: JSONObject.NULL).put("gamesName", label(games))
+            .put("applied", SessionState.running)
     }
 
     private fun stop(context: Context): JSONObject {

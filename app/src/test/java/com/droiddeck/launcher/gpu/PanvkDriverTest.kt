@@ -3,6 +3,7 @@ package com.droiddeck.launcher.gpu
 import android.content.Context
 import android.net.Uri
 import com.droiddeck.launcher.gpu.GpuInfo.Family
+import com.droiddeck.launcher.runtime.LinuxRuntime
 import com.droiddeck.launcher.session.SessionPrefs
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -100,6 +101,35 @@ class PanvkDriverTest {
         val m = LinuxVulkanDriverManager(context)
         assertTrue(m.isPanvk(bundle.linuxId))
         assertTrue(icdLibrary(m, bundle.linuxId).endsWith("/" + LinuxVulkanDriverManager.PANVK_LIB_NAME))
+    }
+
+    private fun installBridge(): String = LinuxVulkanDriverManager(context).installDriver(zip(mapOf(
+        "libvulkan_mali_bridge.so" to library("libc.so.6"),
+        "meta.json" to JSONObject().put("name", "Mali system driver (bridge)").put("driverVersion", "v1.r54p1").toString().toByteArray(),
+    )), "Mali_Bridge.zip")
+
+    @Test
+    fun maliBridgeZipGoesIntoItsOwnSlotAndIsNotPanvk() {
+        val m = LinuxVulkanDriverManager(context)
+        val id = installBridge()
+        assertTrue(m.isInstalled(id))
+        assertTrue(m.isBridge(id))
+        assertFalse(m.isPanvk(id))
+        assertFalse(m.hasPanvk())
+        assertTrue(icdLibrary(m, id).endsWith("/" + LinuxVulkanDriverManager.BRIDGE_LIB_NAME))
+        assertEquals("v1.r54p1", m.getDriverVersion(id))
+    }
+
+    @Test
+    fun theBridgeIsOnlyForGamesAndNeedsLibhybrisInTheRuntime() {
+        val id = installBridge()
+        assertTrue(LinuxVulkanDriver.isBridge(context, id))
+        assertEquals("", LinuxVulkanDriver.gameDriver(context, id))
+        File(LinuxRuntime.rootDir(context), "usr/lib/hybris").mkdirs()
+        File(LinuxRuntime.rootDir(context), "usr/lib/hybris/libhybris-common.so.1").writeText("x")
+        assertEquals(id, LinuxVulkanDriver.gameDriver(context, id))
+        assertEquals("", LinuxVulkanDriver.gameDriver(context, ""))
+        assertEquals("", LinuxVulkanDriver.gameDriver(context, "another"))
     }
 
     @Test

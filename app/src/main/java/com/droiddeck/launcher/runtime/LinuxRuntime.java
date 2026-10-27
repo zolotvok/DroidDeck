@@ -164,6 +164,7 @@ public final class LinuxRuntime {
         shm.mkdirs();
         bind(cmd, shm.getPath() + ":/dev/shm");
         bindSystemFonts(cmd, root);
+        bindAndroidTree(cmd, root);
 
         File fakeProc = new File(root, "etc/droiddeck/proc");
         File pciDevices = new File(fakeProc, "pci_devices");
@@ -371,6 +372,29 @@ public final class LinuxRuntime {
             }
         }
         return byType;
+    }
+
+    /** The Android vendor driver tree, at its real paths: an Android Vulkan driver loaded into
+     *  a glibc process (libhybris) reads /vendor, /system and /apex literally. */
+    private static void bindAndroidTree(List<String> cmd, File root) {
+        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return;
+        for (String dir : new String[] {"/vendor", "/system", "/apex"}) {
+            // /apex cannot be stat'ed from an app domain (no getattr), though the files inside can
+            // be read, so isDirectory() is false for it: bind regardless.
+            bind(cmd, dir);
+        }
+        // libhybris reads Android's generated linker config from /usr/lib/hybris-config
+        // (tawc libhybris fork). /linkerconfig itself cannot be bound (no dir getattr for app
+        // domains), but the file can be read by its full path, so copy it at every spawn: it is
+        // regenerated at boot and after apex updates.
+        File config = new File(root, "usr/lib/hybris-config/ld.config.txt");
+        try {
+            config.getParentFile().mkdirs();
+            Files.copy(new File("/linkerconfig/ld.config.txt").toPath(), config.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException | SecurityException e) {
+            android.util.Log.w("LinuxRuntime", "bridge: cannot copy /linkerconfig/ld.config.txt: " + e);
+        }
     }
 
     private static void bindSystemFonts(List<String> cmd, File root) {

@@ -145,6 +145,60 @@ def win_components(compat, app_id):
         return ""
 
 
+def game_driver(command, env):
+    """BL_VK_GAME_DRIVER (set by the session when the Mali system driver, the bridge, is chosen): the game
+    process draws with that Vulkan ICD while Steam, gamescope and the desktop stay on the session's driver.
+    Only the game's own launch gets it (Proton's waitforexitandrun); a game's environment entry can still
+    override VK_DRIVER_FILES afterwards. The bridge runs the phone's Android Vulkan driver through libhybris,
+    which needs its vendor namespace (the shim also sets it when missing, but a running Wine process has other
+    threads reading the environment)."""
+    icd = env.get("BL_VK_GAME_DRIVER", "")
+    if not icd or len(command) < 2 or command[1] != "waitforexitandrun":
+        return env
+    if not os.access(icd, os.R_OK):
+        print("droiddeck-game-env: game driver %s is not readable; using the session's" % icd, file=sys.stderr)
+        return env
+    print("droiddeck-game-env: game driver: Mali system driver (bridge), %s" % icd, file=sys.stderr)
+    res = dict(
+        env,
+        VK_DRIVER_FILES=icd,
+        VK_ICD_FILENAMES=icd,
+        HYBRIS_USE_VENDOR_NAMESPACE="1",
+        ENABLE_MALI_WSI="1",
+        ENABLE_MALI_COMPAT="1",
+        ENABLE_GAMESCOPE_WSI="1",
+        PROTON_LOG="1",
+        DXVK_LOG_LEVEL="info",
+    )
+    res.pop("VK_INSTANCE_LAYERS", None)
+    # The Proton log stays on (vkd3d-proton, DXVK and the bridge layers write there), but Wine's exception and DLL
+    # tracing only with the app's "debug logs" setting (Performance > Mali system driver): under FEX every unaligned
+    # atomic is an exception, and +seh,+unwind wrote thousands of lines a second (HZD: CPU 10 FPS against GPU 26).
+    # Without it Wine keeps its err lines. Proton only sets WINEDEBUG when it is unset, and a WINEDEBUG from the
+    # session or the game's own settings still wins.
+    if env.get("BL_BRIDGE_DEBUG_LOGS", "0") != "1":
+        res.setdefault("WINEDEBUG", "+timestamp,+pid,+tid,fixme-all")
+    # Workarounds for the bridge, switchable in the app (Performance > Mali system driver), both on unless the
+    # session says 0: vkd3d-proton renders black frames with descriptor buffers on the vendor driver, and DXVK's
+    # pipeline-library links (no fast linking there) stalled Tomb Raider to 22 FPS. A game's own DXVK_CONFIG from the
+    # app's game settings is appended after this by apply_config.
+    if env.get("BL_BRIDGE_NO_DESCRIPTOR_BUFFER", "1") != "0":
+        disabled = [e for e in res.get("VKD3D_DISABLE_EXTENSIONS", "").split(",") if e]
+        if "VK_EXT_descriptor_buffer" not in disabled:
+            disabled.append("VK_EXT_descriptor_buffer")
+        res["VKD3D_DISABLE_EXTENSIONS"] = ",".join(disabled)
+    # vkd3d-proton on UMA Mali needs no_upload_hvv to avoid missing/corrupted geometry (trees, bridges, LODs)
+    vkd3d_cfg = [c for c in res.get("VKD3D_CONFIG", "").split(",") if c]
+    if "no_upload_hvv" not in vkd3d_cfg:
+        vkd3d_cfg.append("no_upload_hvv")
+    res["VKD3D_CONFIG"] = ",".join(vkd3d_cfg)
+    if env.get("BL_BRIDGE_NO_PIPELINE_LIBRARY", "1") != "0":
+        own = res.get("DXVK_CONFIG", "").strip().rstrip(";").strip()
+        gpl = "dxvk.enableGraphicsPipelineLibrary = False"
+        res["DXVK_CONFIG"] = own + "; " + gpl if own else gpl
+    return res
+
+
 def apply_config(env, config, app_id, fixes=None):
     if config.get("version") != 1:
         raise ValueError("unsupported environment configuration")
@@ -310,7 +364,7 @@ def main():
             adj.write("0\n")
     except OSError:
         pass
-    env = os.environ.copy()
+    env = game_driver(command, os.environ.copy())
     mic_enabled = env.get("BL_MIC_ENABLED")
     mark_install_scripts(command, env)
     app_id = game_id(env)

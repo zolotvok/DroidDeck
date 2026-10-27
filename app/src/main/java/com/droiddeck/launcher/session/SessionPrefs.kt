@@ -263,6 +263,30 @@ object SessionPrefs {
 
     fun noXalia(context: Context): Boolean = prefs(context).getBoolean("noXalia", true)
 
+    // Workarounds for games on the Mali system driver (the bridge); droiddeck-game-env applies them only to games that
+    // run on it. Both default on: vkd3d-proton renders black with descriptor buffers there, and DXVK stutters while it
+    // links graphics pipeline libraries (the driver has no fast linking). Settings, so they can be turned off once
+    // fixed or where they are not needed.
+    fun bridgeNoDescriptorBuffer(context: Context): Boolean = prefs(context).getBoolean("bridgeNoDescriptorBuffer", true)
+
+    fun setBridgeNoDescriptorBuffer(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeNoDescriptorBuffer", on).apply()
+    }
+
+    fun bridgeNoPipelineLibrary(context: Context): Boolean = prefs(context).getBoolean("bridgeNoPipelineLibrary", true)
+
+    fun setBridgeNoPipelineLibrary(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeNoPipelineLibrary", on).apply()
+    }
+
+    // Wine's exception/DLL tracing in the Proton log of bridge games. Off by default: under FEX it costs a lot of CPU
+    // (every unaligned atomic is a traced exception); the log itself stays on.
+    fun bridgeDebugLogs(context: Context): Boolean = prefs(context).getBoolean("bridgeDebugLogs", false)
+
+    fun setBridgeDebugLogs(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeDebugLogs", on).apply()
+    }
+
     fun setNoXalia(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean("noXalia", on).apply()
     }

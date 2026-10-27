@@ -148,7 +148,11 @@ object DeviceInfo {
         add("Display driver", "${turnip.displayName(choice)} ${turnip.driverVersion(choice)}".trim())
         val linux = LinuxVulkanDriverManager(context)
         val id = SessionPrefs.linuxDriver(context)
-        add("Game driver", if (id.isEmpty()) "the runtime's own Turnip" else "${linux.getDriverName(id)} ${linux.getDriverVersion(id)}".trim())
+        val session = LinuxVulkanDriver.effective(context, id)
+        val games = LinuxVulkanDriver.gameDriver(context, id).ifEmpty { session }
+        fun named(driver: String) = if (driver.isEmpty()) "the runtime's own Turnip" else "${linux.getDriverName(driver)} ${linux.getDriverVersion(driver)}".trim()
+        add("Session driver (Steam, desktop)", named(session))
+        add("Game driver", named(games))
         if (gpu.oneUi8Gen2) add("Note", "One UI on an 8 Gen 2: needs the OneUI Turnip build")
     })
 }

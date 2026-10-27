@@ -42,6 +42,63 @@ class ReadConfigMappingTest(unittest.TestCase):
             self.assertEqual(COMPAT["read_config_mapping"](str(config)), {})
 
 
+class GameDriverTest(unittest.TestCase):
+    LAUNCH = ["/proton", "waitforexitandrun", "/game.exe"]
+
+    def test_bridge_driver_goes_to_the_games_launch_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            env = {"BL_VK_GAME_DRIVER": str(icd), "VK_DRIVER_FILES": "/panvk.json", "VK_ICD_FILENAMES": "/panvk.json"}
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertEqual(game["VK_DRIVER_FILES"], str(icd))
+            self.assertEqual(game["VK_ICD_FILENAMES"], str(icd))
+            self.assertEqual(game["HYBRIS_USE_VENDOR_NAMESPACE"], "1")
+            self.assertEqual(game["ENABLE_MALI_WSI"], "1")
+            self.assertEqual(game["ENABLE_MALI_COMPAT"], "1")
+            self.assertEqual(game["ENABLE_GAMESCOPE_WSI"], "1")
+            self.assertEqual(env["VK_DRIVER_FILES"], "/panvk.json")
+            for other in (["/proton", "getcompatpath", "/x"], ["/proton"], []):
+                self.assertEqual(MODULE["game_driver"](other, env), env)
+
+    def test_bridge_workarounds_default_on_and_switch_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            env = {"BL_VK_GAME_DRIVER": str(icd), "VKD3D_DISABLE_EXTENSIONS": "VK_EXT_present_timing"}
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertEqual(game["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_present_timing,VK_EXT_descriptor_buffer")
+            self.assertEqual(game["DXVK_CONFIG"], "dxvk.enableGraphicsPipelineLibrary = False")
+            env.update(BL_BRIDGE_NO_DESCRIPTOR_BUFFER="0", BL_BRIDGE_NO_PIPELINE_LIBRARY="0", DXVK_CONFIG="dxgi.x = 1")
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertEqual(game["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_present_timing")
+            self.assertEqual(game["DXVK_CONFIG"], "dxgi.x = 1")
+            env["BL_BRIDGE_NO_PIPELINE_LIBRARY"] = "1"
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, env)["DXVK_CONFIG"],
+                             "dxgi.x = 1; dxvk.enableGraphicsPipelineLibrary = False")
+        session = {"VKD3D_DISABLE_EXTENSIONS": "VK_EXT_present_timing"}
+        self.assertEqual(MODULE["game_driver"](self.LAUNCH, session), session)
+
+    def test_bridge_wine_tracing_only_with_debug_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            env = {"BL_VK_GAME_DRIVER": str(icd)}
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertEqual(game["PROTON_LOG"], "1")
+            self.assertEqual(game["WINEDEBUG"], "+timestamp,+pid,+tid,fixme-all")
+            env["BL_BRIDGE_DEBUG_LOGS"] = "1"
+            self.assertNotIn("WINEDEBUG", MODULE["game_driver"](self.LAUNCH, env))
+            env.update(BL_BRIDGE_DEBUG_LOGS="0", WINEDEBUG="+loaddll")
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, env)["WINEDEBUG"], "+loaddll")
+
+    def test_unset_or_unreadable_driver_leaves_the_session_driver(self):
+        env = {"VK_DRIVER_FILES": "/panvk.json"}
+        self.assertEqual(MODULE["game_driver"](self.LAUNCH, env), env)
+        env["BL_VK_GAME_DRIVER"] = "/nonexistent/icd.json"
+        self.assertEqual(MODULE["game_driver"](self.LAUNCH, env), env)
+
+
 class GameEnvironmentTest(unittest.TestCase):
     def test_directaudio_capture_follows_the_session_microphone_setting(self):
         with tempfile.TemporaryDirectory() as tmp:

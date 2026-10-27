@@ -34,6 +34,7 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
     var canRestoreBundled by mutableStateOf(false)
     private val releaseProgress = HashMap<String, Int>()
     var linuxSelected by mutableStateOf("")
+    var linuxHint by mutableStateOf("")
     val gpu: GpuInfo = GpuInfo.detect()
     var mode by mutableStateOf(SessionPrefs.GPU_DRIVERS_AUTO)
     var pairRows by mutableStateOf<List<PairRow>>(emptyList())
@@ -48,7 +49,7 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         supported = gpu.support == GpuInfo.Support.TESTED, unsupported = gpu.support == GpuInfo.Support.UNSUPPORTED,
         auto = mode == SessionPrefs.GPU_DRIVERS_AUTO, pairs = pairRows, busy = pairBusy, percent = pairPercent,
         autoStatus = autoStatus, releaseStatus = releaseStatus.ifEmpty { activity.getString(R.string.drivers_not_checked) }, checking = releaseChecking,
-        linuxRows = linuxRows, linuxSelected = linuxSelected, androidRows = androidRows, androidSelected = androidSelected,
+        linuxRows = linuxRows, linuxSelected = linuxSelected, linuxHint = linuxHint, androidRows = androidRows, androidSelected = androidSelected,
         linuxDownloads = linuxDownloads, androidDownloads = androidDownloads, canRestoreBundled = canRestoreBundled,
         activeBundle = activeBundle,
     )
@@ -62,8 +63,21 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         fun bundleRow(id: String, linux: Boolean) = bundles.firstOrNull { (if (linux) it.linuxId else it.androidId) == id }?.let {
             DriverRow(id, it.label, activity.getString(if (linux) R.string.drivers_bundle_sets_display else R.string.drivers_bundle_sets_runtime), true, DriverRow.BUNDLE)
         }
+        // On Mali with no choice saved, the session silently uses the imported PanVK (LinuxVulkanDriver.effective), so say so.
+        val autoPanvk = if (com.droiddeck.launcher.core.DeviceSupport.mali()) lm.enumerateInstalledDrivers().firstOrNull { lm.isPanvk(it) } else null
         linuxRows = LinuxVulkanDriver.optionValues(activity).map { id ->
-            if (id.isEmpty()) DriverRow("", activity.getString(R.string.gpu_runtime_default), activity.getString(R.string.drivers_runtime_builtin), false)
+            if (id.isEmpty() && autoPanvk != null) DriverRow("", activity.getString(R.string.drivers_automatic), lm.getDriverName(autoPanvk), false)
+            else if (id.isEmpty()) DriverRow("", activity.getString(R.string.gpu_runtime_default), activity.getString(R.string.drivers_runtime_builtin), false)
+            else if (lm.isBridge(id)) DriverRow(
+                id, lm.getDriverName(id),
+                activity.getString(
+                    R.string.drivers_bridge_detail,
+                    // the phone's own driver, as the Android loader reports it ("v1.r54p1-<hash>"); the zip's meta is the fallback
+                    com.droiddeck.launcher.gpu.VulkanInfo.cachedOrNull()?.get("driver_info")?.substringBefore('-')?.takeIf { it.isNotEmpty() }
+                        ?: lm.getDriverVersion(id).ifEmpty { "?" },
+                ),
+                true, origin(id),
+            )
             else bundleRow(id, linux = true) ?: DriverRow(
                 id, lm.getDriverName(id),
                 listOfNotNull(
@@ -74,6 +88,11 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
             )
         }
         linuxSelected = SessionPrefs.linuxDriver(activity)
+        linuxHint = if (autoPanvk == null) "" else {
+            val session = lm.getDriverName(LinuxVulkanDriver.effective(activity, linuxSelected).ifEmpty { autoPanvk })
+            val games = if (LinuxVulkanDriver.isBridge(activity, linuxSelected)) lm.getDriverName(linuxSelected) else session
+            activity.getString(R.string.comp_runtime_driver_hint_mali, session, games)
+        }
         mode = SessionPrefs.gpuDriverMode(activity)
         val td = TurnipDriver(activity)
         val auto = td.autoId()

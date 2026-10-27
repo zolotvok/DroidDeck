@@ -96,6 +96,16 @@ if [ -n "${BL_VK_DRIVER:-}" ]; then
   fi
   unset bl_icd_lib
 fi
+if [ -n "${BL_VK_GAME_DRIVER:-}" ]; then
+  if [ -r "$BL_VK_GAME_DRIVER" ] && [ -r /usr/lib/hybris/libhybris-common.so.1 ]; then
+    echo "== game driver: Mali system driver (bridge) via $BL_VK_GAME_DRIVER; set per game process by droiddeck-game-env, the session above stays as it is"
+  else
+    echo "== game driver: IGNORING $BL_VK_GAME_DRIVER (manifest or /usr/lib/hybris unreadable); games use the session driver"
+    unset BL_VK_GAME_DRIVER
+  fi
+else
+  echo "== game driver: same as the session driver"
+fi
 export GAMESCOPE_FORCE_VULKAN_REALTIME=${BL_GAMESCOPE_REALTIME:-0}
 
 start_agent() {

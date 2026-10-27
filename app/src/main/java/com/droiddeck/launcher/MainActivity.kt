@@ -138,6 +138,9 @@ class MainActivity : ComponentActivity() {
     private var tuSysmem by mutableStateOf(false)
     private var zinkLazy by mutableStateOf(false)
     private var noXalia by mutableStateOf(true)
+    private var bridgeNoDescriptorBuffer by mutableStateOf(true)
+    private var bridgeNoPipelineLibrary by mutableStateOf(true)
+    private var bridgeDebugLogs by mutableStateOf(false)
     private var fastSync by mutableStateOf(false)
     private var syncFallback by mutableStateOf(true)
     private var fsyncFirst by mutableStateOf(false)
@@ -1360,6 +1363,8 @@ class MainActivity : ComponentActivity() {
             cores = CpuCores.all.map { c -> CoreRow(c, "cpu$c" + (CpuCores.maxGhz(c)?.let { String.format(java.util.Locale.US, " · %.1f GHz", it) } ?: "")) },
             clientOverride = clientOverride, clientCores = clientCores, gameCores = gameCores,
             tuSysmem = tuSysmem, zinkLazy = zinkLazy, glThread = glThread, noGlError = noGlError, noXalia = noXalia,
+            bridgeNoDescriptorBuffer = bridgeNoDescriptorBuffer, bridgeNoPipelineLibrary = bridgeNoPipelineLibrary,
+            bridgeDebugLogs = bridgeDebugLogs,
             fastSync = fastSync,
             syncFallback = syncFallback,
             fsyncFirst = fsyncFirst,
@@ -1372,6 +1377,9 @@ class MainActivity : ComponentActivity() {
             onGlThread = { on -> SessionPrefs.setGlThread(this, on); glThread = on },
             onNoGlError = { on -> SessionPrefs.setNoGlError(this, on); noGlError = on },
             onNoXalia = { on -> SessionPrefs.setNoXalia(this, on); noXalia = on },
+            onBridgeNoDescriptorBuffer = { on -> SessionPrefs.setBridgeNoDescriptorBuffer(this, on); bridgeNoDescriptorBuffer = on },
+            onBridgeNoPipelineLibrary = { on -> SessionPrefs.setBridgeNoPipelineLibrary(this, on); bridgeNoPipelineLibrary = on },
+            onBridgeDebugLogs = { on -> SessionPrefs.setBridgeDebugLogs(this, on); bridgeDebugLogs = on },
             onFastSync = { on -> SessionPrefs.setFastSync(this, on); fastSync = on },
             onSyncFallback = { on -> SessionPrefs.setSyncFallback(this, on); syncFallback = on },
             onFsyncFirst = { on -> SessionPrefs.setFsyncFirst(this, on); fsyncFirst = on },
@@ -1512,6 +1520,9 @@ class MainActivity : ComponentActivity() {
         tuSysmem = SessionPrefs.tuSysmem(this)
         zinkLazy = SessionPrefs.zinkLazy(this)
         noXalia = SessionPrefs.noXalia(this)
+        bridgeNoDescriptorBuffer = SessionPrefs.bridgeNoDescriptorBuffer(this)
+        bridgeNoPipelineLibrary = SessionPrefs.bridgeNoPipelineLibrary(this)
+        bridgeDebugLogs = SessionPrefs.bridgeDebugLogs(this)
         fastSync = SessionPrefs.fastSync(this)
         syncFallback = SessionPrefs.syncFallback(this)
         fsyncFirst = SessionPrefs.fsyncFirst(this)

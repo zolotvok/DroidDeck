@@ -590,6 +590,15 @@ internal fun SessionDrawer(open: Boolean, requestedPage: SessionDrawerPage, cont
                                     onChange = a.onSteamDownloadsInBackground,
                                 )
                             }
+                            val sessionDriver = com.droiddeck.launcher.session.SessionState.sessionDriver
+                            val gameDriver = com.droiddeck.launcher.session.SessionState.gameDriver
+                            if (sessionDriver != null || gameDriver != null) SettingsGroup(stringResource(R.string.drawer_vulkan_driver)) {
+                                // What this session was started with (fixed until it restarts); the choice is on Components > Runtime driver.
+                                val manager = com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(LocalContext.current)
+                                val sessionName = sessionDriver?.let { manager.getDriverName(it) } ?: stringResource(R.string.drivers_runtime_builtin)
+                                SettingsRow(stringResource(R.string.drawer_driver_session), sessionName) {}
+                                SettingsRow(stringResource(R.string.drawer_driver_games), gameDriver?.let { manager.getDriverName(it) } ?: sessionName) {}
+                            }
                             SettingsGroup(stringResource(R.string.drawer_support)) {
                                 SettingsRow(stringResource(R.string.drawer_logs), stringResource(R.string.drawer_logs_hint)) {
                                     DrawerOutlineButton(stringResource(R.string.drawer_share_logs), modifier = focus.track(page, "share-logs"),

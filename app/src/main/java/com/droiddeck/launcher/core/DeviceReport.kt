@@ -126,6 +126,11 @@ object DeviceReport {
                 lm.getMinGlibc(id).let { if (it.isEmpty()) "" else " (glibc $it+)" } +
                 if (lm.isInstalled(id)) "" else "  [MISSING - falls back to the runtime's own]"
             k("Linux driver", label)
+            val session = LinuxVulkanDriver.effective(context, id)
+            val games = LinuxVulkanDriver.gameDriver(context, id).ifEmpty { session }
+            k("  session uses", session.ifEmpty { "the runtime's own" } + if (id.isNotEmpty() && session.isEmpty()) " (chosen driver is a game-only bridge: no PanVK installed)" else "")
+            k("  games use", games.ifEmpty { "the runtime's own" })
+            if (LinuxVulkanDriver.isBridge(context, id) && games.isEmpty()) k("  bridge unavailable", "libhybris is missing in the runtime (/usr/lib/hybris)")
         }
         k("Runtime's own ICD", LinuxRuntime.vulkanIcd(context)?.path)
 
@@ -148,6 +153,9 @@ object DeviceReport {
             " (sharpness ${SessionPrefs.upscaleSharpness(context)}%)")
         k("FEX preset", SessionPrefs.fexPreset(context).ifEmpty { "FEX defaults" })
         k("Skip xalia", SessionPrefs.noXalia(context))
+        k("Bridge: vkd3d without descriptor buffers", SessionPrefs.bridgeNoDescriptorBuffer(context))
+        k("Bridge: DXVK without pipeline libraries", SessionPrefs.bridgeNoPipelineLibrary(context))
+        k("Bridge: Wine debug logs", SessionPrefs.bridgeDebugLogs(context))
         k("Wine sync", SessionPrefs.syncBackend(context))
         EsyncPacks.status(LinuxRuntime.rootDir(context)).let { k("droiddeck-esync packs", "${it.installed} installed, ${it.wanted} wanted") }
         k("Linux x86 (FEX)", if (com.droiddeck.launcher.runtime.LinuxFex.ready(context)) "ready" else "not set up")

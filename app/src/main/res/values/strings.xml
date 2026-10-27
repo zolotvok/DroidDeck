@@ -404,6 +404,7 @@
     <string name="common_size_mb">%1$.1f MB</string>
     <string name="comp_runtime_driver">Runtime driver</string>
     <string name="comp_runtime_driver_hint">Used by Steam, games and the desktop. Applies next session.</string>
+    <string name="comp_runtime_driver_hint_mali">Steam, gamescope and the desktop use: %1$s. Games use: %2$s. Applies next session.</string>
     <string name="comp_import_turnip">Import Turnip zip…</string>
     <string name="comp_display_driver">Display driver</string>
     <string name="comp_display_driver_hint">Draws frames to the screen in both modes. Restart the app to apply.</string>
@@ -523,6 +524,13 @@
     <string name="perf_gpuclock">Hold the GPU at its top clock</string>
     <string name="perf_gpuclock_hint">Adreno only. Fewer hitches, more battery use and heat.</string>
     <string name="perf_fixes">Session fixes</string>
+    <string name="perf_bridge">Mali system driver (bridge)</string>
+    <string name="perf_bridge_descbuf">DX12: no descriptor buffers</string>
+    <string name="perf_bridge_descbuf_hint">vkd3d-proton games draw black frames with descriptor buffers on the Mali system driver. Only for games on that driver; applies at the next game launch.</string>
+    <string name="perf_bridge_gpl">DX9-11: no pipeline libraries</string>
+    <string name="perf_bridge_debuglogs">Wine debug logs</string>
+    <string name="perf_bridge_debuglogs_hint">Writes Wine\'s exception and DLL-load trace into the game\'s Proton log. Under the x86 emulator this costs a lot of CPU time (Horizon Zero Dawn: 10 instead of 26 FPS on the CPU side). Off, the log keeps errors and the vkd3d-proton, DXVK and driver lines. Only for games on that driver; applies at the next game launch.</string>
+    <string name="perf_bridge_gpl_hint">The Mali system driver links DXVK\'s pipeline libraries slowly, which stalls games when new effects appear. Shaders compile once per state instead. Only for games on that driver; applies at the next game launch.</string>
     <string name="perf_sysmem">Turnip: sysmem rendering</string>
     <string name="perf_sysmem_hint">Faster for Steam and most games. Required on Adreno 710/720/722.</string>
     <string name="perf_xalia">Skip Steam\'s xalia helper</string>
@@ -638,6 +646,9 @@
     <string name="drawer_support">Support</string>
     <string name="drawer_logs">Session logs</string>
     <string name="drawer_logs_hint">Attach to a bug report</string>
+    <string name="drawer_vulkan_driver">Vulkan driver</string>
+    <string name="drawer_driver_session">Steam and desktop</string>
+    <string name="drawer_driver_games">Games</string>
     <string name="drawer_share_logs">Share logs</string>
     <string name="drawer_background">Background</string>
     <string name="drawer_stop">Stop</string>
@@ -1267,6 +1278,8 @@
     <string name="drivers_bundle_sets_display">Android + Linux: sets the display driver with it</string>
     <string name="drivers_bundle_sets_runtime">Android + Linux: sets the runtime driver with it</string>
     <string name="drivers_runtime_builtin">the Turnip built into the runtime</string>
+    <string name="drivers_automatic">Automatic</string>
+    <string name="drivers_bridge_detail">Games only, on the phone\'s own Vulkan driver %1$s. Steam and the desktop stay on the open driver.</string>
     <string name="drivers_system_vulkan">system Vulkan: no bundled build for this GPU</string>
     <string name="drivers_bundled">%1$s (bundled)</string>
     <string name="drivers_manual">Manual</string>
