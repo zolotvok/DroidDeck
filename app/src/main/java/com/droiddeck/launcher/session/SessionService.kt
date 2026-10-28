@@ -816,6 +816,7 @@ class SessionService : Service() {
         val gameDriverId = LinuxVulkanDriver.gameDriver(this, SessionPrefs.linuxDriver(this))
         LinuxVulkanDriver.resolveIcdPath(this, gameDriverId)
             ?.let { guest.add(LinuxVulkanDriver.ENV_GAMES + "=" + it) }
+        LinuxVulkanDriver.bridgeIcdPath(this)?.let { guest.add(LinuxVulkanDriver.ENV_BRIDGE + "=" + it) }
         SessionState.sessionDriver = linuxDriverId.ifEmpty { null }
         SessionState.gameDriver = gameDriverId.ifEmpty { null }
         val tuOverride = tuDebugOverride()
@@ -847,6 +848,8 @@ class SessionService : Service() {
         guest.add("BL_BRIDGE_NO_DESCRIPTOR_BUFFER=" + (if (SessionPrefs.bridgeNoDescriptorBuffer(this)) "1" else "0"))
         guest.add("BL_BRIDGE_NO_PIPELINE_LIBRARY=" + (if (SessionPrefs.bridgeNoPipelineLibrary(this)) "1" else "0"))
         guest.add("BL_BRIDGE_DEBUG_LOGS=" + (if (SessionPrefs.bridgeDebugLogs(this)) "1" else "0"))
+        guest.add("BL_BRIDGE_FPS_LOG=" + (if (SessionPrefs.bridgeFpsLog(this)) "1" else "0"))
+        guest.add("BL_BRIDGE_GPU_TIME=" + (if (SessionPrefs.bridgeGpuTime(this)) "1" else "0"))
         guest.add("BL_SYNC=" + (if (SessionPrefs.fastSync(this)) "1" else "0"))
         guest.add("BL_SYNC_FALLBACK=" + (if (SessionPrefs.syncFallback(this)) "1" else "0"))
         guest.add("BL_FSYNC_FIRST=" + (if (SessionPrefs.fsyncFirst(this)) "1" else "0"))
