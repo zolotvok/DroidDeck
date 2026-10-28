@@ -181,8 +181,8 @@ def cyberpunk_feature_level(game):
 
 def skip_red_launcher(command):
     if len(command) > 2 and os.path.basename(command[2]).lower() == "redprelauncher.exe":
-        for exe in ("Cyberpunk2077.exe", "witcher3.exe"):
-            game = os.path.join(os.path.dirname(command[2]), "bin", "x64", exe)
+        for exe, folder in (("Cyberpunk2077.exe", "x64"), ("witcher3.exe", "x64"), ("witcher3.exe", "x64_dx12")):
+            game = os.path.join(os.path.dirname(command[2]), "bin", folder, exe)
             if os.path.isfile(game):
                 if exe == "witcher3.exe":
                     try:
