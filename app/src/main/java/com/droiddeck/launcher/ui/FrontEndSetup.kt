@@ -312,6 +312,9 @@ internal fun SetupPanel(
                             }
                         }
                         SettingsGroup(stringResource(R.string.setup_runtime)) { runtimeCheck(false) }
+                        // Performance (CPU cores, session fixes, the Mali system driver's switches): otherwise only behind
+                        // Steam > Settings > Session, where it was hard to find (2026-10-28).
+                        PerformanceLink(a, "setup", "overview")
                     }
                     1 -> {
                         val controller = s.controller

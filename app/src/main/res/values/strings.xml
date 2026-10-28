@@ -766,7 +766,7 @@
     <string name="setup_tool_protons">Proton versions</string>
     <string name="setup_tool_protons_hint">Install ARM64 Proton builds</string>
     <string name="setup_tool_performance">Performance</string>
-    <string name="setup_tool_performance_hint">CPU core assignment</string>
+    <string name="setup_tool_performance_hint">CPU core assignment, session fixes, Mali system driver</string>
     <string name="setup_tool_roms">ROMs folder</string>
     <string name="setup_tool_roms_hint">Where emulator games are stored</string>
     <string name="setup_card_components">Components</string>
@@ -2300,4 +2300,9 @@
     <string name="perf_bridge_bundled">Bundled bridge</string>
     <string name="perf_bridge_bundled_hint">Blobferry %1$s, installed into the Linux runtime at every session start. A game can pick its driver in its profile (environment: DROIDDECK_GAME_DRIVER).</string>
     <string name="perf_bridge_bundled_none">This build has no bundled bridge: import its driver zip on the Runtime driver page.</string>
+    <string name="comp_game_driver">GPU driver</string>
+    <string name="comp_game_driver_default">Runtime driver choice</string>
+    <string name="comp_game_driver_session">Open driver (PanVK)</string>
+    <string name="comp_game_driver_inherited">Follows the runtime driver page. Applies at the next launch of this game.</string>
+    <string name="comp_game_driver_override">Only this game; Steam stays on PanVK. Applies at the next launch of this game.</string>
 </resources>

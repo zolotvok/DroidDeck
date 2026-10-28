@@ -45,6 +45,9 @@ object GameEnvironment {
 
     const val FORCE_SSBS = "DROIDDECK_FORCE_SSBS"
 
+    // A game's own Vulkan driver (droiddeck-game-env): "bridge" or "session"
+    const val GAME_DRIVER = "DROIDDECK_GAME_DRIVER"
+
     const val NO_STEAM = "DROIDDECK_NO_STEAM"
 
     fun gameNoSteam(config: Config, scope: String): Boolean =

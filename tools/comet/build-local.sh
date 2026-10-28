@@ -14,5 +14,8 @@ docker run --rm --platform linux/amd64 -v "$repo:/src" \
     fi
     export RUSTUP_TOOLCHAIN=1.90.0
     rustup target add aarch64-unknown-linux-gnu
+    # the checkout belongs to the host user (chown below), which git refuses as root without this
+    git config --global --add safe.directory "*"
     bash tools/comet/build.sh
+    chown -R '"$(id -u):$(id -g)"' app/src/main/assets/linuxfs/usr/local/lib/droiddeck-comet app/build/comet
   '

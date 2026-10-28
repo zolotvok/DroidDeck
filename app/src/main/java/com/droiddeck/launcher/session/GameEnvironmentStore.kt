@@ -67,6 +67,18 @@ object GameEnvironmentStore {
         publish(context, config)
     }
 
+    /** The game's Vulkan driver: "bridge" (Mali system driver), "session" (PanVK) or null (the runtime driver choice). */
+    @Synchronized
+    fun setGameDriver(context: Context, scope: String, driver: String?): GameEnvironment.Config {
+        require(scope.isNotEmpty() && GameEnvironment.validScope(scope))
+        val config = read(context)
+        val entries = config.entries(scope).toMutableMap()
+        if (driver == null) entries.remove(GameEnvironment.GAME_DRIVER) else entries[GameEnvironment.GAME_DRIVER] = driver
+        val next = config.withEntries(scope, entries)
+        save(context, next)
+        return next
+    }
+
     @Synchronized
     fun setGameFexPreset(context: Context, scope: String, preset: String?): GameEnvironment.Config {
         val config = GameEnvironment.withGameFexPreset(read(context), scope, preset)

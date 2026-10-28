@@ -271,6 +271,27 @@ fun ComponentsPage(
             environmentBusy = false
         }
     }
+    fun setGameDriver(driver: String?) {
+        val game = selectedGame ?: return
+        environmentBusy = true
+        profileNotice = null
+        coroutine.launch {
+            runCatching { withContext(Dispatchers.IO) { GameEnvironmentStore.setGameDriver(ctx, game.profileKey, driver) } }
+                .onSuccess { saved ->
+                    environment = saved
+                    if (selectedGameKey == game.profileKey) {
+                        environmentError = false
+                        profileNotice = ctx.getString(R.string.comp_game_saved_next, game.name)
+                    }
+                }.onFailure {
+                    if (selectedGameKey == game.profileKey) {
+                        environmentError = true
+                        profileNotice = ctx.getString(R.string.comp_game_save_failed, it.message ?: it.javaClass.simpleName)
+                    }
+                }
+            environmentBusy = false
+        }
+    }
     fun setGameProton(id: String?) {
         val game = selectedGame ?: return
         val proton = id?.let { wanted -> snapshot?.protons?.firstOrNull { it.proton.id == wanted }?.proton }
@@ -839,6 +860,7 @@ fun ComponentsPage(
                     onFexPreset = ::setGameFexPreset,
                     onProtonMenu = { gameProtonMenu = it },
                     onProton = ::setGameProton,
+                    onGameDriver = ::setGameDriver,
                     onComponentMenu = { gameComponentMenu = it },
                     onComponent = ::setGameComponent,
                     onEnvironment = { environmentEditor = true },
@@ -1114,6 +1136,30 @@ private fun EmptyLine(text: String) {
     Text(text, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp))
 }
 
+/** The game's Vulkan driver on a Mali phone: the runtime driver choice, the Mali system driver or PanVK. */
+@Composable
+private fun GameDriverRow(current: String?, enabled: Boolean, onPick: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val options = listOf(
+        null to stringResource(R.string.comp_game_driver_default),
+        "bridge" to stringResource(R.string.drivers_bridge_name),
+        "session" to stringResource(R.string.comp_game_driver_session),
+    )
+    SettingsRow(
+        stringResource(R.string.comp_game_driver),
+        stringResource(if (current == null) R.string.comp_game_driver_inherited else R.string.comp_game_driver_override),
+    ) {
+        Box {
+            ValueChip(options.firstOrNull { it.first == current }?.second ?: current.orEmpty(), open, enabled = enabled,
+                modifier = Modifier.widthIn(max = 280.dp)) { open = !open }
+            AnchoredMenu(open, onDismiss = { open = false }, title = stringResource(R.string.comp_game_driver)) { first ->
+                for ((i, option) in options.withIndex()) MenuItem(option.second, checked = option.first == current,
+                    focusRequester = if (i == 0) first else null) { open = false; onPick(option.first) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun GameComponentOverrides(
     game: Library.SteamGame,
@@ -1136,6 +1182,7 @@ private fun GameComponentOverrides(
     onFexPreset: (String?) -> Unit,
     onProtonMenu: (Boolean) -> Unit,
     onProton: (String?) -> Unit,
+    onGameDriver: (String?) -> Unit,
     onComponentMenu: (String?) -> Unit,
     onComponent: (String, String?) -> Unit,
     onEnvironment: () -> Unit,
@@ -1184,6 +1231,11 @@ private fun GameComponentOverrides(
             )
         }
         SettingsGroup(stringResource(R.string.comp_game_compatibility)) {
+            if (com.droiddeck.launcher.core.DeviceSupport.mali()) GameDriverRow(
+                current = config?.entries(game.profileKey)?.get(GameEnvironment.GAME_DRIVER),
+                enabled = config != null && !busy,
+                onPick = onGameDriver,
+            )
             SettingsRow(
                 stringResource(R.string.comp_proton),
                 stringResource(if (protonChoice == null) R.string.comp_game_proton_inherited else R.string.comp_game_proton_override),

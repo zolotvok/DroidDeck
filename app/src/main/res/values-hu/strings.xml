@@ -714,7 +714,7 @@
     <string name="setup_tool_protons">Proton-verziók</string>
     <string name="setup_tool_protons_hint">ARM64 Proton-buildek telepítése</string>
     <string name="setup_tool_performance">Teljesítmény</string>
-    <string name="setup_tool_performance_hint">CPU-mag hozzárendelés</string>
+    <string name="setup_tool_performance_hint">CPU-mag hozzárendelés, session-javítások, Mali rendszerdriver</string>
     <string name="setup_tool_roms">ROMs mappa</string>
     <string name="setup_tool_roms_hint">Hol vannak tárolva az emulátoros játékok</string>
     <string name="setup_card_components">Összetevők</string>
@@ -2271,4 +2271,9 @@
     <string name="drawer_driver_games">Játékok</string>
     <string name="drivers_bridge_name">Mali rendszerdriver (bridge)</string>
     <string name="drivers_bridge_detail">Csak a játékok, a telefon saját Vulkan-driverén (%1$s). A Steam és az asztal a nyílt driveren marad.</string>
+    <string name="comp_game_driver">GPU-driver</string>
+    <string name="comp_game_driver_default">Futtatókörnyezet-driver szerint</string>
+    <string name="comp_game_driver_session">Nyílt driver (PanVK)</string>
+    <string name="comp_game_driver_inherited">A futtatókörnyezet-driver oldalt követi. A játék következő indításától érvényes.</string>
+    <string name="comp_game_driver_override">Csak ennél a játéknál; a Steam a PanVK-n marad. A játék következő indításától érvényes.</string>
 </resources>
