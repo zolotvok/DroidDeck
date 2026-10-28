@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -181,6 +182,22 @@ fun PerformancePage(
                 stringResource(R.string.perf_bridge_debuglogs_hint),
                 bridgeDebugLogs, onChange = onBridgeDebugLogs,
             )
+            val context = LocalContext.current
+            var fpsLog by remember { mutableStateOf(SessionPrefs.bridgeFpsLog(context)) }
+            var gpuTime by remember { mutableStateOf(SessionPrefs.bridgeGpuTime(context)) }
+            ToggleRow(
+                host, "bridgefpslog", stringResource(R.string.perf_bridge_fpslog),
+                stringResource(R.string.perf_bridge_fpslog_hint), fpsLog,
+            ) { on -> SessionPrefs.setBridgeFpsLog(context, on); fpsLog = on }
+            ToggleRow(
+                host, "bridgegputime", stringResource(R.string.perf_bridge_gputime),
+                stringResource(R.string.perf_bridge_gputime_hint), gpuTime,
+            ) { on -> SessionPrefs.setBridgeGpuTime(context, on); gpuTime = on }
+            val bundled = remember { com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).bundledBridgeVersion() }
+            SettingsRow(
+                stringResource(R.string.perf_bridge_bundled),
+                if (bundled.isEmpty()) stringResource(R.string.perf_bridge_bundled_none) else stringResource(R.string.perf_bridge_bundled_hint, bundled),
+            ) {}
         }
         SettingsGroup(stringResource(R.string.perf_identity)) {
             var draft by remember(guestHostname) { mutableStateOf(guestHostname) }

@@ -130,6 +130,39 @@ docker run --rm --platform linux/amd64 \
 
 DROIDDECK_BUILD_IMAGE="${image_name}" "${repo_root}/tools/vr/build.sh" "${linuxfs_dir}/usr/local/lib/droiddeck-vr"
 
+# Blobferry, the Mali system driver (github.com/zolotvok/blobferry): its runtime files ride along in the APK and the
+# app stages them into the Linux runtime at every session start, so no adb install is needed. DROIDDECK_BLOBFERRY is
+# a blobferry-*.zip from its releases or its unpacked folder; by default the newest package.sh output of a ../bridge
+# checkout. Without one the APK has no bundled bridge (the driver zip import still works).
+blobferry=${DROIDDECK_BLOBFERRY:-$(ls -td "${repo_root}"/../bridge/build/dist/blobferry-*/ 2>/dev/null | head -n 1)}
+if [[ -n "${blobferry}" ]]; then
+    blobferry_dir=${blobferry%/}
+    if [[ -f "${blobferry_dir}" ]]; then
+        blobferry_unpack=$(mktemp -d)
+        unzip -q "${blobferry_dir}" -d "${blobferry_unpack}"
+        blobferry_dir=$(ls -d "${blobferry_unpack}"/blobferry-*/ | head -n 1)
+        blobferry_dir=${blobferry_dir%/}
+    fi
+    blobferry_rootfs="${blobferry_dir}/rootfs"
+    test -f "${blobferry_rootfs}/usr/lib/mali_bridge/libvulkan_mali_bridge.so"
+    mkdir -p "${linuxfs_dir}/usr/lib/mali_bridge" "${linuxfs_dir}/usr/lib/hybris/libhybris/linker" \
+        "${linuxfs_dir}/usr/local/share/licenses/blobferry/libhybris"
+    for name in libvulkan_mali_bridge.so libVkLayer_droiddeck_mali_compat.so libVkLayer_window_system_integration.so \
+        mali_bridge_icd.json VkLayer_droiddeck_mali_compat.json VkLayer_window_system_integration.json; do
+        install -m644 "${blobferry_rootfs}/usr/lib/mali_bridge/${name}" "${linuxfs_dir}/usr/lib/mali_bridge/${name}"
+    done
+    # APK assets hold no symlinks: the library under the name the shim loads
+    install -m644 "$(readlink -f "${blobferry_rootfs}/usr/lib/hybris/libhybris-common.so.1")" "${linuxfs_dir}/usr/lib/hybris/libhybris-common.so.1"
+    install -m644 "${blobferry_rootfs}/usr/lib/hybris/libhybris/linker/q.so" "${linuxfs_dir}/usr/lib/hybris/libhybris/linker/q.so"
+    install -m644 "${blobferry_dir}/LICENSE" "${blobferry_dir}/NOTICE.md" "${linuxfs_dir}/usr/local/share/licenses/blobferry/"
+    install -m644 "${blobferry_dir}"/licenses/libhybris/* "${linuxfs_dir}/usr/local/share/licenses/blobferry/libhybris/"
+    basename "${blobferry_dir}" | sed 's/^blobferry-//' > "${linuxfs_dir}/usr/lib/mali_bridge/VERSION"
+    echo "Bundled Blobferry $(cat "${linuxfs_dir}/usr/lib/mali_bridge/VERSION") from ${blobferry}"
+    [[ -n "${blobferry_unpack:-}" ]] && rm -rf "${blobferry_unpack}"
+else
+    echo "No Blobferry package found (DROIDDECK_BLOBFERRY); the APK has no bundled Mali system driver" >&2
+fi
+
 github_repo=${DROIDDECK_GITHUB_REPOSITORY:-}
 if [[ -z "${github_repo}" ]]; then
     origin_url=$(git -C "${repo_root}" remote get-url origin)

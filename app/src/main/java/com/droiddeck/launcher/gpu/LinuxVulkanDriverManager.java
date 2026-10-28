@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -120,6 +121,67 @@ public class LinuxVulkanDriverManager {
         if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return;
         Log.d(TAG, "removing imported Linux Vulkan driver " + id);
         FileUtils.delete(getDriverDir(id));
+    }
+
+    /** The slot of the Mali system driver the APK bundles (Blobferry, staged by tools/build_local.sh). */
+    public static final String BUNDLED_BRIDGE_ID = "Mali_Bridge";
+    static final String BUNDLED_BRIDGE_ASSET = "linuxfs/usr/lib/mali_bridge/";
+
+    /** Blobferry version of the bundled bridge ("" when the APK has none). */
+    public String bundledBridgeVersion() {
+        try (InputStream in = context.getAssets().open(BUNDLED_BRIDGE_ASSET + "VERSION")) {
+            return new String(readAll(in), StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** On a Mali phone, keeps the Mali_Bridge slot on the shim the APK bundles, so the Mali system driver is there
+     *  without importing a zip and follows app updates. A .dev file in the slot keeps a hand-installed shim. */
+    public boolean ensureBundledBridge() throws IOException {
+        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return false;
+        byte[] shim;
+        try (InputStream in = context.getAssets().open(BUNDLED_BRIDGE_ASSET + BRIDGE_LIB_NAME)) {
+            shim = readAll(in);
+        } catch (IOException e) {
+            return false;
+        }
+        File dir = getDriverDir(BUNDLED_BRIDGE_ID);
+        if (new File(dir, ".dev").exists()) return isBridge(BUNDLED_BRIDGE_ID);
+        File so = new File(dir, BRIDGE_LIB_NAME);
+        String version = bundledBridgeVersion();
+        if (isBridge(BUNDLED_BRIDGE_ID) && version.equals(getDriverVersion(BUNDLED_BRIDGE_ID).replace("Blobferry ", ""))) {
+            try (InputStream in = new FileInputStream(so)) {
+                if (Arrays.equals(readAll(in), shim)) return true;
+            }
+        }
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+        File staged = new File(dir, BRIDGE_LIB_NAME + ".staged");
+        Files.write(staged.toPath(), shim);
+        if (!staged.setExecutable(true, false) || !staged.renameTo(so)) throw new IOException("cannot install " + so);
+        try {
+            JSONObject icd = new JSONObject();
+            icd.put("file_format_version", "1.0.0");
+            JSONObject icdBody = new JSONObject();
+            icdBody.put("library_path", so.getAbsolutePath());
+            icdBody.put("api_version", "1.3.0");
+            icd.put("ICD", icdBody);
+            if (!FileUtils.writeString(new File(dir, ICD_NAME), icd.toString(2))) throw new IOException("cannot write icd.json");
+            JSONObject meta = new JSONObject();
+            meta.put("schemaVersion", 1);
+            meta.put("kind", "linux-vulkan-icd");
+            meta.put("name", context.getString(R.string.drivers_bridge_name));
+            meta.put("driverVersion", "Blobferry " + version);
+            meta.put("libc", "glibc");
+            meta.put("minGlibc", "2.36");
+            meta.put("sourceLibraryName", BRIDGE_LIB_NAME);
+            meta.put("bundled", true);
+            if (!FileUtils.writeString(new File(dir, META_NAME), meta.toString(2))) throw new IOException("cannot write meta.json");
+        } catch (org.json.JSONException e) {
+            throw new IOException("manifest write failed: " + e.getMessage());
+        }
+        Log.i(TAG, "installed the bundled Mali system driver (Blobferry " + version + ") into " + dir);
+        return true;
     }
 
     public String installDriver(Uri zipUri, String displayName) throws IOException {

@@ -156,6 +156,9 @@ object DeviceReport {
         k("Bridge: vkd3d without descriptor buffers", SessionPrefs.bridgeNoDescriptorBuffer(context))
         k("Bridge: DXVK without pipeline libraries", SessionPrefs.bridgeNoPipelineLibrary(context))
         k("Bridge: Wine debug logs", SessionPrefs.bridgeDebugLogs(context))
+        k("Bridge: FPS log", SessionPrefs.bridgeFpsLog(context))
+        k("Bridge: GPU timing log", SessionPrefs.bridgeGpuTime(context))
+        k("Bridge: bundled Blobferry", com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).bundledBridgeVersion().ifEmpty { "none" })
         k("Wine sync", SessionPrefs.syncBackend(context))
         EsyncPacks.status(LinuxRuntime.rootDir(context)).let { k("droiddeck-esync packs", "${it.installed} installed, ${it.wanted} wanted") }
         k("Linux x86 (FEX)", if (com.droiddeck.launcher.runtime.LinuxFex.ready(context)) "ready" else "not set up")

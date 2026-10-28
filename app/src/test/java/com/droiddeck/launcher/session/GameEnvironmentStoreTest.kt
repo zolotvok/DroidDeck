@@ -25,6 +25,21 @@ class GameEnvironmentStoreTest {
         File(context.filesDir, "game-environment.json").delete()
     }
 
+    @Test fun templatesSurviveSaveAndAddToAGameProfile() {
+        val config = GameEnvironment.Config(
+            games = mapOf("42" to mapOf("PROTON_LOG" to "1", "MALI_WSI_FPS" to "0")),
+            templates = mapOf("Measuring" to mapOf("MALI_WSI_FPS" to "1", "WINEDEBUG" to null)),
+        )
+        GameEnvironmentStore.save(context, config)
+        assertEquals(config, GameEnvironmentStore.read(context))
+        val applied = GameEnvironment.withTemplate(config, "42", config.templates.getValue("Measuring"))
+        assertEquals(mapOf("PROTON_LOG" to "1", "MALI_WSI_FPS" to "1", "WINEDEBUG" to null), applied.games["42"])
+        assertEquals(config.templates, applied.templates)
+        assertFalse(GameEnvironment.validTemplateName(" "))
+        assertFalse(GameEnvironment.validTemplateName("a\nb"))
+        assertTrue(GameEnvironment.validTemplateName("Witcher DX12 bridge"))
+    }
+
     @Test fun savedSettingsAndPublishedSettingsPreserveUnsetsAndLiteralValues() {
         val config = GameEnvironment.Config(
             shared = mapOf("LITERAL" to "a=b 'quoted' $(echo test)", "EMPTY" to ""),

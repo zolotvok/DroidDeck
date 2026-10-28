@@ -32,10 +32,16 @@ object GameEnvironmentStore {
             }
         }
         val games = json.optJSONObject("games")
+        val templates = json.optJSONObject("templates")
         return GameEnvironment.Config(entries(json.optJSONObject("shared")), buildMap {
             games?.keys()?.forEach { id ->
                 require(id.isNotEmpty() && GameEnvironment.validScope(id))
                 put(id, entries(games.getJSONObject(id)))
+            }
+        }, buildMap {
+            templates?.keys()?.forEach { name ->
+                require(GameEnvironment.validTemplateName(name))
+                put(name, entries(templates.getJSONObject(name)))
             }
         })
     }
@@ -46,7 +52,11 @@ object GameEnvironmentStore {
         }
         return JSONObject().put("version", 1).put("shared", entries(config.shared)).put("games", JSONObject().apply {
             config.games.forEach { (id, values) -> put(id, entries(values)) }
-        })
+        }).apply {
+            if (config.templates.isNotEmpty()) put("templates", JSONObject().apply {
+                config.templates.forEach { (name, values) -> put(name, entries(values)) }
+            })
+        }
     }
 
     @Synchronized

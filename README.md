@@ -31,7 +31,7 @@ On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an 
 **Untested:** other Mali CSF GPUs (G610-G925). PanVK-kbase supports them, but they have not been tried with DroidDeck.
 
 **Setup:**
-- This fork has no release APKs yet. Build it as described in [Build](#build).
+- Install the APK from this fork's releases, or build it as described in [Build](#build).
 - You need an aarch64 **glibc (Linux)** build of PanVK-kbase. The upstream PanVK-kbase releases ship Android builds only.
 - On the vivo X300 Pro the driver also needs three kbase patches:
   - report the DRM render node (gamescope needs it);
@@ -49,7 +49,19 @@ On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an 
 - `VKD3D_DISABLE_EXTENSIONS=VK_EXT_present_timing`: Horizon Zero Dawn otherwise crashes in Mesa's X11 WSI.
 - `PANVK_KBASE_HEAP_RENEW_INTERVAL=32`: Oblivion otherwise freezes after a few minutes at a high frame rate (tiler heap out of memory).
 
-**Status:**
+**Mali system driver (bridge):**
+- The APK bundles [Blobferry](https://github.com/zolotvok/blobferry), which runs games on the phone's own Mali Vulkan driver through libhybris. Steam, gamescope and the desktop stay on PanVK. On a Mali phone it appears on the **Runtime driver** page as "Mali system driver (bridge)". Choose it there for all games.
+- To choose per game: in the game's environment, set `DROIDDECK_GAME_DRIVER` to `bridge` (Mali system driver) or `session` (PanVK). The **Templates** button in the editor does this too.
+- Settings: **Performance › Mali system driver** (descriptor buffers, pipeline libraries, Wine logs, FPS log, GPU timing log).
+- Bridge games so far:
+  - Oblivion (about 90 FPS);
+  - The Witcher 3 classic (DX11) and current (DX12, about 19 FPS in the open world);
+  - Tomb Raider (2013);
+  - Horizon Zero Dawn.
+
+  Release notes: [docs/releases/0.4.0-mali.1.md](docs/releases/0.4.0-mali.1.md).
+
+**Status (PanVK):**
 - Steam starts in the gamescope session. It sometimes stalls at start.
 - Oblivion (DXVK) runs at about 90 FPS in game.
 - The Witcher 3 (DXVK) reaches the main menu (47 FPS), then hits a GPU fault in the prologue.

@@ -68,6 +68,19 @@ public final class LinuxVulkanDriver {
         return value;
     }
 
+    /** The bridge's ICD manifest whenever one is installed and the runtime has libhybris, whatever driver is chosen:
+     *  a game's own environment can then pick the bridge or the session's driver (DROIDDECK_GAME_DRIVER, read by
+     *  droiddeck-game-env). */
+    public static final String ENV_BRIDGE = "BL_VK_BRIDGE_ICD";
+
+    public static String bridgeIcdPath(Context context) {
+        if (!new File(LinuxRuntime.rootDir(context), HYBRIS_COMMON).isFile()) return null;
+        LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
+        if (m.isBridge(LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID)) return m.getIcdPath(LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID);
+        for (String id : m.enumerateInstalledDrivers()) if (m.isBridge(id)) return m.getIcdPath(id);
+        return null;
+    }
+
     public static String resolveIcdPath(Context context, String value) {
         if (value == null || value.isEmpty()) return null;
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);

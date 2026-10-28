@@ -287,6 +287,20 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("bridgeDebugLogs", on).apply()
     }
 
+    // Measuring logs of bridge games (droiddeck-game-env sets MALI_WSI_FPS / MALI_COMPAT_GPU_TIME): the real present
+    // rate and the GPU time per render pass, in the runtime's /root. Off by default; a game's own entry wins.
+    fun bridgeFpsLog(context: Context): Boolean = prefs(context).getBoolean("bridgeFpsLog", false)
+
+    fun setBridgeFpsLog(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeFpsLog", on).apply()
+    }
+
+    fun bridgeGpuTime(context: Context): Boolean = prefs(context).getBoolean("bridgeGpuTime", false)
+
+    fun setBridgeGpuTime(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeGpuTime", on).apply()
+    }
+
     fun setNoXalia(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean("noXalia", on).apply()
     }

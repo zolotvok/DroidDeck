@@ -146,14 +146,32 @@ def win_components(compat, app_id):
         return ""
 
 
-def game_driver(command, env):
+GAME_DRIVER = "DROIDDECK_GAME_DRIVER"
+
+
+def game_driver_choice(config, app_id):
+    """The game's own driver choice from its environment entries: "bridge", "session" or None (follow the app)."""
+    if not app_id or not isinstance(config, dict):
+        return None
+    games = config.get("games", {})
+    choice = games.get(app_id, {}).get(GAME_DRIVER) if isinstance(games, dict) and isinstance(games.get(app_id), dict) else None
+    return choice if choice in ("bridge", "session") else None
+
+
+def game_driver(command, env, choice=None):
     """BL_VK_GAME_DRIVER (set by the session when the Mali system driver, the bridge, is chosen): the game
     process draws with that Vulkan ICD while Steam, gamescope and the desktop stay on the session's driver.
+    A game's DROIDDECK_GAME_DRIVER entry overrides the app's choice: "session" keeps the game on the session's
+    driver, "bridge" puts it on the bridge (BL_VK_BRIDGE_ICD, exported whenever the bridge is installed).
     Only the game's own launch gets it (Proton's waitforexitandrun); a game's environment entry can still
     override VK_DRIVER_FILES afterwards. The bridge runs the phone's Android Vulkan driver through libhybris,
     which needs its vendor namespace (the shim also sets it when missing, but a running Wine process has other
     threads reading the environment)."""
     icd = env.get("BL_VK_GAME_DRIVER", "")
+    if choice == "session":
+        icd = ""
+    elif choice == "bridge":
+        icd = icd or env.get("BL_VK_BRIDGE_ICD", "")
     if not icd or len(command) < 2 or command[1] != "waitforexitandrun":
         return env
     if not os.access(icd, os.R_OK):
@@ -179,6 +197,12 @@ def game_driver(command, env):
     # session or the game's own settings still wins.
     if env.get("BL_BRIDGE_DEBUG_LOGS", "0") != "1":
         res.setdefault("WINEDEBUG", "+timestamp,+pid,+tid,fixme-all")
+    # Measuring switches from the app (Performance > Mali system driver): the WSI layer's present-rate log
+    # (/root/mali-wsi-fps.txt) and the compat layer's GPU timing (/root/mali-gputime-*.txt). A game's own entry wins.
+    if env.get("BL_BRIDGE_FPS_LOG", "0") == "1":
+        res.setdefault("MALI_WSI_FPS", "1")
+    if env.get("BL_BRIDGE_GPU_TIME", "0") == "1":
+        res.setdefault("MALI_COMPAT_GPU_TIME", "1")
     # Workarounds for the bridge, switchable in the app (Performance > Mali system driver), both on unless the
     # session says 0: vkd3d-proton renders black frames with descriptor buffers on the vendor driver, and DXVK's
     # pipeline-library links (no fast linking there) stalled Tomb Raider to 22 FPS. A game's own DXVK_CONFIG from the
@@ -365,10 +389,21 @@ def main():
             adj.write("0\n")
     except OSError:
         pass
-    env = game_driver(command, os.environ.copy())
+    env = os.environ.copy()
+    app_id = game_id(env)
+    path = Path.home() / ".config/droiddeck/game-environment.json"
+    config = None
+    if app_id:
+        try:
+            with path.open(encoding="utf-8") as source:
+                config = json.load(source)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            config = False
+    env = game_driver(command, env, game_driver_choice(config, app_id))
     mic_enabled = env.get("BL_MIC_ENABLED")
     mark_install_scripts(command, env)
-    app_id = game_id(env)
     if app_id:
         waiting = len(command) > 1 and command[1] == "waitforexitandrun"
         fixes = {}
@@ -382,19 +417,19 @@ def main():
             if components:
                 own = fixes.get("WINEDLLOVERRIDES")
                 fixes["WINEDLLOVERRIDES"] = components + ";" + own if own else components
-        path = Path.home() / ".config/droiddeck/game-environment.json"
         try:
-            with path.open(encoding="utf-8") as source:
-                config = json.load(source)
-            if waiting:
+            if config is False:
+                raise ValueError("unreadable configuration")
+            if config is None:
+                if waiting:
+                    env = apply_config(env, {"version": 1}, app_id, fixes)
+            elif waiting:
                 env = apply_config(env, config, app_id, fixes)
             else:
                 env = apply_config(env, sync_config(config, app_id), app_id)
-        except FileNotFoundError:
-            if waiting:
-                env = apply_config(env, {"version": 1}, app_id, fixes)
         except (OSError, ValueError, TypeError, AttributeError):
             print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
+        env.pop(GAME_DRIVER, None)
     if mic_enabled == "0":
         env["BANNER_AUDIO_DIRECT_MIC"] = "0"
     env = force_ssbs(command, env)

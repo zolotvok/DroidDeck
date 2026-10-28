@@ -32,6 +32,8 @@ object SessionFiles {
         catch (e: Exception) { Log.w(TAG, "LXQt cleanup will retry next session", e) }
         GameEnvironmentStore.publish(context)
         WinComponents.publish(context)
+        runCatching { com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).ensureBundledBridge() }
+            .onFailure { Log.w(TAG, "bundled Mali system driver not installed", it) }
         val files = arrayOf(
             "usr/local/bin/droiddeck-game-env" to "usr/local/bin/droiddeck-game-env",
             "usr/local/bin/droiddeck-wincomponents" to "usr/local/bin/droiddeck-wincomponents",
@@ -114,11 +116,21 @@ object SessionFiles {
         val fexPreloads = listOf("x86_64", "i386").flatMap { arch ->
             listOf("libblsession.so", "libfakeinput.so", "libfaultreport.so").map { "$arch/$it" to "usr/local/lib/droiddeck-fex/$arch/$it" }
         } + listOf("libthunkaudit.so", "libvulkan-thunk.so").map { "x86_64/$it" to "usr/local/lib/droiddeck-fex/x86_64/$it" }
+        // Blobferry, the Mali system driver, when the APK bundles it (tools/build_local.sh): the shim, both layers and
+        // libhybris into the runtime, the layer manifests where the loader finds implicit layers. A usr/lib/mali_bridge/.dev
+        // file (Blobferry's build-bridge.sh deploy) keeps hand-deployed test builds in place.
+        val bridge = if (!com.droiddeck.launcher.core.DeviceSupport.mali() || File(root, "usr/lib/mali_bridge/.dev").exists()) emptyList()
+        else listOf(
+            "libvulkan_mali_bridge.so", "libVkLayer_droiddeck_mali_compat.so", "libVkLayer_window_system_integration.so",
+            "mali_bridge_icd.json", "VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json", "VERSION",
+        ).map { "usr/lib/mali_bridge/$it" to "usr/lib/mali_bridge/$it" } + listOf("VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json")
+            .map { "usr/lib/mali_bridge/$it" to "usr/share/vulkan/implicit_layer.d/$it" } +
+            listOf("usr/lib/hybris/libhybris-common.so.1", "usr/lib/hybris/libhybris/linker/q.so").map { it to it }
         val optional = (arrayOf(
             "usr/local/bin/gamescope" to "usr/local/bin/gamescope",
             "usr/local/lib/droiddeck/uruntime" to "usr/local/lib/droiddeck/uruntime",
             "usr/local/share/licenses/uruntime/LICENSE" to "usr/local/share/licenses/uruntime/LICENSE",
-        ) + mangoapp + listOf("comet", "GalaxyCommunication.exe", "update-permissions.exe", "LICENSE", "version").map { "usr/local/lib/droiddeck-comet/$it" to "usr/local/lib/droiddeck-comet/$it" } + msitools.map { it to it } + vr + fexPreloads).filter { (asset, _) ->
+        ) + mangoapp + listOf("comet", "GalaxyCommunication.exe", "update-permissions.exe", "LICENSE", "version").map { "usr/local/lib/droiddeck-comet/$it" to "usr/local/lib/droiddeck-comet/$it" } + msitools.map { it to it } + vr + fexPreloads + bridge).filter { (asset, _) ->
             val dir = asset.substringBeforeLast('/')
             runCatching { context.assets.list("linuxfs/$dir")?.contains(asset.substringAfterLast('/')) == true }.getOrDefault(false)
         }

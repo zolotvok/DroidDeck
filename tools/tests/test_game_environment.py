@@ -92,6 +92,38 @@ class GameDriverTest(unittest.TestCase):
             env.update(BL_BRIDGE_DEBUG_LOGS="0", WINEDEBUG="+loaddll")
             self.assertEqual(MODULE["game_driver"](self.LAUNCH, env)["WINEDEBUG"], "+loaddll")
 
+    def test_game_choice_overrides_the_apps_driver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            chosen = {"BL_VK_GAME_DRIVER": str(icd), "BL_VK_BRIDGE_ICD": str(icd), "VK_DRIVER_FILES": "/panvk.json"}
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, chosen, "session"), chosen)
+            available = {"BL_VK_BRIDGE_ICD": str(icd), "VK_DRIVER_FILES": "/panvk.json"}
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, available), available)
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, available, "bridge")["VK_DRIVER_FILES"], str(icd))
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, {"VK_DRIVER_FILES": "/panvk.json"}, "bridge"),
+                             {"VK_DRIVER_FILES": "/panvk.json"})
+        config = {"version": 1, "games": {"42": {"DROIDDECK_GAME_DRIVER": "bridge"}, "7": {"DROIDDECK_GAME_DRIVER": "x"}}}
+        self.assertEqual(MODULE["game_driver_choice"](config, "42"), "bridge")
+        self.assertIsNone(MODULE["game_driver_choice"](config, "7"))
+        self.assertIsNone(MODULE["game_driver_choice"](config, "8"))
+        self.assertIsNone(MODULE["game_driver_choice"](False, "42"))
+
+    def test_bridge_measuring_switches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            env = {"BL_VK_GAME_DRIVER": str(icd)}
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertNotIn("MALI_WSI_FPS", game)
+            self.assertNotIn("MALI_COMPAT_GPU_TIME", game)
+            env.update(BL_BRIDGE_FPS_LOG="1", BL_BRIDGE_GPU_TIME="1")
+            game = MODULE["game_driver"](self.LAUNCH, env)
+            self.assertEqual(game["MALI_WSI_FPS"], "1")
+            self.assertEqual(game["MALI_COMPAT_GPU_TIME"], "1")
+            env["MALI_WSI_FPS"] = "0"
+            self.assertEqual(MODULE["game_driver"](self.LAUNCH, env)["MALI_WSI_FPS"], "0")
+
     def test_unset_or_unreadable_driver_leaves_the_session_driver(self):
         env = {"VK_DRIVER_FILES": "/panvk.json"}
         self.assertEqual(MODULE["game_driver"](self.LAUNCH, env), env)

@@ -35,6 +35,15 @@ object GameEnvironmentOptions {
         Option("WINE_LARGE_ADDRESS_AWARE", "0", 0, Type.TOGGLE, listOf("0", "1")),
         Option("WINEDLLOVERRIDES", "", 0, Type.TEXT),
         Option("GALLIUM_HUD", "simple", 0, Type.MULTIPLE, listOf("simple", "fps", "frametime")),
+        // Mali system driver (Blobferry): read by droiddeck-game-env and the bridge's layers, games on the bridge only
+        Option("DROIDDECK_GAME_DRIVER", "bridge", R.string.game_env_game_driver, Type.CHOICE, listOf("bridge", "session")),
+        Option("MALI_WSI_FPS", "1", R.string.game_env_mali_fps, Type.TOGGLE, listOf("0", "1")),
+        Option("MALI_COMPAT_GPU_TIME", "1", R.string.game_env_mali_gpu_time, Type.TOGGLE, listOf("0", "1")),
+        Option("MALI_COMPAT_RT_COMPRESS", "1", R.string.game_env_mali_rt_compress, Type.TOGGLE, listOf("0", "1")),
+        Option("MALI_COMPAT_FRAGDEPTH_FIX", "1", R.string.game_env_mali_fragdepth, Type.TOGGLE, listOf("0", "1")),
+        Option("MALI_COMPAT_BC_AFRC", "1", R.string.game_env_mali_bc_afrc, Type.TOGGLE, listOf("0", "1")),
+        Option("VKD3D_DISABLE_EXTENSIONS", "VK_EXT_descriptor_buffer", R.string.game_env_vkd3d_disable_ext, Type.MULTIPLE,
+            listOf("VK_EXT_descriptor_buffer", "VK_EXT_present_timing", "VK_EXT_mesh_shader", "VK_KHR_ray_tracing_pipeline")),
     )
 
     fun find(name: String): Option? = all.firstOrNull { it.name == name }

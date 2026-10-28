@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.droiddeck.launcher.R
 import com.droiddeck.launcher.core.GameEnvironment
 import com.droiddeck.launcher.core.GameEnvironmentOptions
+import com.droiddeck.launcher.core.GameEnvironmentTemplates
 import com.droiddeck.launcher.frontend.Library
 import com.droiddeck.launcher.session.GameEnvironmentStore
 import com.droiddeck.launcher.session.SessionPrefs
@@ -93,6 +94,7 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EnvironmentVariableEdit?>(null) }
+    var naming by remember { mutableStateOf(false) }
     val preset = SessionPrefs.fexPreset(context)
     val forceSsbs = SessionPrefs.forceSsbs(context)
     val firstFocus = remember { FocusRequester() }
@@ -185,11 +187,45 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
                     MenuItem(stringResource(R.string.game_env_custom), checked = false) { menu = null; editByPad = dialogInput.inputMode == InputMode.Keyboard; editing = EnvironmentVariableEdit(scope, profileName, "", "") }
                 }
             }
+            if (current != null) Box {
+                SecondaryButton(stringResource(R.string.game_env_templates), enabled = !busy) { menu = if (menu == "tpl") null else "tpl" }
+                AnchoredMenu(
+                    menu == "tpl", onDismiss = { if (menu == "tpl") menu = null }, title = stringResource(R.string.game_env_templates),
+                    note = stringResource(R.string.game_env_tpl_note, profileName),
+                ) { first ->
+                    var firstTaken = false
+                    fun focus(): FocusRequester? = if (firstTaken) null else first.also { firstTaken = true }
+                    fun add(entries: Map<String, String?>) { menu = null; save(GameEnvironment.withTemplate(current, scope, entries)) }
+                    for (template in GameEnvironmentTemplates.builtIn) MenuItem(
+                        stringResource(R.string.game_env_tpl_apply, stringResource(template.label)), checked = false,
+                        detail = describeEntries(template.entries), focusRequester = focus(),
+                    ) { add(template.entries) }
+                    for ((name, entries) in current.templates.toSortedMap()) MenuItem(
+                        stringResource(R.string.game_env_tpl_apply, name), checked = false, detail = describeEntries(entries), focusRequester = focus(),
+                    ) { add(entries) }
+                    for ((id, entries) in current.games.filter { (id, entries) -> id != scope && entries.isNotEmpty() }) MenuItem(
+                        stringResource(R.string.game_env_tpl_copy, games.firstOrNull { it.first == id }?.second ?: id), checked = false,
+                        detail = describeEntries(entries), focusRequester = focus(),
+                    ) { add(entries) }
+                    if (current.entries(scope).isNotEmpty()) MenuItem(stringResource(R.string.game_env_tpl_save), checked = false, focusRequester = focus()) {
+                        menu = null; editByPad = dialogInput.inputMode == InputMode.Keyboard; naming = true
+                    }
+                    for (name in current.templates.keys.sorted()) MenuItem(stringResource(R.string.game_env_tpl_delete, name), checked = false) {
+                        menu = null; save(current.copy(templates = current.templates - name))
+                    }
+                }
+            }
             if (current != null && current.entries(scope).isNotEmpty()) FocusText(stringResource(R.string.game_env_reset), LocalPalette.current.signal) {
                 save(current.withEntries(scope, emptyMap()))
             }
             Spacer(Modifier.weight(1f))
             PrimaryButton(stringResource(R.string.game_env_done), enabled = !busy, onClick = close)
+        }
+    }
+    if (naming) config?.let { cfg ->
+        TemplateNameDialog(cfg.templates.keys, editByPad, onDismiss = { naming = false }) { name ->
+            save(cfg.copy(templates = cfg.templates + (name to cfg.entries(scope))))
+            naming = false
         }
     }
     editing?.let { edit ->
@@ -201,6 +237,31 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
                 save(it.withEntries(edit.scope, entries))
             }
             editing = null
+        }
+    }
+}
+
+private fun describeEntries(entries: Map<String, String?>): String =
+    entries.entries.joinToString(", ") { (name, value) -> name + "=" + (value ?: "-") }.let { if (it.length > 90) it.take(89) + "…" else it }
+
+@Composable
+private fun TemplateNameDialog(existing: Set<String>, byPad: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    val shown = rememberShown(onDismiss)
+    val close = { shown.targetState = false }
+    var name by remember { mutableStateOf("") }
+    val valid = GameEnvironment.validTemplateName(name)
+    val focus = remember { FocusRequester() }
+    AppDialog(shown, close, "gameEnvTemplate", wide = false) {
+        PadFocus(byPad, focus)
+        DialogHeader(stringResource(R.string.game_env_templates), stringResource(R.string.game_env_tpl_save))
+        AdbTextField(
+            name, { name = it.take(48) }, stringResource(R.string.game_env_tpl_name), KeyboardType.Text, ImeAction.Done,
+            modifier = Modifier.focusRequester(focus), compact = true,
+            onDone = { if (valid) { onSave(name.trim()); close() } },
+        )
+        if (name.trim() in existing) Small(stringResource(R.string.game_env_tpl_replace))
+        DialogFooter(note = stringResource(R.string.game_env_tpl_save_note), confirm = stringResource(R.string.game_env_save), enabled = valid, onCancel = close) {
+            onSave(name.trim()); close()
         }
     }
 }

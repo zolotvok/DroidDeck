@@ -4,6 +4,8 @@ object GameEnvironment {
     data class Config(
         val shared: Map<String, String?> = emptyMap(),
         val games: Map<String, Map<String, String?>> = emptyMap(),
+        // Named sets of entries the user saved ("templates"), to add to any game's profile in one step.
+        val templates: Map<String, Map<String, String?>> = emptyMap(),
     ) {
         fun entries(scope: String) = if (scope.isEmpty()) shared else games[scope].orEmpty()
 
@@ -21,6 +23,11 @@ object GameEnvironment {
     )
 
     fun validName(name: String) = namePattern.matches(name)
+    fun validTemplateName(name: String) = name.isNotBlank() && name.length <= 48 && name.none { it.isISOControl() }
+
+    /** Adds [template]'s entries to [scope]'s own entries; the template's value wins for a name both have. */
+    fun withTemplate(config: Config, scope: String, template: Map<String, String?>): Config =
+        config.withEntries(scope, config.entries(scope) + template)
     fun supported(name: String) = name !in unused && !name.startsWith("BOX64_") && !name.startsWith("BOX86_")
     fun validValue(value: String) = '\u0000' !in value && value.length <= 8192
     fun validScope(scope: String) = scope.isEmpty() || (Regex("[1-9][0-9]*").matches(scope) && scope.toLongOrNull()?.let { it in 1..4294967295L } == true)
