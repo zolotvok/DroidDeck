@@ -102,10 +102,11 @@ def skip_red_launcher(command):
     """Cyberpunk 2077's prelauncher opens REDlauncher, a Qt WebEngine window that hands over to the
     game half a minute later and then stays up beside it, well over a core busy for as long as the
     game runs. The game is started itself instead; the prelauncher's own --launcher-skip started it
-    twice."""
+    twice. The Witcher 3's current release ships only the DirectX 12 build, in bin/x64_dx12; the
+    classic v1.32 branch has bin/x64."""
     if len(command) > 2 and os.path.basename(command[2]).lower() == "redprelauncher.exe":
-        for exe in ("Cyberpunk2077.exe", "witcher3.exe"):
-            game = os.path.join(os.path.dirname(command[2]), "bin", "x64", exe)
+        for exe, folder in (("Cyberpunk2077.exe", "x64"), ("witcher3.exe", "x64"), ("witcher3.exe", "x64_dx12")):
+            game = os.path.join(os.path.dirname(command[2]), "bin", folder, exe)
             if os.path.isfile(game):
                 if exe == "witcher3.exe":
                     try:
