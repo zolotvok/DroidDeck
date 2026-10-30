@@ -71,6 +71,6 @@ object EpicDownloadManager {
         val info = info(json) ?: return null
         val answer = EpicNative.call("build.prereq", JSONObject().put("info", info)) ?: return null
         if (answer.has("error") || !answer.optBoolean("read", false)) return null
-        return arrayOf(answer.optString("name"), answer.optString("path"))
+        return arrayOf(answer.optString("name"), answer.optString("path"), answer.optString("launchCommand"), answer.optString("args"))
     }
 }
