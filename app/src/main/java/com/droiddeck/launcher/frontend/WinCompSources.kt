@@ -55,7 +55,12 @@ object WinCompSources {
     const val GOG_DEPENDENCIES = "dependencies"
     const val EPIC_PREREQ_PATH = "prereqPath"
     const val EPIC_PREREQ_NAME = "prereqName"
+    /** Epic: the prerequisite installer's arguments from the manifest (`/S` for Ubisoft's); see StoreLaunch.prereqLines. */
+    const val EPIC_PREREQ_ARGS = "prereqArgs"
     const val LIST_READ = "listRead"
+    /** Epic: the manifest's launch command (put after the exe; Ubisoft titles carry their product id in it). */
+    const val EPIC_LAUNCH_COMMAND = "launchCommand"
+    const val EPIC_LAUNCH_READ = "launchRead"
 
     fun amazonPostInstall(folder: File): List<String> = runCatching {
         val arr = JSONObject(File(folder, "fuel.json").readText()).optJSONArray("PostInstall") ?: return emptyList()

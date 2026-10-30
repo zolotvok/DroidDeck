@@ -124,7 +124,12 @@ internal class EpicInstaller(
         if (deployment.isNotEmpty()) extra["deploymentId"] = deployment
         extra[WinCompSources.EPIC_PREREQ_PATH] = result.optString("prereqPath")
         extra[WinCompSources.EPIC_PREREQ_NAME] = result.optString("prereqName")
-        if (result.optBoolean("prereqRead", false)) extra[WinCompSources.LIST_READ] = "1"
+        if (result.optBoolean("prereqRead", false)) {
+            extra[WinCompSources.LIST_READ] = "1"
+            extra[WinCompSources.EPIC_LAUNCH_COMMAND] = result.optString("launchCommand")
+            extra[WinCompSources.EPIC_PREREQ_ARGS] = result.optString("prereqArgs")
+            extra[WinCompSources.EPIC_LAUNCH_READ] = "1"
+        }
 
         val sidecar = StoreGameSidecar(
             Store.EPIC, item.id, item.title, exe = picked.ifEmpty { "game.exe" }, args = args,

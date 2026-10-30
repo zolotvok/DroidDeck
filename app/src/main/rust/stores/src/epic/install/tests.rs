@@ -146,6 +146,7 @@ fn fixture() -> Fixture {
         version: 21,
         build: "9.9".into(),
         exe: "a.bin".into(),
+        command: String::new(),
         prereq: Some(("Redist".into(), "redist\\setup.exe".into())),
         chunks: vec![c1.clone(), c2.clone(), c3.clone()],
         files,
@@ -212,6 +213,7 @@ fn fresh_install_then_rerun_then_repair() {
     assert_eq!(done.build_version, "9.9");
     assert_eq!(done.launch_exe, "a.bin");
     assert_eq!(done.prereq_path, "redist/setup.exe");
+    assert_eq!(done.prereq_args, "/quiet");
     assert!(done.prereq_read);
     assert_eq!(done.deployment_id, "dep");
     assert_eq!(done.disk_bytes, 4000 + 2096 + 100);

@@ -104,6 +104,27 @@ pub fn exchange_code(access_token: &str) -> Result<String, String> {
     non_empty(&body, "code").ok_or_else(|| "exchange answer has no code".into())
 }
 
+/// The ownership verification token games with the `OwnershipToken` catalog attribute expect as a file passed with
+/// `-epicovt=<path>` (Ubisoft titles: without it UplayLaunch stops with "Missing one of following arguments: Product
+/// id, exchange code and user id"). Same request as Legendary's get_ownership_token.
+const ECOMMERCE_HOST: &str = "https://ecommerceintegration-public-service-ecomprod02.ol.epicgames.com";
+
+pub fn ownership_token(access_token: &str, account_id: &str, namespace: &str, catalog_item_id: &str) -> Result<Vec<u8>, String> {
+    let url = format!(
+        "{ECOMMERCE_HOST}/ecommerceintegration/api/public/platforms/EPIC/identities/{}/ownershipToken",
+        net::percent_encode(account_id)
+    );
+    let form = Body::Form(vec![("nsCatalogItemId".to_string(), format!("{namespace}:{catalog_item_id}"))]);
+    let reply = net::send(Request::post(&url, form).bearer(access_token))?;
+    if !reply.ok() {
+        return Err(format!("ownership token answered HTTP {}", reply.status));
+    }
+    if reply.body.is_empty() {
+        return Err("ownership token answer is empty".into());
+    }
+    Ok(reply.body)
+}
+
 pub fn code_from_page_text(raw: &str) -> Option<String> {
     let mut text = raw.trim();
     if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {

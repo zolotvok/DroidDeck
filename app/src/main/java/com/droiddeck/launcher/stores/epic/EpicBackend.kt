@@ -92,4 +92,11 @@ object EpicBackend : StoreBackend, EpicLaunchSupport {
     }
 
     override fun signInExpired(context: Context): Boolean = EpicCredentialStore.expired(context)
+
+    override fun ownershipToken(context: Context, namespace: String, catalogItemId: String): ByteArray? {
+        val token = EpicCredentialStore.getValidAccessToken(context) ?: return null
+        if (!EpicApiClient.getCustomAttribute(token, namespace, catalogItemId, "OwnershipToken").equals("true", ignoreCase = true)) return null
+        val account = EpicCredentialStore.load(context)?.accountId.orEmpty().ifEmpty { return null }
+        return EpicApiClient.ownershipToken(token, account, namespace, catalogItemId)
+    }
 }

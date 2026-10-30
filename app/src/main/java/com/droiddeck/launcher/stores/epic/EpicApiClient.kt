@@ -21,6 +21,13 @@ object EpicApiClient {
     internal fun catalogDetails(token: String, namespace: String, catalogItemId: String): JSONObject? =
         EpicNative.call("catalog.details", request(token, namespace, catalogItemId))?.optJSONObject("details")
 
+    /** The ownership verification token (`-epicovt=`), raw bytes; null when Epic gave none. */
+    internal fun ownershipToken(token: String, accountId: String, namespace: String, catalogItemId: String): ByteArray? {
+        val hex = EpicNative.call("auth.ownershipToken", request(token, namespace, catalogItemId).put("accountId", accountId))
+            ?.optString("hex", "")?.ifEmpty { null } ?: return null
+        return ByteArray(hex.length / 2) { i -> hex.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
+    }
+
     internal fun exchangeCode(token: String): String? =
         EpicNative.call("auth.exchange", JSONObject().put("accessToken", token))?.optString("code", "")?.ifEmpty { null }
 }

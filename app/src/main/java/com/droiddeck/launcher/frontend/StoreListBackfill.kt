@@ -28,7 +28,12 @@ object StoreListBackfill {
     @VisibleForTesting internal var fetcher: Fetcher = storeFetcher
 
     fun needs(sidecar: StoreGameSidecar): Boolean =
-        (sidecar.store == Store.GOG || sidecar.store == Store.EPIC) && WinCompSources.LIST_READ !in sidecar.extra
+        when (sidecar.store) {
+            Store.GOG -> WinCompSources.LIST_READ !in sidecar.extra
+            Store.EPIC -> WinCompSources.LIST_READ !in sidecar.extra || WinCompSources.EPIC_LAUNCH_READ !in sidecar.extra ||
+                sidecar.extra[WinCompSources.EPIC_PREREQ_PATH].orEmpty().isNotEmpty() && WinCompSources.EPIC_PREREQ_ARGS !in sidecar.extra
+            else -> false
+        }
 
     @Synchronized
     fun fill(context: Context, folder: File): Boolean {
@@ -47,10 +52,13 @@ object StoreListBackfill {
             return false
         }
         val current = StoreGameSidecar.read(folder) ?: return false
-        current.copy(extra = current.extra + list + (WinCompSources.LIST_READ to "1")).write(folder)
+        val read = if (sidecar.store == Store.EPIC) mapOf(WinCompSources.LIST_READ to "1", WinCompSources.EPIC_LAUNCH_READ to "1")
+            else mapOf(WinCompSources.LIST_READ to "1")
+        current.copy(extra = current.extra + list + read).write(folder)
         Log.i(TAG, "backfill: ${sidecar.title} " + when (sidecar.store) {
             Store.GOG -> "gog deps=[${list[WinCompSources.GOG_DEPENDENCIES].orEmpty()}]"
-            else -> "epic prereq=" + (list[WinCompSources.EPIC_PREREQ_NAME].orEmpty().ifEmpty { list[WinCompSources.EPIC_PREREQ_PATH].orEmpty() }.ifEmpty { "none" })
+            else -> "epic prereq=" + (list[WinCompSources.EPIC_PREREQ_NAME].orEmpty().ifEmpty { list[WinCompSources.EPIC_PREREQ_PATH].orEmpty() }.ifEmpty { "none" }) +
+                " launch=[${list[WinCompSources.EPIC_LAUNCH_COMMAND].orEmpty()}]"
         })
         return true
     }
@@ -68,8 +76,9 @@ object StoreListBackfill {
                 val catalogItemId = sidecar.extra["catalogItemId"].orEmpty()
                 if (namespace.isEmpty() || catalogItemId.isEmpty()) return null
                 val json = EpicApiClient.getManifestApiJson(token, namespace, catalogItemId, sidecar.extra["appName"] ?: sidecar.id) ?: return null
-                EpicDownloadManager.fetchPrereq(json)?.let { (name, path) ->
-                    mapOf(WinCompSources.EPIC_PREREQ_NAME to name, WinCompSources.EPIC_PREREQ_PATH to path)
+                EpicDownloadManager.fetchPrereq(json)?.let { (name, path, command, args) ->
+                    mapOf(WinCompSources.EPIC_PREREQ_NAME to name, WinCompSources.EPIC_PREREQ_PATH to path, WinCompSources.EPIC_LAUNCH_COMMAND to command,
+                        WinCompSources.EPIC_PREREQ_ARGS to args)
                 }
             }
             else -> null

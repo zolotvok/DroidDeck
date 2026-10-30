@@ -108,9 +108,74 @@ class StoreGameSidecarTest {
         assertTrue(text.contains("set \"FOO=bar\"\r\n"))
         assertTrue(text.contains("\r\n\"%~dp0Binaries\\Win64\\Celeste.exe\" -EpicPortal -epicusername=\"Some One\"\r\n"))
         assertTrue(text.contains("set /p DD_X=<\"%~dp0.droiddeck-epic-code\""))
-        assertTrue(text.contains("set \"DD_X=\" & \"%~dp0Binaries\\Win64\\Celeste.exe\" -EpicPortal -epicusername=\"Some One\" -AUTH_LOGIN=unused -AUTH_PASSWORD=%DD_X% -AUTH_TYPE=exchangecode\r\n"))
+        assertTrue(text.contains("set \"DD_X=\" & \"%~dp0Binaries\\Win64\\Celeste.exe\" -EpicPortal -epicusername=\"Some One\" -AUTH_LOGIN=unused -AUTH_PASSWORD=%DD_X% -AUTH_TYPE=exchangecode %DD_OVT%\r\n"))
+        assertTrue(text.contains("if exist \"%~dp0.droiddeck-epic.ovt\" set \"DD_OVT=-epicovt=\"%~dp0.droiddeck-epic.ovt\"\"\r\n"))
         assertFalse(text.contains("AUTH="))
         assertFalse(text.contains("DD_AUTH"))
+    }
+
+    @Test fun epicLaunchCommandGoesRightAfterTheExe() {
+        val ubi = sample.copy(exe = "UplayLaunch.exe", env = emptyMap(),
+            extra = sample.extra + (com.droiddeck.launcher.frontend.WinCompSources.EPIC_LAUNCH_COMMAND to "-UplayId=2688 & del x"))
+        val text = StoreLaunch.launcherText(ubi)
+        assertTrue(text.contains("\r\n\"%~dp0UplayLaunch.exe\" -UplayId=2688  del x -EpicPortal -epicusername=\"Some One\"\r\n"))
+        val gog = StoreLaunch.launcherText(StoreGameSidecar(Store.GOG, "1", "T", "game.exe",
+            extra = mapOf(com.droiddeck.launcher.frontend.WinCompSources.EPIC_LAUNCH_COMMAND to "-x")))
+        assertFalse(gog.contains("-x"))
+    }
+
+    private val wd2 = StoreGameSidecar(
+        Store.EPIC, "Angelonia", "Watch Dogs 2", "UplayLaunch.exe", launcher = ".droiddeck-launch.bat",
+        args = listOf("-EpicPortal", "-epicuserid=acc"),
+        extra = mapOf(
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_NAME to "Uplay",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_PATH to "Uplay/UplayInstaller.exe",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_LAUNCH_COMMAND to "-UplayId=2688",
+        ),
+    )
+
+    @Test fun ubisoftConnectIsInstalledInThePrefixBeforeUplayLaunchWhileItIsMissing() {
+        val text = StoreLaunch.launcherText(wd2)
+        val block = "if not exist \"%~dp0Uplay\\UplayInstaller.exe\" goto dd_prereq_done\r\n" +
+            "if exist \"%ProgramFiles(x86)%\\Ubisoft\\Ubisoft Game Launcher\\upc.exe\" goto dd_prereq_done\r\n" +
+            "start \"\" /wait \"%~dp0Uplay\\UplayInstaller.exe\" /S\r\n:dd_prereq_done\r\n"
+        assertTrue(text, text.contains(block))
+        val game = "set \"DD_X=\" & \"%~dp0UplayLaunch.exe\" -UplayId=2688 -EpicPortal -epicuserid=acc -AUTH_LOGIN=unused -AUTH_PASSWORD=%DD_X% -AUTH_TYPE=exchangecode %DD_OVT%\r\n"
+        assertTrue(text, text.contains(game))
+        assertTrue(text.indexOf(block) < text.indexOf(game))
+        assertFalse(text.contains("epic-prereq-"))
+        // the manifest's own arguments win over the /S default
+        val withArgs = StoreLaunch.launcherText(wd2.copy(extra = wd2.extra + (com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_ARGS to "/S /D=x")))
+        assertTrue(withArgs.contains("start \"\" /wait \"%~dp0Uplay\\UplayInstaller.exe\" /S /D=x\r\n"))
+    }
+
+    @Test fun anUnknownEpicPrerequisiteRunsOncePerPrefixAndOnlyWithItsArguments() {
+        val eac = StoreGameSidecar(Store.EPIC, "Sugar", "Rocket League", "Binaries/Win64/RocketLeague.exe", extra = mapOf(
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_NAME to "EAC_Service",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_PATH to "Binaries/Win64/EasyAntiCheat/EasyAntiCheat_EOS_Setup.exe",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_ARGS to "install 1234 & del x",
+        ))
+        val lines = StoreLaunch.prereqLines(eac)
+        val exe = "\"%~dp0Binaries\\Win64\\EasyAntiCheat\\EasyAntiCheat_EOS_Setup.exe\""
+        assertEquals("if not exist $exe goto dd_prereq_done", lines[1])
+        assertTrue(lines[2], lines[2].matches(Regex("if exist \"%ProgramData%\\\\DroidDeck\\\\epic-prereq-Sugar-[0-9a-f]{8}\\.done\" goto dd_prereq_done")))
+        assertEquals("start \"\" /wait $exe install 1234  del x", lines[3])
+        assertEquals("set \"DD_RC=%errorlevel%\"", lines[4])
+        assertTrue(lines[6], lines[6].startsWith(">\"%ProgramData%\\DroidDeck\\epic-prereq-Sugar-") && lines[6].endsWith(".done\" echo rc=%DD_RC%"))
+        assertEquals(":dd_prereq_done", lines.last())
+        // without its arguments (an install read before they were kept) it does not run: it might wait for clicks
+        assertTrue(StoreLaunch.prereqLines(eac.copy(extra = eac.extra - com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_ARGS)).isEmpty())
+        // a known runtime is the Windows components' job; paths out of the game folder and other stores never run
+        val ue = mapOf(
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_NAME to "UE4 Prerequisites (x64)",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_PATH to "Engine/Extras/Redist/en-us/UE4PrereqSetup_x64.exe",
+            com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_ARGS to "/quiet",
+        )
+        assertTrue(StoreLaunch.prereqLines(eac.copy(extra = ue)).isEmpty())
+        for (bad in listOf("../x/setup.exe", "C:/x/setup.exe", "/x/setup.exe", "a//setup.exe", "a/\"b.exe"))
+            assertTrue(bad, StoreLaunch.prereqLines(eac.copy(extra = eac.extra + (com.droiddeck.launcher.frontend.WinCompSources.EPIC_PREREQ_PATH to bad))).isEmpty())
+        assertTrue(StoreLaunch.prereqLines(StoreGameSidecar(Store.GOG, "Sugar", "Rocket League", "RocketLeague.exe", extra = eac.extra)).isEmpty())
+        assertTrue(StoreLaunch.prereqLines(sample).isEmpty())
     }
 
     @Test fun gogLauncherHasNoEpicBlockAndIsOnlyWrittenWhenNeeded() {

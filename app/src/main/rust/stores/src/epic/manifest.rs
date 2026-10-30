@@ -68,8 +68,12 @@ pub struct Manifest {
     pub version: i64,
     pub build_version: String,
     pub launch_exe: String,
+    /// The arguments the Epic launcher puts after the exe (Ubisoft titles carry their product id here).
+    pub launch_command: String,
     pub prereq_name: String,
     pub prereq_path: String,
+    /// The prerequisite installer's arguments (`/S` for the Ubisoft Connect installer).
+    pub prereq_args: String,
     pub prereq_read: bool,
     pub chunks: Vec<ChunkInfo>,
     pub chunk_index: HashMap<Guid, usize>,
@@ -279,8 +283,10 @@ fn parse_binary(bytes: &[u8]) -> Result<Manifest, String> {
         version,
         build_version: meta.build_version,
         launch_exe: meta.launch_exe,
+        launch_command: meta.launch_command,
         prereq_name: meta.prereq_name,
         prereq_path: meta.prereq_path,
+        prereq_args: meta.prereq_args,
         prereq_read: meta.complete,
         chunks,
         chunk_index,
@@ -292,8 +298,10 @@ fn parse_binary(bytes: &[u8]) -> Result<Manifest, String> {
 struct Meta {
     build_version: String,
     launch_exe: String,
+    launch_command: String,
     prereq_name: String,
     prereq_path: String,
+    prereq_args: String,
     complete: bool,
 }
 
@@ -308,14 +316,14 @@ fn read_meta(data: &[u8]) -> Meta {
         r.fstring()?;
         meta.build_version = r.fstring()?;
         meta.launch_exe = normalise_path(&r.fstring()?);
-        r.fstring()?;
+        meta.launch_command = r.fstring()?;
         let ids = r.count(4)?;
         for _ in 0..ids {
             r.fstring()?;
         }
         meta.prereq_name = r.fstring()?;
         meta.prereq_path = normalise_path(&r.fstring()?);
-        r.fstring()?;
+        meta.prereq_args = r.fstring()?;
         meta.complete = true;
         Ok(())
     })();
@@ -548,8 +556,10 @@ fn parse_json(bytes: &[u8]) -> Result<Manifest, String> {
         version,
         build_version: str_field("BuildVersionString"),
         launch_exe: normalise_path(launch),
+        launch_command: str_field("LaunchCommand"),
         prereq_name: str_field("PrereqName"),
         prereq_path: normalise_path(&str_field("PrereqPath")),
+        prereq_args: str_field("PrereqArgs"),
         prereq_read: true,
         chunks,
         chunk_index,
@@ -596,6 +606,7 @@ pub mod testing {
         pub version: i32,
         pub build: String,
         pub exe: String,
+        pub command: String,
         pub prereq: Option<(String, String)>,
         pub chunks: Vec<ChunkInfo>,
         pub files: Vec<TestFile>,
@@ -611,7 +622,7 @@ pub mod testing {
         fstring(&mut meta, "App");
         fstring(&mut meta, &m.build);
         fstring(&mut meta, &m.exe);
-        fstring(&mut meta, "");
+        fstring(&mut meta, &m.command);
         if let Some((name, path)) = &m.prereq {
             meta.extend_from_slice(&1i32.to_le_bytes());
             fstring(&mut meta, "prereq-id");
@@ -729,6 +740,7 @@ mod tests {
             version: 21,
             build: "1.2.3-CL-99".into(),
             exe: "Binaries\\Win64\\Game.exe".into(),
+            command: "-UplayId=2688".into(),
             prereq: prereq.then(|| ("UE4 Prerequisites (x64)".into(), "Engine\\Extras\\UE4PrereqSetup_x64.exe".into())),
             chunks: vec![c1.clone(), c2.clone()],
             files: vec![
@@ -763,8 +775,10 @@ mod tests {
             assert_eq!(m.chunk_folder(), "ChunksV4");
             assert_eq!(m.build_version, "1.2.3-CL-99");
             assert_eq!(m.launch_exe, "Binaries/Win64/Game.exe");
+            assert_eq!(m.launch_command, "-UplayId=2688");
             assert_eq!(m.prereq_name, "UE4 Prerequisites (x64)");
             assert_eq!(m.prereq_path, "Engine/Extras/UE4PrereqSetup_x64.exe");
+            assert_eq!(m.prereq_args, "/quiet");
             assert!(m.prereq_read);
             assert_eq!(m.chunks.len(), 2);
             assert_eq!(m.files.len(), 3);

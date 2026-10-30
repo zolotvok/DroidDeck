@@ -78,8 +78,10 @@ impl Request {
 pub struct Finished {
     pub build_version: String,
     pub launch_exe: String,
+    pub launch_command: String,
     pub prereq_name: String,
     pub prereq_path: String,
+    pub prereq_args: String,
     pub prereq_read: bool,
     pub deployment_id: String,
     pub disk_bytes: u64,
@@ -92,8 +94,10 @@ impl Finished {
         json!({
             "buildVersion": self.build_version,
             "launchExe": self.launch_exe,
+            "launchCommand": self.launch_command,
             "prereqName": self.prereq_name,
             "prereqPath": self.prereq_path,
+            "prereqArgs": self.prereq_args,
             "prereqRead": self.prereq_read,
             "deploymentId": self.deployment_id,
             "diskBytes": self.disk_bytes,
@@ -195,8 +199,10 @@ pub fn run(req: &Request, cancel: &AtomicBool, ev: &dyn Events) -> Result<Finish
     let mut finished = Finished {
         build_version: manifest.build_version.clone(),
         launch_exe: manifest.launch_exe.clone(),
+        launch_command: manifest.launch_command.clone(),
         prereq_name: manifest.prereq_name.clone(),
         prereq_path: manifest.prereq_path.clone(),
+        prereq_args: manifest.prereq_args.clone(),
         prereq_read: manifest.prereq_read,
         deployment_id: req.info.deployment_id.clone(),
         disk_bytes,

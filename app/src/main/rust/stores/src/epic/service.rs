@@ -41,6 +41,15 @@ fn dispatch(op: &str, req: &Value) -> Value {
             Ok(code) => json!({ "code": code }),
             Err(e) => error(e),
         },
+        "auth.ownershipToken" => match account::ownership_token(
+            token,
+            str_of(req, "accountId"),
+            str_of(req, "namespace"),
+            str_of(req, "catalogItemId"),
+        ) {
+            Ok(bytes) => json!({ "hex": crate::gog::to_hex(&bytes) }),
+            Err(e) => error(e),
+        },
         "library.owned" => match library::list_owned(token) {
             Ok(list) => json!({ "records": list.iter().map(|o| json!({
                 "appName": o.app_name, "namespace": o.namespace, "catalogItemId": o.catalog_item_id,
@@ -72,7 +81,7 @@ fn dispatch(op: &str, req: &Value) -> Value {
         },
         "build.cdns" => json!({ "cdns": info_of(req).map(|i| build_info::cdns_to_json(&i.cdns)).unwrap_or(json!([])) }),
         "build.prereq" => match info_of(req).map(|i| install::fetch_manifest(&i, &|_: &str| {})) {
-            Some(Ok(m)) => json!({ "name": m.prereq_name, "path": m.prereq_path, "read": m.prereq_read }),
+            Some(Ok(m)) => json!({ "name": m.prereq_name, "path": m.prereq_path, "args": m.prereq_args, "read": m.prereq_read, "launchCommand": m.launch_command }),
             Some(Err(e)) => error(e),
             None => error("no build information"),
         },
@@ -163,8 +172,10 @@ pub fn inspect(bytes: &[u8], request: &str) -> String {
         _ => json!({
             "buildVersion": m.build_version,
             "launchExe": m.launch_exe,
+            "launchCommand": m.launch_command,
             "prereqName": m.prereq_name,
             "prereqPath": m.prereq_path,
+            "prereqArgs": m.prereq_args,
             "prereqRead": m.prereq_read,
             "files": m.files.iter().map(|f| json!({ "path": f.path, "size": f.size, "tags": f.tags })).collect::<Vec<_>>(),
         }),
@@ -196,6 +207,7 @@ mod tests {
             version: 21,
             build: "b".into(),
             exe: "x.exe".into(),
+            command: String::new(),
             prereq: None,
             chunks: vec![],
             files: vec![

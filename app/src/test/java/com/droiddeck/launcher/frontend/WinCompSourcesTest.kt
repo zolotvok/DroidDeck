@@ -388,11 +388,19 @@ class WinCompSourcesTest {
 
     @Test fun aListReadWholeIsNotFetchedAgainButAnUnmarkedEmptyOneIs() {
         val read = tmp.newFolder("Read")
-        StoreGameSidecar(Store.EPIC, "a", "A", exe = "A.exe", extra = mapOf(WinCompSources.EPIC_PREREQ_NAME to "", WinCompSources.EPIC_PREREQ_PATH to "", WinCompSources.LIST_READ to "1")).write(read)
+        StoreGameSidecar(Store.EPIC, "a", "A", exe = "A.exe", extra = mapOf(WinCompSources.EPIC_PREREQ_NAME to "", WinCompSources.EPIC_PREREQ_PATH to "", WinCompSources.LIST_READ to "1", WinCompSources.EPIC_LAUNCH_READ to "1")).write(read)
+        val noCommand = tmp.newFolder("NoCommand")
+        StoreGameSidecar(Store.EPIC, "c", "C", exe = "C.exe", extra = mapOf(WinCompSources.LIST_READ to "1")).write(noCommand)
         val older = tmp.newFolder("Older")
         StoreGameSidecar(Store.EPIC, "b", "B", exe = "B.exe", extra = mapOf(WinCompSources.EPIC_PREREQ_NAME to "", WinCompSources.EPIC_PREREQ_PATH to "")).write(older)
         assertFalse(StoreListBackfill.needs(StoreGameSidecar.read(read)!!))
         assertTrue(StoreListBackfill.needs(StoreGameSidecar.read(older)!!))
+        assertTrue(StoreListBackfill.needs(StoreGameSidecar.read(noCommand)!!))
+        // a prerequisite read before its arguments were kept is read again once; without a prerequisite there is nothing to read
+        val ubi = mapOf(WinCompSources.EPIC_PREREQ_NAME to "Uplay", WinCompSources.EPIC_PREREQ_PATH to "Uplay/UplayInstaller.exe",
+            WinCompSources.LIST_READ to "1", WinCompSources.EPIC_LAUNCH_READ to "1")
+        assertTrue(StoreListBackfill.needs(StoreGameSidecar(Store.EPIC, "u", "U", exe = "UplayLaunch.exe", extra = ubi)))
+        assertFalse(StoreListBackfill.needs(StoreGameSidecar(Store.EPIC, "u", "U", exe = "UplayLaunch.exe", extra = ubi + (WinCompSources.EPIC_PREREQ_ARGS to "/S"))))
     }
 
 
