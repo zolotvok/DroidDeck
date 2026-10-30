@@ -44,9 +44,15 @@ public final class LinuxVulkanDriver {
         return value != null && !value.isEmpty() && new LinuxVulkanDriverManager(context).isBridge(value);
     }
 
-    /** The driver the session itself (Steam, gamescope, the desktop) draws with. */
+    /** The driver the session itself (Steam, gamescope, the desktop) draws with. With the bridge chosen it is PanVK,
+     *  unless the experimental "session on the Mali system driver" setting puts the session on the bridge too. */
     public static String effective(Context context, String value) {
         if (value != null && !value.isEmpty() && !isBridge(context, value)) return value;
+        if (isBridge(context, value) && com.droiddeck.launcher.session.SessionPrefs.INSTANCE.bridgeSession(context)
+                && !gameDriver(context, value).isEmpty()) {
+            Log.i(TAG, "Mali system driver for the session too (experimental setting): " + value);
+            return value;
+        }
         if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return "";
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
         for (String id : m.enumerateInstalledDrivers()) {

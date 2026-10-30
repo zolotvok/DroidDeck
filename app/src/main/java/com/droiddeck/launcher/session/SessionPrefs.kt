@@ -301,6 +301,14 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("bridgeGpuTime", on).apply()
     }
 
+    // The session itself (Steam, gamescope) on the Mali system driver too, instead of PanVK: experimental, off by
+    // default. Only with the bridge chosen as the Linux driver; read at the next session start.
+    fun bridgeSession(context: Context): Boolean = prefs(context).getBoolean("bridgeSession", false)
+
+    fun setBridgeSession(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("bridgeSession", on).apply()
+    }
+
     fun setNoXalia(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean("noXalia", on).apply()
     }

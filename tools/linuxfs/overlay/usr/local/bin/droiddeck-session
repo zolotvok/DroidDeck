@@ -91,6 +91,24 @@ if [ -n "${BL_VK_DRIVER:-}" ]; then
       export ENABLE_GAMESCOPE_WSI=0
       echo "== vulkan driver: PanVK, games present through Xwayland (ENABLE_GAMESCOPE_WSI=0): through gamescope's WSI layer only their first frames reach the screen"
     fi
+    if [ "${bl_icd_lib##*/}" = libvulkan_mali_bridge.so ]; then
+      # The session on the Mali system driver (experimental setting): gamescope and the Steam client load the phone's
+      # Android driver through libhybris, as the games do. The compat layer reports the GPU node as gamescope's DRM
+      # primary/render node (the stand-in PanVK reported before), the Mali WSI layer presents to Wayland, and
+      # gamescope's WSI layer turns the Steam client's X11 (ANGLE on Vulkan) windows into Wayland surfaces. The vendor
+      # driver exports no dma-bufs, which gamescope's output images need: the compat layer emulates the export.
+      export HYBRIS_USE_VENDOR_NAMESPACE=1 ENABLE_MALI_WSI=1 ENABLE_MALI_COMPAT=1 ENABLE_GAMESCOPE_WSI=1 MALI_COMPAT_DMABUF_EXPORT=1
+      # Xwayland's glamor draws quads, which Zink turns into geometry shaders: hidden from Xwayland (MaliBridge's
+      # "gs_hide"); without it no X11 window reached gamescope. Steam's GPU menus came out black on the vendor driver,
+      # so they are drawn in software (games still use the GPU); BL_STEAM_GPU_MENUS=1 keeps them on the GPU.
+      export MALI_COMPAT_GS_HIDE_PROCS=${MALI_COMPAT_GS_HIDE_PROCS:-Xwayland}
+      [ "${BL_STEAM_GPU_MENUS:-0}" = 1 ] || export BL_STEAM_SOFTWARE_MENUS=1
+      for bl_node in /dev/mali0 /dev/dri/renderD128; do
+        if [ -c "$bl_node" ]; then export MALI_COMPAT_DRM_NODE=$bl_node; break; fi
+      done
+      echo "== vulkan driver: the Mali system driver (bridge) for the session too, DRM node ${MALI_COMPAT_DRM_NODE:-none}"
+      unset bl_node
+    fi
   else
     echo "== vulkan driver: IGNORING $BL_VK_DRIVER (manifest or ${bl_icd_lib:-library} unreadable); using the runtime's own"
   fi
@@ -652,6 +670,10 @@ BUSCONF
     _bl_ui=(-gamepadui)
     [ "${BL_STEAM_UI:-}" = desktop ] && _bl_ui=()
     _bl_cef=(-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan)
+    if [ "${BL_STEAM_SOFTWARE_MENUS:-0}" = 1 ]; then
+      _bl_cef=(-cef-disable-gpu)
+      echo "== steam: menus drawn in software (session on the Mali system driver)"
+    fi
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       _bl_cef=(-cef-disable-gpu)
       _bl_ui=(-nobigpicture)

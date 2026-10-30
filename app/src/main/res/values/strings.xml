@@ -2296,6 +2296,8 @@
     <string name="perf_bridge_fpslog">FPS log</string>
     <string name="perf_bridge_fpslog_hint">Writes the real frame rate of games on the Mali system driver to /root/mali-wsi-fps.txt in the Linux runtime every 5 s (for comparing settings; the DXVK HUD does not show DX12 games). Applies at the next game launch.</string>
     <string name="perf_bridge_gputime">GPU timing log</string>
+    <string name="perf_bridge_session">Steam and gamescope on it too (experimental)</string>
+    <string name="perf_bridge_session_hint">The Steam client and gamescope also draw with the Mali system driver instead of PanVK. Only when the Mali system driver is the chosen Linux driver. Applies at the next session start.</string>
     <string name="perf_bridge_gputime_hint">Measures the GPU time of each render pass and compute dispatch and writes the most expensive ones to /root/mali-gputime-*.txt every 5 s. For development; costs little. Applies at the next game launch.</string>
     <string name="perf_bridge_bundled">Bundled bridge</string>
     <string name="perf_bridge_bundled_hint">Blobferry %1$s, installed into the Linux runtime at every session start. A game can pick its driver in its profile (environment: DROIDDECK_GAME_DRIVER).</string>

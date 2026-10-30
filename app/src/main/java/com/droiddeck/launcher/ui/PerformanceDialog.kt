@@ -193,6 +193,11 @@ fun PerformancePage(
                 host, "bridgegputime", stringResource(R.string.perf_bridge_gputime),
                 stringResource(R.string.perf_bridge_gputime_hint), gpuTime,
             ) { on -> SessionPrefs.setBridgeGpuTime(context, on); gpuTime = on }
+            var bridgeSession by remember { mutableStateOf(SessionPrefs.bridgeSession(context)) }
+            ToggleRow(
+                host, "bridgesession", stringResource(R.string.perf_bridge_session),
+                stringResource(R.string.perf_bridge_session_hint), bridgeSession,
+            ) { on -> SessionPrefs.setBridgeSession(context, on); bridgeSession = on }
             val bundled = remember { com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).bundledBridgeVersion() }
             SettingsRow(
                 stringResource(R.string.perf_bridge_bundled),

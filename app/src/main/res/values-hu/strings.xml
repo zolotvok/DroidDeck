@@ -2254,6 +2254,8 @@
     <string name="perf_bridge_fpslog">FPS-napló</string>
     <string name="perf_bridge_fpslog_hint">A Mali rendszerdriveren futó játékok valódi képkockaszámát 5 másodpercenként a Linux-futtatókörnyezet /root/mali-wsi-fps.txt fájljába írja (beállítások összehasonlításához; a DXVK HUD DX12-es játékoknál nem látszik). A következő játékindításnál lép életbe.</string>
     <string name="perf_bridge_gputime">GPU-időmérés naplója</string>
+    <string name="perf_bridge_session">A Steam és a gamescope is ezen (kísérleti)</string>
+    <string name="perf_bridge_session_hint">A Steam kliens és a gamescope is a Mali rendszer-driverrel rajzol a PanVK helyett. Csak akkor, ha a Mali rendszer-driver a választott Linux-driver. A következő session indításnál lép életbe.</string>
     <string name="perf_bridge_gputime_hint">Méri minden render pass és compute dispatch GPU-idejét, és 5 másodpercenként a legdrágábbakat a /root/mali-gputime-*.txt fájlba írja. Fejlesztéshez; keveset lassít. A következő játékindításnál lép életbe.</string>
     <string name="perf_bridge_bundled">Beépített bridge</string>
     <string name="perf_bridge_bundled_hint">Blobferry %1$s, minden session-indításkor a Linux-futtatókörnyezetbe kerül. Egy játék a profiljában választhat drivert (környezet: DROIDDECK_GAME_DRIVER).</string>
