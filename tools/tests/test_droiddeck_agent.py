@@ -505,6 +505,25 @@ class AgentTest(unittest.TestCase):
         with patch.dict(os.environ, {"BL_LAUNCH_DIR": str(self.dir.parent)}), \
                 patch.object(agent, "steam_idle_suspend_seconds", return_value=None):
             self.assertEqual(1, agent.main(["--steam-idle-suspend-seconds"]))
+    def test_shortcut_runs_through_client_rungame_after_overview(self):
+        game_id = str((2196463994 << 32) | 0x02000000)
+        with patch.object(agent, "cdp_eval", side_effect=[{"value": "2196463994"}, {"value": "started"}]) as evaluate:
+            result = agent.run_steam_shortcut(self.dir, game_id, timeout=1)
+        self.assertEqual({"supported": True, "started": True, "appId": 2196463994}, result)
+        self.assertEqual(2, evaluate.call_count)
+        expression = evaluate.call_args_list[1].args[1]
+        self.assertIn("SteamClient.Apps.RunGame(%s, \"\", -1, 100)" % json.dumps(game_id), expression)
+        self.assertFalse(evaluate.call_args_list[1].kwargs["await_promise"])
+
+    def test_run_shortcut_skips_normal_ids_and_reports_rungame_failure(self):
+        with patch.object(agent, "cdp_eval") as evaluate:
+            self.assertFalse(agent.run_steam_shortcut(self.dir, "413150")["supported"])
+        evaluate.assert_not_called()
+        game_id = str((2196463994 << 32) | 0x02000000)
+        with patch.object(agent, "cdp_eval", side_effect=[{"value": "2196463994"}, {"value": None}]):
+            with self.assertRaises(agent.AgentError) as raised:
+                agent.run_steam_shortcut(self.dir, game_id, timeout=1)
+        self.assertEqual("RUN_GAME_FAILED", raised.exception.code)
 
     def test_cdp_exception(self):
         server = FakeDevTools({"result": {"result": {"type": "object"}, "exceptionDetails": {

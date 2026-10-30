@@ -1133,7 +1133,19 @@ case $mode in
           return
         fi
       fi
-      "${steam_client[@]:-$steam_root/steamrtarm64/steam}" "steam://rungameid/$1" >/dev/null 2>&1
+      # Shortcuts (Epic/GOG/added games) go through the client's RunGame, as its Play
+      # button: started from the URL their window got no STEAM_GAME tag and stayed
+      # behind the client (The Long Dark T2, 2026-10-30). Other ids keep the URL.
+      local _bl_run=3
+      [ "$state" -eq 3 ] || { /usr/local/bin/droiddeck-agent --run-steam-shortcut "$1" 45 >/dev/null; _bl_run=$?; }
+      case $_bl_run in
+        0) echo "== steam: started shortcut $1 through RunGame" ;;
+        4) echo "== steam: RunGame for $1 sent without an answer; not launching again" ;;
+        *)
+          [ "$_bl_run" -eq 3 ] || echo "== steam: RunGame for $1 failed ($_bl_run); using steam://rungameid"
+          "${steam_client[@]:-$steam_root/steamrtarm64/steam}" "steam://rungameid/$1" >/dev/null 2>&1
+          ;;
+      esac
       [ "$state" -eq 3 ] && return
       for tries in 1 2 3 4 5 6 7 8; do
         nap 1

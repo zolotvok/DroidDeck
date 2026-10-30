@@ -987,6 +987,26 @@ def steam_shortcut_state(agent_dir, game_id, timeout=6):
         if state == "ready" or time.monotonic() >= deadline:
             return state
         time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+def run_steam_shortcut(agent_dir, game_id, timeout=45):
+    """Start a shortcut the way the client's Play button does (SteamClient.Apps.RunGame).
+
+    A shortcut started from a steam://rungameid URL runs, but its window never got the
+    STEAM_GAME tag on the games' Xwayland, so gamescope left it out of the focusable list
+    and the game stayed behind the client (The Long Dark, 2026-10-30 T2 run 1). Started
+    from the tile it was tagged and focused (T2 run 2). Non-shortcut ids return
+    supported=False and keep the URL path."""
+    prepared = wait_for_steam_shortcut_overview(agent_dir, game_id, timeout)
+    if not prepared["supported"]:
+        return prepared
+    expression = """(() => {
+        if (typeof SteamClient?.Apps?.RunGame !== 'function') throw new Error('no SteamClient.Apps.RunGame');
+        SteamClient.Apps.RunGame(%s, "", -1, 100);
+        return "started";
+    })()""" % json.dumps(game_id)
+    result = cdp_eval(agent_dir, expression, await_promise=False, timeout=10)
+    if result.get("value") != "started":
+        raise AgentError("RUN_GAME_FAILED", "RunGame returned %r" % (result.get("value"),))
+    return {"supported": True, "started": True, "appId": prepared["appId"]}
 
 
 def game_pids(app_id):
@@ -1323,6 +1343,26 @@ def main(argv):
             return 1
         print(state)
         return {"ready": 0, "missing": 4, "not-shortcut": 3}.get(state, 1)
+    if argv and argv[0] == "--run-steam-shortcut":
+        # Exit 0 started, 3 not a shortcut CGameID, 4 RunGame sent but unanswered (do not
+        # launch again), 1 not started (the caller falls back to the URL).
+        if len(argv) not in (2, 3):
+            print("usage: droiddeck-agent --run-steam-shortcut <cgameid> [timeout-seconds]", file=sys.stderr)
+            return 2
+        timeout = argv[2] if len(argv) == 3 else 45
+        try:
+            started = run_steam_shortcut(Path(base) / "agent", argv[1], timeout)
+        except AgentError as error:
+            print("droiddeck-agent: RunGame for the shortcut: %s" % error, file=sys.stderr)
+            return 4 if error.code == "TIMEOUT" else 1
+        except (OSError, ValueError) as error:
+            print("droiddeck-agent: RunGame for the shortcut: %s" % error, file=sys.stderr)
+            return 1
+        if not started["supported"]:
+            print("droiddeck-agent: id is not a DroidDeck shortcut CGameID")
+            return 3
+        print("droiddeck-agent: started shortcut app %d through RunGame" % started["appId"])
+        return 0
     serve(Path(base) / "agent", focus="--no-focus" not in argv)
     return 0
 
