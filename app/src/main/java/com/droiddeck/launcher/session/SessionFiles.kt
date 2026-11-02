@@ -180,6 +180,12 @@ object SessionFiles {
         ).map { "usr/lib/mali_bridge/$it" to "usr/lib/mali_bridge/$it" } + listOf("VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json")
             .map { "usr/lib/mali_bridge/$it" to "usr/share/vulkan/implicit_layer.d/$it" } +
             listOf("usr/lib/hybris/libhybris-common.so.1", "usr/lib/hybris/libhybris/linker/q.so").map { it to it }
+        // Mali: the bridge ICD (Android's driver) has no X11 surface, so Wine finds VK_KHR_xlib/xcb_surface only through the
+        // gamescope WSI layer's manifest. Ubuntu's gamescope manifest does not list them (Arch's did): without them winevulkan
+        // fails every DXVK/vkd3d vkCreateInstance (VK_KHR_win32_surface has no host surface) and the game quits at start.
+        val maliGamescopeWsi = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) emptyList()
+        else listOf("usr/share/droiddeck-mali/VkLayer_FROG_gamescope_wsi.aarch64.json" to
+            "usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.aarch64.json")
         val optional = (arrayOf(
             "usr/local/bin/gamescope" to "usr/local/bin/gamescope",
             "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so" to "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so",
@@ -187,7 +193,7 @@ object SessionFiles {
             "usr/local/lib/droiddeck-pipewire.tzst" to "usr/local/lib/droiddeck-pipewire.tzst",
             "usr/local/share/licenses/uruntime/LICENSE" to "usr/local/share/licenses/uruntime/LICENSE",
             "usr/local/lib/droiddeck-dirt/ws2_32.dll" to "usr/local/lib/droiddeck-dirt/ws2_32.dll",
-        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge).filter { (asset, _) ->
+        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge + maliGamescopeWsi).filter { (asset, _) ->
             val dir = asset.substringBeforeLast('/')
             runCatching { context.assets.list("linuxfs/$dir")?.contains(asset.substringAfterLast('/')) == true }.getOrDefault(false)
         }
