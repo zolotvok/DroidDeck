@@ -1398,11 +1398,15 @@ class SessionService : Service() {
         Thread({
             val startBy = android.os.SystemClock.elapsedRealtime() + GAME_START_TIMEOUT_MS
             var seen = false
+            var seenSince = 0L
             var goneSince = 0L
             while (token == gameExitWatchToken && gen == sessionGen && SessionState.running && !SessionState.stopRequested) {
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (steamGameRunning()) {
-                    if (!seen) Log.i(TAG, "game $gameId started; returning to the launcher when it closes")
+                    if (!seen) {
+                        Log.i(TAG, "game $gameId started; returning to the launcher when it closes")
+                        seenSince = now
+                    }
                     seen = true
                     goneSince = 0L
                 } else if (!seen) {
@@ -1413,8 +1417,15 @@ class SessionService : Service() {
                 } else if (goneSince == 0L) {
                     goneSince = now
                 } else if (now - goneSince >= GAME_EXIT_GRACE_MS) {
-                    mainHandler.post { returnAfterGame(gameId, gen, token) }
-                    return@Thread
+                    if (goneSince - seenSince < GAME_MIN_RUN_MS) {
+                        Log.i(TAG, "game $gameId closed after ${(goneSince - seenSince) / 1000} s; a failed start, staying in Steam")
+                        SessionEvents.record("steam.game_failed_start", mapOf("gameId" to gameId, "ranMs" to goneSince - seenSince))
+                        seen = false
+                        goneSince = 0L
+                    } else {
+                        mainHandler.post { returnAfterGame(gameId, gen, token) }
+                        return@Thread
+                    }
                 }
                 try { Thread.sleep(GAME_EXIT_POLL_MS) } catch (e: InterruptedException) { return@Thread }
             }
@@ -2225,6 +2236,7 @@ class SessionService : Service() {
         private const val GAME_URL_PREFIX = "steam://rungameid/"
         private const val GAME_START_TIMEOUT_MS = 20 * 60_000L
         private const val GAME_EXIT_GRACE_MS = 10_000L
+        private const val GAME_MIN_RUN_MS = 60_000L
         private const val GAME_EXIT_POLL_MS = 2_000L
         private const val NO_PAD_SWITCH = "Download/droiddeck-no-pad"
         private const val NO_UINPUT_SWITCH = "Download/droiddeck-no-uinput"
