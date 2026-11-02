@@ -281,6 +281,8 @@ static int next_ff_id = 0;
 static void controller_fork_prepare() { controller_mutex().lock(); }
 static void controller_fork_parent() { controller_mutex().unlock(); }
 
+static void uinput_fork_child();
+
 static void controller_fork_child() {
   pthread_mutexattr_t attr;
 
@@ -288,6 +290,7 @@ static void controller_fork_child() {
   pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(controller_mutex().native_handle(), &attr);
   pthread_mutexattr_destroy(&attr);
+  uinput_fork_child();
 }
 
 namespace Logger {
@@ -812,6 +815,144 @@ __attribute__((visibility("hidden"))) static long long monotonic_ms() {
   return static_cast<long long>(now.tv_sec) * 1000LL + now.tv_nsec / 1000000LL;
 }
 
+static bool process_is_steam_client();
+
+// Pad apply (Control, 2026-11-01 control-padguide3). After Steam re-creates its virtual
+// pad in the middle of a game and we adopt the kept node, Steam writes nothing into it
+// until its next controller-config apply (a guide open/close brought the stick back).
+// The Steam client publishes what droiddeck-agent needs to trigger that apply without
+// the user: $FAKE_EVDEV_DIR/.padapply/state, one line
+//   adopts=<adopts so far> node=<eventN> fed=<events written since the last adopt>
+//   dead=<dead marks since the last adopt> guide=<guide taps done>
+//   pid=<Steam client pid> at=<CLOCK_MONOTONIC ms of the last adopt>
+// adopts counts from 1 in every Steam process, so the agent tells adopts apart by
+// (pid, adopts, at): a state left by an older Steam process (or session) never matches
+// a new adopt #1 (control-padapply2, K-PADAPPLY rev 3).
+// A dead mark is Deck input (buttons, sticks, d-pad, triggers; not guide/QAM) held for
+// kPadApplyDeadMs while nothing was written into a pad since the adopt. For kPadApplyPollMs
+// after a dead mark the Deck report threads also take a guide tap request: the agent
+// creates .padapply/guide, the first thread that sees it removes it and holds the Steam
+// button in the Deck reports for kPadApplyGuideMs (the agent's last-resort stage).
+static constexpr long long kPadApplyDeadMs = 400;
+static constexpr long long kPadApplyDeadEveryMs = 1500;
+static constexpr unsigned kPadApplyDeadMax = 5;
+static constexpr long long kPadApplyPollMs = 10000;
+static constexpr long long kPadApplyPollEveryMs = 100;
+static constexpr long long kPadApplyGuideMs = 80;
+static constexpr uint32_t kPadApplyGuideButton = 1u << 10;  // BTN_MODE in the snapshot
+
+struct PadApplyState {
+  std::atomic<unsigned> adopts{0};
+  std::atomic<int> node{-1};
+  std::atomic<long long> adopt_ms{0};
+  std::atomic<unsigned long long> fed{0};
+  std::atomic<unsigned> dead{0};
+  std::atomic<unsigned> guides{0};
+  std::atomic<long long> active_since{0};
+  std::atomic<long long> last_dead{0};
+  std::atomic<long long> poll_until{0};
+  std::atomic<long long> next_poll{0};
+  std::atomic<long long> guide_until{0};
+};
+
+static PadApplyState &padapply() {
+  static auto *state = new PadApplyState();
+  return *state;
+}
+
+__attribute__((visibility("hidden"))) static std::string padapply_dir() {
+  return std::string(config().hook_dir) + "/.padapply";
+}
+
+__attribute__((visibility("hidden"))) static void padapply_publish() {
+  if (!process_is_steam_client()) return;
+  static std::mutex lock;
+  std::lock_guard<std::mutex> guard(lock);
+  auto &s = padapply();
+  std::string dir = padapply_dir();
+  mkdir(dir.c_str(), 0700);
+  char line[200];
+  int node = s.node.load();
+  int n = snprintf(line, sizeof(line), "adopts=%u node=event%d fed=%llu dead=%u guide=%u pid=%d at=%lld\n",
+                   s.adopts.load(), node, s.fed.load(), s.dead.load(), s.guides.load(), static_cast<int>(getpid()),
+                   s.adopt_ms.load());
+  std::string tmp = dir + "/state.tmp";
+  int fd = static_cast<int>(syscall(SYS_openat, AT_FDCWD, tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+  if (fd < 0) return;
+  bool ok = n > 0 && syscall(SYS_write, fd, line, static_cast<size_t>(n)) == n;
+  syscall(SYS_close, fd);
+  if (!ok || rename(tmp.c_str(), (dir + "/state").c_str()) != 0) unlink(tmp.c_str());
+}
+
+// Called under controller_mutex() when a re-created pad takes over a kept node.
+__attribute__((visibility("hidden"))) static void padapply_note_adopt(int node) {
+  auto &s = padapply();
+  s.fed.store(0);
+  s.dead.store(0);
+  s.active_since.store(0);
+  s.last_dead.store(0);
+  s.node.store(node);
+  s.adopt_ms.store(monotonic_ms());
+  unsigned n = ++s.adopts;
+  Logger::log("padapply: adopt #%u of event%d published\n", n, node);
+  padapply_publish();
+}
+
+// Events Steam wrote into a published pad (not the release frame of a destroy).
+__attribute__((visibility("hidden"))) static void padapply_note_fed(int node, size_t events) {
+  auto &s = padapply();
+  if (!events || !s.adopts.load(std::memory_order_relaxed)) return;
+  if (s.fed.fetch_add(events) != 0) return;
+  Logger::log("padapply: event%d fed again %lld ms after adopt #%u (dead marks %u, guide taps %u)\n", node,
+              monotonic_ms() - s.adopt_ms.load(), s.adopts.load(), s.dead.load(), s.guides.load());
+  padapply_publish();
+}
+
+// Every Deck report: input that Steam should be writing into the pad.
+__attribute__((visibility("hidden"))) static void padapply_note_deck_input(uint32_t buttons, const int32_t *axes) {
+  auto &s = padapply();
+  if (!s.adopts.load(std::memory_order_relaxed) || s.fed.load(std::memory_order_relaxed)) return;
+  auto deflected = [](int32_t value) { return value > 16000 || value < -16000; };
+  bool active = (buttons & 0x3ffu) || deflected(axes[0]) || deflected(axes[1]) || deflected(axes[2]) ||
+                deflected(axes[3]) || axes[4] > 127 || axes[5] > 127 || axes[6] || axes[7];
+  if (!active) {
+    if (s.active_since.load(std::memory_order_relaxed)) s.active_since.store(0);
+    return;
+  }
+  long long now = monotonic_ms();
+  long long since = s.active_since.load();
+  if (!since) {
+    s.active_since.compare_exchange_strong(since, now);
+    return;
+  }
+  if (now - since < kPadApplyDeadMs || s.dead.load() >= kPadApplyDeadMax) return;
+  long long last = s.last_dead.load();
+  if (last && now - last < kPadApplyDeadEveryMs) return;
+  if (!s.last_dead.compare_exchange_strong(last, now)) return;
+  unsigned mark = ++s.dead;
+  s.poll_until.store(now + kPadApplyPollMs);
+  Logger::log("padapply: Deck input for %lld ms, nothing written into event%d since adopt #%u (dead mark %u)\n",
+              now - since, s.node.load(), s.adopts.load(), mark);
+  padapply_publish();
+}
+
+// Every Deck report: the guide button to OR into it (a requested tap), else 0.
+__attribute__((visibility("hidden"))) static uint32_t padapply_guide_buttons() {
+  auto &s = padapply();
+  long long now = monotonic_ms();
+  if (now < s.guide_until.load(std::memory_order_relaxed)) return kPadApplyGuideButton;
+  if (now > s.poll_until.load(std::memory_order_relaxed)) return 0;
+  long long next = s.next_poll.load();
+  if (now < next || !s.next_poll.compare_exchange_strong(next, now + kPadApplyPollEveryMs)) return 0;
+  std::string request = padapply_dir() + "/guide";
+  if (unlink(request.c_str()) != 0) return 0;
+  s.guide_until.store(now + kPadApplyGuideMs);
+  unsigned tap = ++s.guides;
+  Logger::log("padapply: guide tap %u (%lld ms) on request\n", tap, kPadApplyGuideMs);
+  padapply_publish();
+  return kPadApplyGuideButton;
+}
+
 struct UinputWriter {
   UinputDescription description{};
   bool created = false;
@@ -823,6 +964,16 @@ struct UinputWriter {
   std::vector<struct input_event> pending;
   uint32_t buttons = 0;
   int16_t axes[8] = {};
+  // Write counter (see log_uinput_writes): which fd Steam writes to, and whether that
+  // fd's device was destroyed (writes then fail with EINVAL, as on a kernel).
+  int fd = -1;
+  unsigned creates = 0;
+  unsigned long long events = 0;
+  unsigned long long rejected = 0;
+  unsigned long long logged_events = 0;
+  unsigned long long logged_rejected = 0;
+  unsigned long long logged_state = ~0ULL;
+  long long logged_ms = 0;
 };
 
 static std::unordered_map<int, std::shared_ptr<UinputWriter>> &uinput_map() {
@@ -847,6 +998,7 @@ __attribute__((visibility("hidden"))) static int open_uinput(int flags) {
   if (fd < 0) return -1;
   auto writer = std::make_shared<UinputWriter>();
   writer->owner = getpid();
+  writer->fd = fd;
   std::lock_guard<std::recursive_mutex> guard(controller_mutex());
   uinput_map()[fd] = writer;
   watch_fd(fd);
@@ -859,18 +1011,193 @@ __attribute__((visibility("hidden"))) static bool is_gamepad(const UinputDescrip
          test_bit(d.evbits, sizeof(d.evbits), EV_ABS) && test_bit(d.absbits, sizeof(d.absbits), ABS_X);
 }
 
+__attribute__((visibility("hidden"))) static void remove_uinput_node(int node, FakeInputRingHeader *ring) {
+  __atomic_add_fetch(&ring->generation, 1, __ATOMIC_RELEASE);
+  std::string path = std::string(fake_hook_dir()) + "/event" + std::to_string(node);
+  unlink(path.c_str());
+  unlink((uinput_ring_path(node) + ".uevent").c_str());
+  unlink(uinput_ring_path(node).c_str());
+  munmap(ring, UINPUT_FILE_SIZE);
+  Logger::log("uinput: removed event%d\n", node);
+}
+
+// Steam Input destroys and re-creates its virtual pad (same name, same ids) when it
+// switches a running game's controller config. A real remove/add makes Wine open the
+// new node as a second device while the game keeps the dead one (Control, 2026-10-31).
+// So a destroyed gamepad stays published for kUinputKeepMs: an identical re-create by
+// the same process takes over its node and ring, and readers never see a change.
+// Otherwise the node is removed when the window ends. All of it runs under
+// controller_mutex().
+static constexpr long long kUinputKeepMs = 2000;
+
+struct RetiredUinput {
+  UinputDescription description{};
+  pid_t owner = 0;
+  int node = -1;
+  FakeInputRingHeader *ring = nullptr;
+  UinputDescription *shared = nullptr;
+  long long deadline_ms = 0;
+};
+
+static std::vector<RetiredUinput> &retired_uinputs() {
+  static auto *list = new std::vector<RetiredUinput>();
+  return *list;
+}
+
+static bool uinput_reaper_running = false;
+
+static void flush_uinput(UinputWriter &w);
+
+__attribute__((visibility("hidden"))) static bool same_uinput_device(const UinputDescription &a,
+                                                                    const UinputDescription &b) {
+  // phys is left out on purpose: the node keeps its first phys either way.
+  return !strncmp(a.name, b.name, sizeof(a.name)) && !memcmp(&a.id, &b.id, sizeof(a.id)) &&
+         a.ff_effects_max == b.ff_effects_max && !memcmp(a.evbits, b.evbits, sizeof(a.evbits)) &&
+         !memcmp(a.keybits, b.keybits, sizeof(a.keybits)) &&
+         !memcmp(a.absbits, b.absbits, sizeof(a.absbits)) &&
+         !memcmp(a.ffbits, b.ffbits, sizeof(a.ffbits)) &&
+         !memcmp(a.absinfo, b.absinfo, sizeof(a.absinfo));
+}
+
+// Removes this process's retired nodes: all of them, those past their deadline, or
+// (name != nullptr) those with that name, i.e. a slot whose device was replaced.
+__attribute__((visibility("hidden"))) static void reap_retired_uinputs(bool all, const char *name = nullptr) {
+  auto &list = retired_uinputs();
+  long long now = monotonic_ms();
+  pid_t self = getpid();
+  for (auto it = list.begin(); it != list.end();) {
+    bool due = all || (name ? !strncmp(it->description.name, name, sizeof(it->description.name))
+                            : now >= it->deadline_ms);
+    if (it->owner == self && due) {
+      remove_uinput_node(it->node, it->ring);
+      it = list.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+static void *uinput_reaper_thread(void *) {
+  for (;;) {
+    long long wait_ms = 0;
+    {
+      std::lock_guard<std::recursive_mutex> guard(controller_mutex());
+      reap_retired_uinputs(false);
+      pid_t self = getpid();
+      long long now = monotonic_ms();
+      long long next = -1;
+      for (const auto &retired : retired_uinputs())
+        if (retired.owner == self && (next < 0 || retired.deadline_ms < next)) next = retired.deadline_ms;
+      if (next < 0) {
+        uinput_reaper_running = false;
+        return nullptr;
+      }
+      wait_ms = std::max(10LL, next - now);
+    }
+    struct timespec pause = {static_cast<time_t>(wait_ms / 1000), static_cast<long>(wait_ms % 1000) * 1000000L};
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {}
+  }
+}
+
+__attribute__((visibility("hidden"))) static void release_uinput_state(UinputWriter &w) {
+  // A destroyed kernel uinput device releases everything it held; do the same so a
+  // kept node does not report a held button or stick until the new writer moves it.
+  w.pending.clear();
+  for (size_t i = 0; i < kSnapshotButtonCount; i++)
+    if (w.buttons & (1u << i)) {
+      struct input_event ev = {};
+      ev.type = EV_KEY;
+      ev.code = kSnapshotButtons[i];
+      w.pending.push_back(ev);
+    }
+  for (int i = 0; i < 8; i++)
+    if (w.axes[i]) {
+      struct input_event ev = {};
+      ev.type = EV_ABS;
+      ev.code = kSnapshotAxisCodes[i];
+      w.pending.push_back(ev);
+    }
+  if (w.pending.empty()) return;
+  struct input_event syn = {};
+  syn.type = EV_SYN;
+  syn.code = SYN_REPORT;
+  w.pending.push_back(syn);
+  flush_uinput(w);
+}
+
 __attribute__((visibility("hidden"))) static void unpublish_uinput(UinputWriter &w) {
   if (!w.published) return;
-  __atomic_add_fetch(&w.ring->generation, 1, __ATOMIC_RELEASE);
-  std::string node = std::string(fake_hook_dir()) + "/event" + std::to_string(w.node);
-  unlink(node.c_str());
-  unlink((uinput_ring_path(w.node) + ".uevent").c_str());
-  unlink(uinput_ring_path(w.node).c_str());
-  munmap(w.ring, UINPUT_FILE_SIZE);
-  Logger::log("uinput: removed event%d\n", w.node);
+  bool kept = false;
+  if (getpid() == w.owner && is_gamepad(w.description)) {
+    release_uinput_state(w);
+    RetiredUinput retired;
+    retired.description = w.description;
+    retired.owner = w.owner;
+    retired.node = w.node;
+    retired.ring = w.ring;
+    retired.shared = w.shared;
+    retired.deadline_ms = monotonic_ms() + kUinputKeepMs;
+    retired_uinputs().push_back(retired);
+    kept = true;
+    if (!uinput_reaper_running) {
+      pthread_t thread;
+      if (pthread_create(&thread, nullptr, uinput_reaper_thread, nullptr) == 0) {
+        pthread_detach(thread);
+        uinput_reaper_running = true;
+      } else {
+        retired_uinputs().pop_back();
+        kept = false;
+      }
+    }
+  }
+  if (kept)
+    Logger::log("uinput: event%d destroyed; kept for %lld ms for a re-create\n", w.node, kUinputKeepMs);
+  else
+    remove_uinput_node(w.node, w.ring);
   w.ring = nullptr;
   w.shared = nullptr;
   w.published = false;
+  w.buttons = 0;
+  for (int i = 0; i < 8; i++) w.axes[i] = 0;
+}
+
+// Takes over a retired node with the same description; returns false if there is none.
+__attribute__((visibility("hidden"))) static bool adopt_retired_uinput(UinputWriter &w) {
+  auto &list = retired_uinputs();
+  for (auto it = list.begin(); it != list.end(); ++it) {
+    if (it->owner != w.owner || !same_uinput_device(it->description, w.description)) continue;
+    w.node = it->node;
+    w.ring = it->ring;
+    w.shared = it->shared;
+    w.published = true;
+    w.buttons = 0;
+    for (int i = 0; i < 8; i++) w.axes[i] = 0;
+    list.erase(it);
+    Logger::log("uinput: kept event%d across re-create\n", w.node);
+    padapply_note_adopt(w.node);
+    return true;
+  }
+  return false;
+}
+
+static void uinput_fork_child() {
+  // The parent's retired nodes and its reaper thread stay with the parent.
+  for (const auto &retired : retired_uinputs()) munmap(retired.ring, UINPUT_FILE_SIZE);
+  retired_uinputs().clear();
+  uinput_reaper_running = false;
+}
+
+__attribute__((destructor)) static void uinput_library_fini() {
+  // A clean exit right after UI_DEV_DESTROY (Steam quitting) must still remove the node.
+  // The reaper may hold the lock for a moment; never block exit on it for long.
+  bool locked = false;
+  for (int i = 0; i < 100 && !(locked = controller_mutex().try_lock()); i++) {
+    struct timespec pause = {0, 1000000L};
+    nanosleep(&pause, nullptr);
+  }
+  if (!locked) return;
+  reap_retired_uinputs(true);
+  controller_mutex().unlock();
 }
 
 __attribute__((visibility("hidden"))) static int claim_uinput_node(int *fd_out) {
@@ -902,6 +1229,9 @@ __attribute__((visibility("hidden"))) static int claim_uinput_node(int *fd_out) 
 
 __attribute__((visibility("hidden"))) static int publish_uinput(UinputWriter &w) {
   static auto my_open = reinterpret_cast<int (*)(const char *, int, ...)>(dlsym(RTLD_NEXT, "open"));
+  if (adopt_retired_uinput(w)) return 0;
+  // Same name, other description: that slot got a different device, so drop the old one now.
+  reap_retired_uinputs(false, w.description.name);
   int fd = -1;
   int node = claim_uinput_node(&fd);
   if (node < 0) return -1;
@@ -989,10 +1319,47 @@ __attribute__((visibility("hidden"))) static void flush_uinput(UinputWriter &w) 
   __atomic_store_n(&ring->write_seq, write_seq, __ATOMIC_RELEASE);
 }
 
+// At most one line per fd per kUinputWriteLogMs while it is written to, and one at
+// once when its state changes (created, destroyed, node), so pad.log shows whether
+// Steam feeds a kept node or writes into a destroyed fd. "gen" counts UI_DEV_CREATE
+// on this fd, "retired=1" means its device was destroyed, "seq" is the node's
+// write_seq. Runs under controller_mutex().
+static constexpr long long kUinputWriteLogMs = 1000;
+
+__attribute__((visibility("hidden"))) static void log_uinput_writes(UinputWriter &w, const char *what,
+                                                                   bool force) {
+  bool retired = w.creates > 0 && !w.created;
+  unsigned long long state = (w.created ? 1ULL : 0ULL) | (w.published ? 2ULL : 0ULL) |
+                             (static_cast<unsigned long long>(w.node + 1) << 2) |
+                             (static_cast<unsigned long long>(w.creates) << 32);
+  long long now = monotonic_ms();
+  if (!force) {
+    if (w.events == w.logged_events && w.rejected == w.logged_rejected) return;
+    if (state == w.logged_state && now - w.logged_ms < kUinputWriteLogMs) return;
+  }
+  char node[24] = "none";
+  if (w.node >= 0) snprintf(node, sizeof(node), "event%d", w.node);
+  char seq[24] = "-";
+  if (w.published && w.ring)
+    snprintf(seq, sizeof(seq), "%llu",
+             static_cast<unsigned long long>(__atomic_load_n(&w.ring->write_seq, __ATOMIC_ACQUIRE)));
+  Logger::log("uinput: %s fd=%d node=%s gen=%u retired=%d count=%llu rejected=%llu seq=%s name=\"%s\"\n", what,
+              w.fd, node, w.creates, retired ? 1 : 0, w.events, w.rejected, seq, w.description.name);
+  w.logged_events = w.events;
+  w.logged_rejected = w.rejected;
+  w.logged_state = state;
+  w.logged_ms = now;
+}
+
 __attribute__((visibility("hidden"))) static ssize_t
 write_uinput(UinputWriter &w, const void *buf, size_t count) {
   if (!w.created) {
     if (count != sizeof(struct uinput_user_dev)) {
+      if (w.creates > 0) {
+        // An event write into a destroyed device.
+        w.rejected += std::max<size_t>(1, count / sizeof(struct input_event));
+        log_uinput_writes(w, "write", false);
+      }
       errno = EINVAL;
       return -1;
     }
@@ -1010,6 +1377,8 @@ write_uinput(UinputWriter &w, const void *buf, size_t count) {
     return static_cast<ssize_t>(count);
   }
   if (count % sizeof(struct input_event)) {
+    w.rejected++;
+    log_uinput_writes(w, "write", false);
     errno = EINVAL;
     return -1;
   }
@@ -1019,6 +1388,9 @@ write_uinput(UinputWriter &w, const void *buf, size_t count) {
     if ((events[i].type == EV_SYN && events[i].code == SYN_REPORT) || w.pending.size() >= 64)
       flush_uinput(w);
   }
+  w.events += count / sizeof(struct input_event);
+  log_uinput_writes(w, "write", false);
+  if (w.published) padapply_note_fed(w.node, count / sizeof(struct input_event));
   return static_cast<ssize_t>(count);
 }
 
@@ -1087,6 +1459,7 @@ ioctl_uinput(UinputWriter &w, ioctl_request_t op, void *argp) {
   }
   case _IOC_NR(UI_DEV_CREATE):
     w.created = true;
+    w.creates++;
     if (!is_gamepad(d)) {
       Logger::log("uinput: \"%s\" %04x:%04x is not a gamepad; its events are dropped\n", d.name,
                   d.id.vendor, d.id.product);
@@ -1117,6 +1490,7 @@ __attribute__((visibility("hidden"))) static void close_uinput(int fd) {
   auto it = uinput_map().find(fd);
   if (it == uinput_map().end()) return;
   if (getpid() == it->second->owner) unpublish_uinput(*it->second);
+  if (it->second->creates > 0) log_uinput_writes(*it->second, "close", true);
   uinput_map().erase(it);
 }
 
@@ -1511,9 +1885,10 @@ __attribute__((visibility("hidden"))) static void *deck_report_thread(void *arg)
       buttons = snap.buttons;
       memcpy(axes, snap.axes, sizeof(axes));
     }
+    padapply_note_deck_input(buttons, axes);
     read_deck_extras(*self, extras);
     uint8_t report[DECK_REPORT_BYTES];
-    build_deck_report(report, ++packet, buttons, axes, extras);
+    build_deck_report(report, ++packet, buttons | padapply_guide_buttons(), axes, extras);
     if (send(self->peer, report, sizeof(report), MSG_DONTWAIT | MSG_NOSIGNAL) < 0 &&
         errno != EAGAIN && errno != EWOULDBLOCK)
       break;

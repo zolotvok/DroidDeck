@@ -30,6 +30,8 @@ WINDOW_PROPS = (
     "STEAM_GAME", "WM_STATE", "_NET_WM_PID", "WM_CLASS", "_NET_WM_WINDOW_OPACITY", "STEAM_OVERLAY",
     "GAMESCOPE_EXTERNAL_OVERLAY", "STEAM_INPUT_FOCUS", "_NET_WM_STATE",
 )
+STEAM_UI_APP = 769
+FLICK_UNTIL = [0.0]  # monotonic end of a PadApply focus flick; FocusWatcher waits it out
 MAP_STATE = ("unmapped", "unviewable", "viewable")
 WM_STATES = {0: "withdrawn", 1: "normal", 3: "iconic"}
 
@@ -151,6 +153,15 @@ class X:
         ConfigureRequest, like a client moving its own window."""
         self.s.sendall(struct.pack("<BxHIHxxii", 12, 5, window, 0x3, x, y))
         self.request(struct.pack("<BxH", 43, 1))  # GetInputFocus round trip: processed
+
+    def set_cardinals(self, window, name, values):
+        """ChangeProperty (Replace) to a CARDINAL/32 list, then a round trip so it is processed."""
+        atom = self.atom(name)
+        if not atom:
+            raise OSError("no atom " + name)
+        self.s.sendall(struct.pack("<BBHIIIB3xI", 18, 0, 6 + len(values), window, atom, 6, 32, len(values))
+                       + struct.pack("<%dI" % len(values), *values))
+        self.request(struct.pack("<BxH", 43, 1))
 
     def prop(self, window, name, length=1024):
         atom = self.atom(name)
@@ -438,6 +449,10 @@ class FocusWatcher(threading.Thread):
                 continue
             last_app, last_snapshot = app, time.monotonic()
             time.sleep(0.2)
+            while time.monotonic() < FLICK_UNTIL[0]:
+                # PadApply's focus flick: not a real focus change, keep it out of focus.json.
+                time.sleep(0.05)
+                self.changed.clear()
             try:
                 snap = focus_snapshot()
                 order = self.vr_focus.order(snap.get('baselayerAppIds', []), snap.get('focusableApps', []), app)
@@ -481,6 +496,245 @@ class FocusWatcher(threading.Thread):
             except OSError as e:
                 log("focus events: %s; reconnecting" % e)
                 time.sleep(2)
+
+
+def read_padapply_state(path):
+    """$FAKE_EVDEV_DIR/.padapply/state as written by libfakeinput in the Steam client."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    state = {}
+    for item in text.split():
+        key, _, value = item.partition("=")
+        state[key] = int(value) if value.isdigit() else value
+    return state if "adopts" in state else None
+
+
+def padapply_identity(state):
+    """Which adopt a state line belongs to. adopts counts from 1 in every Steam process, so
+    a stale adopts=1 from an older Steam pid must not hide a new process's adopt #1
+    (control-padapply2: the agent never saw it). pid/at are missing in pre-rev-3 lines."""
+    return (state.get("pid"), state.get("adopts"), state.get("at"))
+
+
+class PadApply(threading.Thread):
+    """Makes Steam re-apply its controller config after it re-created its virtual pad.
+
+    Steam re-creates the virtual X360 pad during some game loads; libfakeinput keeps the old
+    node for the game (adopt), but Steam then writes nothing into it until its next
+    controller-config apply, which a guide open/close does (Control, control-padguide3,
+    2026-11-01). libfakeinput publishes adopts, events fed since the adopt and dead marks
+    (Deck input held while nothing reaches the pad) in .padapply/state. Per adopt, with a
+    game in focus, this runs the stages of BL_PADAPPLY_STAGES (default "ABC") in order:
+      A  SteamClient.Input.ForceConfiguratorFocus(true), 0.4 s, (false): invisible; run on
+         its own once the adopt settled (SETTLE, 3 s), before any input.
+      B  GAMESCOPE_FOCUSED_APP to 769 (the Steam UI) for FLICK s and back, on Steam's X
+         server: Steam sees a focus switch and back, gamescope's real focus never changes,
+         nothing is shown.
+      C  guide tap, then a second tap once the Steam menu has focus: the Steam menu shows
+         for about half a second (the only visible stage).
+    A later stage runs only after a new dead mark. Every step goes to pad.log as
+    "agent: padapply: ...". BL_PADAPPLY=0 turns it off."""
+
+    POLL = 0.1
+    # A re-create at the game's exit is followed by Steam's switch to its UI 0.5-1.9 s later
+    # (control.md "Pad-keep run analysis" (2)); waiting 3 s keeps stage A off those adopts
+    # (control-padapply run 1: adopt 11:05:46.1, game gone, focus 769 at 11:05:47.9).
+    SETTLE = 3.0
+    FLICK = 0.4
+    FOCUS_WAIT = 1.5
+
+    def __init__(self, agent_dir, evdev_dir, log_file=None, stages="ABC", display=None):
+        super().__init__(daemon=True, name="padapply")
+        self.agent_dir = agent_dir
+        self.dir = Path(evdev_dir) / ".padapply"
+        self.log_file = log_file
+        self.stages = [s for s in stages.upper() if s in "ABC"]
+        self.display = display or os.environ.get("DISPLAY")
+        self.last = None
+        self.cycle = None
+
+    def pad_log(self, message):
+        log("padapply: " + message)
+        if not self.log_file:
+            return
+        now = time.time()
+        stamp = time.strftime("%H:%M:%S", time.localtime(now)) + ".%03d" % int(now % 1 * 1000)
+        try:
+            fd = os.open(self.log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                os.write(fd, ("%s %d agent: padapply: %s\n" % (stamp, os.getpid(), message)).encode())
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+
+    def state(self):
+        return read_padapply_state(self.dir / "state")
+
+    def focused_app(self):
+        x = X(self.display)
+        try:
+            value = x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+            return value[0] if value else None
+        finally:
+            x.close()
+
+    def focusable_apps(self):
+        x = X(self.display)
+        try:
+            return x.prop(x.root, "GAMESCOPE_FOCUSABLE_APPS") or []
+        finally:
+            x.close()
+
+    def game_in_focus(self):
+        """The focused game, only while gamescope still lists it as focusable (a game that is
+        exiting drops out of that list before the focus moves to Steam)."""
+        try:
+            app = self.focused_app()
+            focusable = self.focusable_apps() if app and app != STEAM_UI_APP else []
+        except OSError as e:
+            return None, "no focus (%s)" % e
+        if not app or app == STEAM_UI_APP:
+            return None, "focus %s" % app
+        if app not in focusable:
+            return None, "focus %s not in the focusable apps %s" % (app, focusable)
+        return app, None
+
+    def stage_a(self, app):
+        result = cdp_eval(self.agent_dir, """(async () => {
+            const input = globalThis.SteamClient?.Input;
+            if (typeof input?.ForceConfiguratorFocus !== 'function') return 'no SteamClient.Input.ForceConfiguratorFocus';
+            input.ForceConfiguratorFocus(true);
+            await new Promise(done => setTimeout(done, 400));
+            input.ForceConfiguratorFocus(false);
+            return 'ForceConfiguratorFocus true/false';
+        })()""", timeout=5)
+        return str(result.get("value"))
+
+    def stage_b(self, app):
+        x = X(self.display)
+        try:
+            before = x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+            if not before or before[0] != app:
+                return "skipped, focus is %s now" % (before[0] if before else None)
+            FLICK_UNTIL[0] = time.monotonic() + self.FLICK + 1.0
+            x.set_cardinals(x.root, "GAMESCOPE_FOCUSED_APP", [STEAM_UI_APP])
+            time.sleep(self.FLICK)
+            during = x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+            if during == [STEAM_UI_APP]:
+                x.set_cardinals(x.root, "GAMESCOPE_FOCUSED_APP", before)
+                return "focus flick %d -> %d -> %d (%.1f s)" % (app, STEAM_UI_APP, app, self.FLICK)
+            return "focus flick %d -> %d; gamescope set %s meanwhile, left as is" % (app, STEAM_UI_APP, during)
+        finally:
+            FLICK_UNTIL[0] = time.monotonic() + 0.3
+            x.close()
+
+    def request_guide(self):
+        """One guide tap through libfakeinput; True once a Deck report thread took it."""
+        st = self.state() or {}
+        taps = st.get("guide", 0)
+        request = self.dir / "guide"
+        request.touch()
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            if (self.state() or {}).get("guide", 0) > taps:
+                return True
+        try:
+            request.unlink()
+        except OSError:
+            pass
+        return False
+
+    def wait_focus(self, want):
+        deadline = time.monotonic() + self.FOCUS_WAIT
+        while time.monotonic() < deadline:
+            try:
+                if want(self.focused_app()):
+                    return True
+            except OSError:
+                pass
+            time.sleep(0.05)
+        return False
+
+    def stage_c(self, app):
+        if not self.request_guide():
+            return "guide tap 1 not taken (no Deck reader in the poll window)"
+        if not self.wait_focus(lambda a: a == STEAM_UI_APP):
+            return "guide tap 1 did not bring the Steam menu; no second tap"
+        time.sleep(0.3)
+        for tap in (2, 3):
+            if not self.request_guide():
+                return "guide tap %d not taken; the Steam menu may still be open" % tap
+            if self.wait_focus(lambda a: a == app):
+                return "guide taps 1+%d: Steam menu opened and closed, focus back on %d" % (tap - 1, app)
+        return "guide taps: focus did not come back to %d; the Steam menu may still be open" % app
+
+    def run_stage(self, why):
+        cycle = self.cycle
+        if cycle["next"] >= len(self.stages):
+            if not cycle.get("exhausted"):
+                cycle["exhausted"] = True
+                self.pad_log("adopt #%d: %s, all stages (%s) used" % (cycle["adopt"], why, "".join(self.stages)))
+            return
+        app, reason = self.game_in_focus()
+        if app is None:
+            self.pad_log("adopt #%d: %s, not acting (%s)" % (cycle["adopt"], why, reason))
+            return
+        stage = self.stages[cycle["next"]]
+        cycle["next"] += 1
+        cycle["last"] = stage
+        try:
+            result = {"A": self.stage_a, "B": self.stage_b, "C": self.stage_c}[stage](app)
+        except (AgentError, OSError) as e:
+            result = "failed: %s" % e
+        self.pad_log("adopt #%d: %s -> stage %s on app %d: %s" % (cycle["adopt"], why, stage, app, result))
+
+    def step(self, now=None):
+        now = time.monotonic() if now is None else now
+        st = self.state()
+        if st is None:
+            if self.last is None:
+                self.last = {"adopts": 0}  # no adopt in this session yet
+            return
+        last, self.last = self.last, st
+        if last is None:
+            # the agent (re)started: a state from before is old; only a new (pid, adopts, at) counts
+            log("padapply: state from before the start ignored (Steam pid %s, adopt #%d)"
+                % (st.get("pid", "?"), st["adopts"]))
+            return
+        if padapply_identity(st) != padapply_identity(last):
+            self.cycle = {"adopt": st["adopts"], "t": now, "next": 0, "dead": 0, "last": None, "settled": False}
+            pid = " (Steam pid %d)" % st["pid"] if isinstance(st.get("pid"), int) else ""
+            self.pad_log("adopt #%d of %s seen%s" % (st["adopts"], st.get("node"), pid))
+        cycle = self.cycle
+        if not cycle or cycle.get("done"):
+            return
+        if st.get("fed", 0) > 0:
+            cycle["done"] = True
+            self.pad_log("adopt #%d: the pad is fed again (after %s)"
+                         % (cycle["adopt"], "stage " + cycle["last"] if cycle["last"] else "no stage"))
+            return
+        if not cycle["settled"] and now - cycle["t"] >= self.SETTLE:
+            cycle["settled"] = True
+            if self.stages and self.stages[0] in "AB":
+                self.run_stage("settled")
+        dead = st.get("dead", 0)
+        if dead > cycle["dead"]:
+            cycle["dead"] = dead
+            self.run_stage("dead mark %d" % dead)
+
+    def run(self):
+        self.pad_log("watching %s (stages %s)" % (self.dir, "".join(self.stages) or "none"))
+        while True:
+            try:
+                self.step()
+            except Exception as e:  # never let the watcher die
+                log("padapply: %s: %s" % (type(e).__name__, e))
+                time.sleep(1)
+            time.sleep(self.POLL)
 
 
 
@@ -1248,6 +1502,10 @@ def serve(agent_dir, focus=True, poll=0.1):
     can_focus = focus and bool(os.environ.get("DISPLAY"))
     if can_focus:
         FocusWatcher(agent_dir / "focus.json").start()
+        evdev = os.environ.get("FAKE_EVDEV_DIR")
+        if evdev and os.environ.get("FAKE_EVDEV_DECK", "0") != "0" and os.environ.get("BL_PADAPPLY", "1") != "0":
+            PadApply(agent_dir, evdev, os.environ.get("FAKE_EVDEV_LOG_FILE"),
+                     os.environ.get("BL_PADAPPLY_STAGES", "ABC")).start()
     if focus:
         KeyboardWatcher(agent_dir).start()
     write_json(agent_dir / "hello.json", {"pid": os.getpid(), "version": VERSION, "started": int(time.time() * 1000),

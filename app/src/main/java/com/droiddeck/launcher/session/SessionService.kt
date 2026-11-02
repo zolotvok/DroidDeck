@@ -935,6 +935,9 @@ class SessionService : Service() {
             if (file.name.startsWith(".uinput-") || (node != null && node >= FIRST_VIRTUAL_PAD) ||
                 (hiddenPad && node == 0)) file.delete()
         }
+        // K-PADAPPLY rev 3: the previous session's pad-apply state (adopts=1 from an older
+        // Steam) must not greet the new session's droiddeck-agent (control-padapply2).
+        File(fakeInputDir, ".padapply").deleteRecursively()
         guest.add("FAKE_EVDEV_DIR=" + fakeInputDir.path)
         val rings = FakeInputWriter.getRingEnv(fakeInputDir)
         val presented = if (hiddenPad) rings?.split(';')?.filterNot { it.startsWith("0=") }?.joinToString(";") else rings

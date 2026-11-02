@@ -976,5 +976,227 @@ class TestNudgeDialog(unittest.TestCase):
         self.assertEqual([], self.moved)
 
 
+class StagedPadApply(agent.PadApply):
+    """PadApply with the focus and the three stages replaced by recorders."""
+
+    def __init__(self, base, stages="ABC"):
+        evdev = base / "evdev"
+        (evdev / ".padapply").mkdir(parents=True)
+        super().__init__(base, evdev, str(base / "pad.log"), stages, display=":99")
+        self.SETTLE = 1.0
+        self.focus = 3749198560
+        self.focusable = None              # None: the focused app is focusable
+        self.ran = []
+        for name in "abc":
+            setattr(self, "stage_" + name, lambda app, n=name.upper(): self.ran.append((n, app)) or "ok " + n)
+
+    def focused_app(self):
+        return self.focus
+
+    def focusable_apps(self):
+        return [769, self.focus] if self.focusable is None else self.focusable
+
+    def write(self, **values):
+        state = dict(adopts=0, node="event16", fed=0, dead=0, guide=0)
+        state.update(values)
+        (self.dir / "state").write_text(" ".join("%s=%s" % kv for kv in state.items()) + "\n")
+
+    def lines(self):
+        path = Path(self.log_file)
+        return [l.split("agent: padapply: ", 1)[1] for l in path.read_text().splitlines()] if path.exists() else []
+
+
+class PadApplyTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+
+    def test_state_line_is_parsed(self):
+        path = self.base / "state"
+        path.write_text("adopts=2 node=event16 fed=0 dead=1 guide=0\n")
+        self.assertEqual({"adopts": 2, "node": "event16", "fed": 0, "dead": 1, "guide": 0},
+                         agent.read_padapply_state(path))
+        path.write_text("garbage\n")
+        self.assertIsNone(agent.read_padapply_state(path))
+        self.assertIsNone(agent.read_padapply_state(self.base / "missing"))
+
+    def test_stages_escalate_on_dead_marks_until_fed(self):
+        pad = StagedPadApply(self.base)
+        pad.step(0.0)                      # no state yet: no adopt so far
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.step(0.5)
+        self.assertEqual([], pad.ran)      # not settled yet
+        pad.step(1.2)
+        self.assertEqual([("A", 3749198560)], pad.ran)
+        pad.write(adopts=1, dead=1)
+        pad.step(2.0)
+        pad.write(adopts=1, dead=2)
+        pad.step(3.5)
+        pad.write(adopts=1, dead=3)
+        pad.step(5.0)
+        pad.step(5.1)
+        self.assertEqual(["A", "B", "C"], [n for n, _ in pad.ran])
+        pad.write(adopts=1, dead=3, fed=4, guide=2)
+        pad.step(6.0)
+        pad.write(adopts=1, dead=4, fed=4, guide=2)
+        pad.step(7.0)
+        self.assertEqual([
+            "adopt #1 of event16 seen",
+            "adopt #1: settled -> stage A on app 3749198560: ok A",
+            "adopt #1: dead mark 1 -> stage B on app 3749198560: ok B",
+            "adopt #1: dead mark 2 -> stage C on app 3749198560: ok C",
+            "adopt #1: dead mark 3, all stages (ABC) used",
+            "adopt #1: the pad is fed again (after stage C)",
+        ], pad.lines())
+
+    def test_fed_before_settle_runs_nothing(self):
+        pad = StagedPadApply(self.base)
+        pad.step(0.0)
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.write(adopts=1, fed=2)
+        pad.step(0.4)
+        pad.step(2.0)
+        self.assertEqual([], pad.ran)
+        self.assertEqual("adopt #1: the pad is fed again (after no stage)", pad.lines()[-1])
+
+    def test_no_stage_without_a_game_in_focus(self):
+        pad = StagedPadApply(self.base)
+        pad.step(0.0)
+        pad.focus = 769                    # the adopt came with the game's exit
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.step(1.5)
+        pad.write(adopts=1, dead=1)
+        pad.step(2.0)
+        self.assertEqual([], pad.ran)
+        pad.focus = 3749198560             # back in the game: the next dead mark gets stage A
+        pad.write(adopts=1, dead=2)
+        pad.step(3.0)
+        self.assertEqual([("A", 3749198560)], pad.ran)
+        self.assertIn("adopt #1: settled, not acting (focus 769)", pad.lines())
+
+    def test_no_stage_for_a_game_that_is_exiting(self):
+        # control-padapply run 1: the adopt came with the game's exit; gamescope still had it
+        # focused but no longer focusable.
+        pad = StagedPadApply(self.base)
+        pad.step(0.0)
+        pad.focusable = [769]
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.step(1.5)
+        self.assertEqual([], pad.ran)
+        self.assertIn("adopt #1: settled, not acting (focus 3749198560 not in the focusable apps [769])",
+                      pad.lines())
+
+    def test_default_settle_outlasts_steams_exit_switch(self):
+        self.assertGreaterEqual(agent.PadApply.SETTLE, 2.5)
+
+    def test_a_new_adopt_starts_over(self):
+        pad = StagedPadApply(self.base, stages="BC")
+        pad.step(0.0)
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.step(1.5)                      # B is invisible: it runs on its own after the settle
+        pad.write(adopts=2)
+        pad.step(2.0)
+        pad.step(3.5)
+        self.assertEqual(["B", "B"], [n for n, _ in pad.ran])
+
+    def test_guide_stage_only_waits_for_a_dead_mark(self):
+        pad = StagedPadApply(self.base, stages="C")
+        pad.step(0.0)
+        pad.write(adopts=1)
+        pad.step(0.1)
+        pad.step(1.5)
+        self.assertEqual([], pad.ran)
+        pad.write(adopts=1, dead=1)
+        pad.step(2.0)
+        self.assertEqual(["C"], [n for n, _ in pad.ran])
+
+    def test_agent_restart_ignores_an_earlier_adopt(self):
+        pad = StagedPadApply(self.base)
+        pad.write(adopts=3, dead=2)
+        pad.step(0.0)
+        pad.step(2.0)
+        self.assertEqual([], pad.ran)
+        self.assertEqual([], pad.lines())
+
+    def test_stale_state_from_an_older_steam_does_not_hide_a_new_adopt(self):
+        # control-padapply2: .padapply/state from the previous session (adopts=1) survived the
+        # session start; the new Steam process's adopt #1 compared equal and started no cycle.
+        pad = StagedPadApply(self.base)
+        pad.write(adopts=1, fed=3, pid=10436, at=5123456)
+        pad.step(0.0)                      # the agent starts on the stale state
+        pad.step(0.5)
+        self.assertEqual([], pad.ran)
+        self.assertEqual([], pad.lines())
+        pad.write(adopts=1, pid=12140, at=777000)
+        pad.step(1.0)
+        pad.write(adopts=1, dead=0, pid=12140, at=777000)
+        pad.step(1.5)                      # same adopt rewritten: no second cycle
+        pad.step(2.1)
+        self.assertEqual([("A", 3749198560)], pad.ran)
+        self.assertEqual(["adopt #1 of event16 seen (Steam pid 12140)",
+                          "adopt #1: settled -> stage A on app 3749198560: ok A"], pad.lines())
+
+    def test_stage_a_toggles_configurator_focus_over_devtools(self):
+        devtools = FakeDevTools({"result": {"result": {"type": "string", "value": "ForceConfiguratorFocus true/false"}}})
+        devtools.start()
+        self.addCleanup(devtools.server.close)
+        (self.base / "cdp-port").write_text(str(devtools.port))
+        pad = agent.PadApply(self.base, self.base / "evdev", None, "A", display=":99")
+        self.assertEqual("ForceConfiguratorFocus true/false", pad.stage_a(3749198560))
+        expression = devtools.seen[0]["params"]["expression"]
+        self.assertIn("ForceConfiguratorFocus(true)", expression)
+        self.assertIn("ForceConfiguratorFocus(false)", expression)
+        self.assertLess(expression.index("(true)"), expression.index("(false)"))
+
+    def test_guide_stage_closes_the_menu_it_opened(self):
+        pad = agent.PadApply(self.base, self.base / "evdev", None, "C", display=":99")
+        pad.FOCUS_WAIT = 0.3
+        focus = [3749198560]
+        taps = []
+
+        def tap():
+            taps.append(1)
+            focus[0] = 769 if len(taps) == 1 else 3749198560
+            return True
+        pad.request_guide = tap
+        pad.focused_app = lambda: focus[0]
+        self.assertEqual("guide taps 1+1: Steam menu opened and closed, focus back on 3749198560",
+                         pad.stage_c(3749198560))
+        self.assertEqual(2, len(taps))
+
+    def test_guide_stage_never_taps_twice_when_the_menu_did_not_open(self):
+        pad = agent.PadApply(self.base, self.base / "evdev", None, "C", display=":99")
+        pad.FOCUS_WAIT = 0.2
+        taps = []
+        pad.request_guide = lambda: taps.append(1) or True
+        pad.focused_app = lambda: 3749198560
+        self.assertEqual("guide tap 1 did not bring the Steam menu; no second tap", pad.stage_c(3749198560))
+        self.assertEqual(1, len(taps))
+
+    def test_guide_request_is_taken_by_fakeinput(self):
+        pad = agent.PadApply(self.base, self.base / "evdev", None, "C", display=":99")
+        pad.dir.mkdir(parents=True)
+        (pad.dir / "state").write_text("adopts=1 node=event16 fed=0 dead=1 guide=0\n")
+
+        def fakeinput():
+            for _ in range(100):
+                if (pad.dir / "guide").exists():
+                    (pad.dir / "guide").unlink()
+                    (pad.dir / "state").write_text("adopts=1 node=event16 fed=0 dead=1 guide=1\n")
+                    return
+                time.sleep(0.01)
+        threading.Thread(target=fakeinput, daemon=True).start()
+        self.assertTrue(pad.request_guide())
+        # Nobody takes it: the request is withdrawn, so a later Deck reader cannot tap late.
+        self.assertFalse(pad.request_guide())
+        self.assertFalse((pad.dir / "guide").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
