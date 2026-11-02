@@ -360,7 +360,11 @@ internal object EpicClientLibrary {
                 runCatching { egstore(install, guid) { token } }.onFailure { Log.w(TAG, "${install.appName}: .egstore not written (${it.javaClass.simpleName})") }
                 after.put(install.appName, JSONObject().put("guid", guid).put("signature", install.signature).apply { if (ownership != null) put("ownership", ownership) })
                 StoreGameSidecar.read(install.folder)?.let { sidecar ->
-                    val next = runCatching { manifestArgs(install, guid) }.getOrNull()?.let { withLaunchArgs(sidecar, it) } ?: sidecar
+                    // Our own installs keep the manifest's launch command in extra[launchCommand] and the launcher writes it
+                    // right after the exe (StoreLaunch.launcherText); adding it to args as well would pass it twice.
+                    val args = if (com.droiddeck.launcher.frontend.WinCompSources.EPIC_LAUNCH_READ in sidecar.extra) emptyList()
+                    else runCatching { manifestArgs(install, guid) }.getOrNull()
+                    val next = args?.let { withLaunchArgs(sidecar, it) } ?: sidecar
                     if (next !== sidecar) next.write(install.folder)
                     StoreLaunch.refreshLauncher(install.folder, next)
                 }
