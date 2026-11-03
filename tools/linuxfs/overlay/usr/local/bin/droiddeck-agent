@@ -267,18 +267,42 @@ def steam_app_id(env):
     return app if 0 < app < 2**32 else None
 
 
-def under_reaper(pid, proc=Path("/proc")):
+def reaper_launch_id(pid, proc=Path("/proc")):
+    try:
+        args = (proc / str(pid) / "cmdline").read_bytes().split(b"\0")[1:]
+    except OSError:
+        return None
+    launch, app = False, 0
+    for arg in args:
+        if arg == b"--":
+            break
+        if arg == b"SteamLaunch":
+            launch = True
+        elif arg.startswith(b"AppId="):
+            try:
+                app = int(arg[6:]) or app
+            except ValueError:
+                pass
+    return app if launch else 0
+
+
+def reaper_launch(pid, proc=Path("/proc")):
+    found = None
     for _ in range(64):
         try:
             if (proc / str(pid) / "comm").read_text().strip() == "reaper":
-                return True
+                launched = reaper_launch_id(pid, proc)
+                if launched is None or found is False:
+                    found = False
+                elif launched or found is None:
+                    found = launched
             stat = (proc / str(pid) / "stat").read_text()
             pid = int(stat[stat.rindex(")") + 2:].split()[1])
         except (OSError, ValueError, IndexError):
-            return False
+            return found
         if pid <= 1:
-            return False
-    return False
+            return found
+    return found
 
 
 def sandboxed_apps(proc=Path("/proc")):
@@ -303,9 +327,14 @@ def window_steam_app(win, flatpaks, proc=Path("/proc")):
         return match.group(1) if os.environ.get("BL_STEAM_CLIENT_ARCH") == "x86_64" else None
     pid = win.get("pid")
     if pid:
-        if under_reaper(pid, proc):
-            return None
+        launched = reaper_launch(pid, proc)
         app = steam_app_id(process_env(pid, proc))
+        if launched is not None:
+            # A window opened after its launch's reaper died (Ubisoft Connect starting the game) sits
+            # under another reaper, so gamescope gives it that reaper's id (769 or none) instead of its own.
+            if launched is False or not app or app == STEAM_UI_APP or launched == app:
+                return None
+            return str(app)
         if app:
             return str(app)
     app = flatpaks().get((win.get("class") or "").lower())

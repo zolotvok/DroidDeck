@@ -194,10 +194,12 @@ class AgentTest(unittest.TestCase):
         answer = self.ask({"kind": "vr", "action": "status"})
         self.assertEqual("UNAVAILABLE", answer["error"]["code"])
 
-    def fake_proc(self, pid, parent, comm, env):
+    def fake_proc(self, pid, parent, comm, env, cmdline=None):
         root = self.dir / "proc" / str(pid)
         root.mkdir(parents=True)
         (root / "comm").write_text(comm + "\n")
+        if cmdline is not None:
+            (root / "cmdline").write_bytes(b"".join(arg.encode() + b"\0" for arg in cmdline))
         (root / "stat").write_text("%d (%s) S %d 0 0" % (pid, comm, parent))
         (root / "environ").write_bytes(b"\0".join(b"%s=%s" % (k.encode(), v.encode()) for k, v in env.items()) + b"\0")
 
@@ -245,6 +247,27 @@ class AgentTest(unittest.TestCase):
                 {"window": 11, "map": "viewable", "class": "other", "pid": None},
                 {"window": 12, "map": "unmapped", "class": "game", "pid": 21},
                 {"window": 13, "map": "viewable", "class": "steam_app_550", "pid": None}]
+        self.assertEqual(self.tag(wins), (False, []))
+
+    def test_a_window_left_under_another_reaper_takes_its_process_app_id(self):
+        self.fake_proc(20, 1, "reaper", {}, ["reaper"])
+        self.fake_proc(21, 20, "Watch_Dogs.exe", {"SteamAppId": "3529167647"})
+        self.fake_proc(30, 1, "reaper", {}, ["reaper", "SteamLaunch", "AppId=769", "--", "steam"])
+        self.fake_proc(31, 30, "upc.exe", {"SteamAppId": "3529167647"})
+        wins = [{"window": 9, "map": "viewable", "class": "watch_dogs.exe", "pid": 21},
+                {"window": 10, "map": "viewable", "class": "upc.exe", "pid": 31}]
+        self.assertEqual(self.tag(wins), (True, ["3529167647", "3529167647"]))
+
+    def test_a_window_under_its_own_launch_reaper_is_left_to_gamescope(self):
+        self.fake_proc(20, 1, "reaper", {}, ["reaper", "SteamLaunch", "AppId=3529167647", "--", "proton"])
+        self.fake_proc(21, 20, "reaper", {}, ["reaper", "SteamLaunch", "AppId=769", "--", "tool"])
+        self.fake_proc(22, 21, "Watch_Dogs.exe", {"SteamAppId": "3529167647"})
+        self.fake_proc(30, 1, "reaper", {}, ["reaper"])
+        self.fake_proc(31, 30, "steamwebhelper", {"SteamAppId": "769"})
+        self.fake_proc(32, 30, "helper", {})
+        wins = [{"window": 9, "map": "viewable", "class": "watch_dogs.exe", "pid": 22},
+                {"window": 10, "map": "viewable", "class": "steamwebhelper", "pid": 31},
+                {"window": 11, "map": "viewable", "class": "helper", "pid": 32}]
         self.assertEqual(self.tag(wins), (False, []))
 
     def test_the_x86_client_still_tags_its_game_classes(self):
