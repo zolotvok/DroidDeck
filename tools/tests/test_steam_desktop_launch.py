@@ -196,3 +196,29 @@ class DesktopSteamLaunchTest(unittest.TestCase):
                                                  env=env, text=True)
                 self.assertIn('-cef-use-angle=' + angle, result.split())
                 self.assertIn('-cef-force-gpu', result.split())
+
+    def test_cef_angle_backend_reaches_the_web_helper_argv(self):
+        source = (BIN / 'droiddeck-session').read_text()
+        setup = source[source.index('    _bl_ui=(-gamepadui)'):source.index('    if [ "${BL_STEAM_UI:-}" != desktop ]; then')]
+        default = '--no-zygote --in-process-gpu -AudioServiceOutOfProcess'
+        for panvk, override, software, extra, preset, want in [
+                ('1', '', '', '', '', default + ' --use-gl=angle --use-angle=gl'),
+                ('', 'gl-egl', '', '', '', default + ' --use-gl=angle --use-angle=gl-egl'),
+                ('1', '', '', '--force-gpu-mem-available-mb=768 -Vulkan', '',
+                 default + ' --use-gl=angle --use-angle=gl --force-gpu-mem-available-mb=768 -Vulkan'),
+                ('1', '', '1', '', '', ''),
+                ('', '', '', '', '', ''),
+                ('1', '', '', '', 'stock', 'stock')]:
+            with self.subTest(panvk=panvk, override=override, software=software, extra=extra, preset=preset):
+                env = dict(self.env, BL_SESSION_PANVK=panvk, BL_STEAM_CEF_ANGLE=override, BL_STEAM_UI='',
+                           BL_STEAM_SOFTWARE_MENUS=software, BL_STEAM_CEF_ARGS=extra, BL_WEBHELPER_ARGS=preset)
+                env.pop('BL_DESKTOP', None)
+                result = subprocess.run(['bash', '-c', 'exec 3>&1 >/dev/null\n' + setup + '\nprintf "%s" "${BL_WEBHELPER_ARGS:-}" >&3'],
+                                        env=env, text=True, capture_output=True, check=True).stdout
+                self.assertEqual(result, want)
+
+    def test_web_helper_default_matches_the_preload(self):
+        source = (BIN / 'droiddeck-session').read_text()
+        preload = (BIN.parents[3] / 'preload/webhelper.c').read_text()
+        self.assertIn('#define WEBHELPER_DEFAULT "--no-zygote --in-process-gpu -AudioServiceOutOfProcess"', preload)
+        self.assertIn('BL_WEBHELPER_ARGS="--no-zygote --in-process-gpu -AudioServiceOutOfProcess $_bl_wh"', source)

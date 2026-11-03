@@ -1050,8 +1050,7 @@ case $mode in
     fi
     _bl_ui=(-gamepadui)
     [ "${BL_STEAM_UI:-}" = desktop ] && _bl_ui=()
-    # On PanVK, ANGLE's Vulkan backend holds 5-9 GB of GPU memory in the web helper (11-02, Ubuntu runtime);
-    # its GL backend (Mesa GL on Zink), which the Arch runtime fell back to, stayed near 1 GB.
+    # On PanVK the GPU-drawn menus hold 5-9 GB of GPU memory in the web helper (Ubuntu runtime).
     _bl_angle=${BL_STEAM_CEF_ANGLE:-vulkan}
     [ "${BL_SESSION_PANVK:-0}" = 1 ] && [ -z "${BL_STEAM_CEF_ANGLE:-}" ] && _bl_angle=gl
     _bl_cef=(-cef-force-gpu -cef-use-gl=angle "-cef-use-angle=$_bl_angle")
@@ -1064,6 +1063,15 @@ case $mode in
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       _bl_cef=(-cef-disable-gpu)
       _bl_ui=(-nobigpicture)
+    fi
+    # Steam drops -cef-use-gl/-cef-use-angle: neither the web helper nor its children get --use-gl/--use-angle.
+    # webhelper.c appends BL_WEBHELPER_ARGS to the browser's argv; its first three tokens are its default.
+    if [ "${_bl_cef[0]}" = -cef-force-gpu ] && [ "${steam_x64:-0}" = 0 ] && [ -z "${BL_WEBHELPER_ARGS:-}" ] &&
+       { [ "${BL_SESSION_PANVK:-0}" = 1 ] || [ -n "${BL_STEAM_CEF_ANGLE:-}" ]; }; then
+      _bl_wh="--use-gl=angle --use-angle=$_bl_angle${BL_STEAM_CEF_ARGS:+ $BL_STEAM_CEF_ARGS}"
+      export BL_WEBHELPER_ARGS="--no-zygote --in-process-gpu -AudioServiceOutOfProcess $_bl_wh"
+      echo "== steam: web helper args $_bl_wh"
+      unset _bl_wh
     fi
     if [ "${BL_STEAM_UI:-}" != desktop ]; then
       if [ "$steam_x64" = 0 ] || [ "${BL_X64_DECK:-1}" != 0 ]; then
