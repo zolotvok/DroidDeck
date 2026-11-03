@@ -2073,7 +2073,11 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
         val live = windowOutputSize(holder.surfaceFrame.width(), holder.surfaceFrame.height())
         val size = live ?: if (SessionState.running) previous else glassesOutputSize() ?: outputSize()
         SessionState.outputSize = size
-        if (!SessionState.running) SessionState.refreshHz = refreshHz()
+        // Adaptive panels sit at 60 Hz on a static frame; at session start that rate became gamescope's -r for the whole session.
+        if (!SessionState.running) {
+            SessionState.refreshHz = refreshHz()
+            SessionState.gamescopeRefreshHz = refreshHz(preferRequested = true)
+        }
         val panel = panelBounds()
         SessionState.upscaleRatio = maxOf(panel.width(), panel.height()).toFloat() / maxOf(size.first, size.second).coerceAtLeast(1)
         Thread({
@@ -2251,13 +2255,15 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             SessionPrefs.portrait(this) && !controlsBelowWanted())
     }
 
-    private fun refreshHz(): Float {
+    private fun refreshHz(): Float = refreshHz(preferRequested = false)
+
+    private fun refreshHz(preferRequested: Boolean): Float {
         glassesScreen?.hz?.takeIf { it > 1f }?.let { return it }
         val display = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
         val wanted = window.attributes.preferredDisplayModeId
         val requested = display?.supportedModes?.firstOrNull { wanted != 0 && it.modeId == wanted }?.refreshRate
         val running = display?.refreshRate?.takeIf { it > 1f }
-        val hz = listOfNotNull(requested, running).minOrNull() ?: 60f
+        val hz = (if (preferRequested) requested ?: running else listOfNotNull(requested, running).minOrNull()) ?: 60f
         val mirrorCap = mirrorRefreshLimit().takeIf { it > 0 }?.toFloat() ?: Float.POSITIVE_INFINITY
         val capped = minOf(hz, PerfMode.peakRefreshCap(this), mirrorCap)
         return if (capped > 1f) capped else 60f

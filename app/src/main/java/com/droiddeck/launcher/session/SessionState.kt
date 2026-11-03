@@ -117,6 +117,9 @@ object SessionState {
     var refreshHz: Float = 60f
 
     @Volatile
+    var gamescopeRefreshHz: Float = 60f
+
+    @Volatile
     var upscaleRatio: Float = 0f
 
     @Volatile

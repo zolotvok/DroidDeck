@@ -280,7 +280,7 @@ FRAME_LIMIT_JS = r"""
     service = null;
   }
   if (!service || !settings?.clientSettings || typeof SteamClient.Settings?.SetSetting !== "function") return "unavailable";
-  const self = { timer: null };
+  const self = { timer: null, substitute: null };
   const write = value => {
     const bytes = [];
     for (let n of [21002 * 8, value]) {
@@ -300,9 +300,17 @@ FRAME_LIMIT_JS = r"""
     }
     if (!Array.isArray(rates) || rates.length === 0) return;
     const current = settings.clientSettings;
-    if (!current.gamescope_enable_app_target_framerate || rates.includes(current.gamescope_app_target_framerate)) return;
+    if (!current.gamescope_enable_app_target_framerate) return;
+    const value = current.gamescope_app_target_framerate;
+    const ours = self.substitute && self.substitute.wrote === value ? self.substitute : null;
+    let target = null;
+    if (!rates.includes(value)) target = Math.max(...rates);
+    else if (ours && ours.wanted !== value && rates.includes(ours.wanted)) target = ours.wanted;
+    else if (!ours) self.substitute = null;
+    if (target === null) return;
     try {
-      await write(Math.max(...rates));
+      await write(target);
+      self.substitute = target === (ours ? ours.wanted : value) ? null : { wrote: target, wanted: ours ? ours.wanted : value };
     } catch (e) {
     }
   };

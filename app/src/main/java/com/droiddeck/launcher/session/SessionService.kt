@@ -535,7 +535,7 @@ class SessionService : Service() {
         }
         guest.add("DROIDDECK_WSI_BYPASS_CHECK_MS=100")
         guest.add("WINE_OFFSCREEN_CHECK_MS=100")
-        guest.add("BL_REFRESH=" + Math.round(SessionState.refreshHz))
+        guest.add("BL_REFRESH=" + Math.round(SessionState.gamescopeRefreshHz))
         guest.add("BL_LOG=" + sessionLog.path)
         guest.add("BL_DEBUG_DIR=" + sessionDir.path)
 
