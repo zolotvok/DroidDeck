@@ -184,3 +184,15 @@ class DesktopSteamLaunchTest(unittest.TestCase):
                                                  env=env, text=True)
                 self.assertEqual('-cef-disable-gpu' in result, software)
                 self.assertEqual('-cef-use-angle=vulkan' in result, not software)
+
+    def test_cef_angle_backend_on_panvk(self):
+        source = (BIN / 'droiddeck-session').read_text()
+        setup = source[source.index('    _bl_ui=(-gamepadui)'):source.index('    if [ "${BL_STEAM_UI:-}" != desktop ]; then')]
+        for panvk, override, angle in [('1', '', 'gl'), ('', '', 'vulkan'), ('1', 'vulkan', 'vulkan'), ('', 'gl-egl', 'gl-egl')]:
+            with self.subTest(panvk=panvk, override=override):
+                env = dict(self.env, BL_SESSION_PANVK=panvk, BL_STEAM_CEF_ANGLE=override, BL_STEAM_UI='')
+                env.pop('BL_DESKTOP', None)
+                result = subprocess.check_output(['bash', '-c', setup + '\nprintf "%s\\n" "${_bl_cef[@]}"'],
+                                                 env=env, text=True)
+                self.assertIn('-cef-use-angle=' + angle, result.split())
+                self.assertIn('-cef-force-gpu', result.split())

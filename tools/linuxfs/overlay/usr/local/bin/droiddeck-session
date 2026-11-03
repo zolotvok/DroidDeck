@@ -172,6 +172,7 @@ if [ -n "${BL_VK_DRIVER:-}" ]; then
     export VK_DRIVER_FILES="$BL_VK_DRIVER"
     export VK_ICD_FILENAMES="$BL_VK_DRIVER"
     echo "== vulkan driver: imported $bl_icd_lib (via $BL_VK_DRIVER)"
+    [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ] && export BL_SESSION_PANVK=1
     if [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ] && [ -z "${ENABLE_GAMESCOPE_WSI+set}" ]; then
       export ENABLE_GAMESCOPE_WSI=0
       echo "== vulkan driver: PanVK, games present through Xwayland (ENABLE_GAMESCOPE_WSI=0): through gamescope's WSI layer only their first frames reach the screen"
@@ -1049,7 +1050,12 @@ case $mode in
     fi
     _bl_ui=(-gamepadui)
     [ "${BL_STEAM_UI:-}" = desktop ] && _bl_ui=()
-    _bl_cef=(-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan)
+    # On PanVK, ANGLE's Vulkan backend holds 5-9 GB of GPU memory in the web helper (11-02, Ubuntu runtime);
+    # its GL backend (Mesa GL on Zink), which the Arch runtime fell back to, stayed near 1 GB.
+    _bl_angle=${BL_STEAM_CEF_ANGLE:-vulkan}
+    [ "${BL_SESSION_PANVK:-0}" = 1 ] && [ -z "${BL_STEAM_CEF_ANGLE:-}" ] && _bl_angle=gl
+    _bl_cef=(-cef-force-gpu -cef-use-gl=angle "-cef-use-angle=$_bl_angle")
+    [ "$_bl_angle" = vulkan ] || echo "== steam: menus on ANGLE's $_bl_angle backend"
     [ "${steam_cef_gpu:-1}" = 1 ] || _bl_cef=(-cef-disable-gpu)
     if [ "${BL_STEAM_SOFTWARE_MENUS:-0}" = 1 ]; then
       _bl_cef=(-cef-disable-gpu)
