@@ -927,6 +927,118 @@ const value = subscribe => {
             return e
 
 
+class FocusReassertTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.proc = Path(self.temp.name)
+        self.now = [100.0]
+        self.focus = agent.FocusReassert(clock=lambda: self.now[0])
+
+    def fake_proc(self, pid, parent, comm, cmdline=None, state="S"):
+        root = self.proc / str(pid)
+        root.mkdir(parents=True)
+        (root / "comm").write_text(comm + "\n")
+        if cmdline is not None:
+            (root / "cmdline").write_bytes(b"".join(arg.encode() + b"\0" for arg in cmdline))
+        (root / "stat").write_text("%d (%s) %s %d 0 0" % (pid, comm, state, parent))
+
+    def snap(self, wm_state="iconic", baselayer=(413091, 769), pid=31, window=0x2400001):
+        return {"baselayerAppIds": list(baselayer), "displays": {":0": [], ":1": [
+            {"window": 0x1e00012, "map": "viewable", "appId": 2274579123, "pid": 21, "wmState": "normal"},
+            {"window": window, "map": "viewable", "appId": 2274579123, "pid": pid, "wmState": wm_state}]}}
+
+    def plan(self, snap):
+        with patch.dict(os.environ, {"DISPLAY": ":0"}):
+            return self.focus.plan(snap, proc=self.proc)
+
+    def test_off_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(agent.FocusReassert.enabled())
+        with patch.dict(os.environ, {"BL_FOCUS_REASSERT": "1"}):
+            self.assertTrue(agent.FocusReassert.enabled())
+
+    def test_a_minimized_orphan_behind_steam_is_restored_first_in_the_base_layer(self):
+        self.fake_proc(30, 1, "wineserver")
+        self.fake_proc(31, 30, "WatchDogs2.exe")
+        self.fake_proc(21, 30, "upc.exe")
+        actions = self.plan(self.snap())
+        self.assertEqual(1, len(actions))
+        kind, display, window, app, pid, order = actions[0][:6]
+        self.assertEqual(("restore", ":1", 0x2400001, 2274579123, 31), (kind, display, window, app, pid))
+        self.assertEqual([2274579123, 413091, 769], order)
+        # Steam put the game back, but after itself: still behind.
+        self.now[0] += 20
+        self.assertEqual("restore", self.plan(self.snap(baselayer=(413091, 769, 2274579123)))[0][0])
+
+    def test_tries_are_spaced_and_capped(self):
+        self.fake_proc(30, 1, "wineserver")
+        self.fake_proc(31, 30, "WatchDogs2.exe")
+        self.assertEqual(1, len(self.plan(self.snap())))
+        self.now[0] += 2
+        self.assertEqual([], self.plan(self.snap()))
+        for _ in range(agent.FocusReassert.TRIES - 1):
+            self.now[0] += agent.FocusReassert.GAP
+            self.assertEqual(1, len(self.plan(self.snap())))
+        self.now[0] += agent.FocusReassert.GAP
+        self.assertEqual([], self.plan(self.snap()))
+
+    def test_left_alone_when_steam_runs_it_or_it_is_not_minimized(self):
+        self.fake_proc(40, 1, "reaper", ["reaper", "SteamLaunch", "AppId=2274579123", "--", "proton"])
+        self.fake_proc(41, 40, "WatchDogs2.exe")
+        self.assertEqual([], self.plan(self.snap(pid=41)))  # own launch reaper: Steam tracks it
+        self.fake_proc(30, 1, "wineserver")
+        self.fake_proc(31, 30, "WatchDogs2.exe")
+        self.assertEqual([], self.plan(self.snap(wm_state="normal")))
+        self.assertEqual([], self.plan(self.snap(baselayer=(413091, 2274579123, 769))))  # game already first
+        self.fake_proc(32, 30, "WatchDogs2.exe", state="Z")
+        self.assertEqual([], self.plan(self.snap(pid=32)))
+
+    def test_the_window_control_is_released_when_the_window_goes(self):
+        self.fake_proc(30, 1, "wineserver")
+        self.fake_proc(31, 30, "WatchDogs2.exe")
+        self.focus.control = (":1", 0x2400001, 31, [0])
+        self.assertEqual([], [a for a in self.plan(self.snap(wm_state="normal")) if a[0] == "release"])
+        gone = {"baselayerAppIds": [413091, 769], "displays": {":0": [], ":1": []}}
+        self.assertEqual([("release", ":1", 0x2400001, [0], "window gone")], self.plan(gone))
+        self.assertIsNone(self.focus.control)
+
+    def test_apply_writes_state_base_layer_and_control_and_logs(self):
+        written = []
+
+        class FakeX:
+            root = 1
+
+            def __init__(self, display):
+                self.display = display
+
+            def set_prop32(self, window, name, kind, values):
+                written.append((self.display, window, name, kind, list(values)))
+
+            def prop(self, window, name):
+                return [0]
+
+            def close(self):
+                pass
+
+        action = ("restore", ":1", 0x2400001, 2274579123, 31, [2274579123, 413091, 769], "why", 1)
+        with patch.dict(os.environ, {"DISPLAY": ":0"}), patch.object(agent, "X", FakeX), \
+                patch.object(agent, "log") as log:
+            self.focus.apply([action])
+            self.focus.apply([("release", ":1", 0x2400001, [0], "window gone")])
+        self.assertEqual([
+            (":1", 0x2400001, "WM_STATE", "WM_STATE", [1, 0]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_APPID", "CARDINAL", [2274579123, 413091, 769]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_WINDOW", "CARDINAL", [0x2400001]),
+            (":0", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+            (":1", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_WINDOW", "CARDINAL", [0]),
+        ], written)
+        lines = [call.args[0] for call in log.call_args_list]
+        self.assertTrue(lines[0].startswith("focus reassert #1: game window 0x2400001 on :1 (app 2274579123)"), lines)
+        self.assertIn("released GAMESCOPECTRL_BASELAYER_WINDOW", lines[1])
+
+
 class VrFocusTest(unittest.TestCase):
     def test_scene_dashboard_and_external_focus_changes(self):
         focus = agent.VrSceneFocus()

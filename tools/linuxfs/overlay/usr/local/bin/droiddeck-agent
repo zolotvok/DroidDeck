@@ -181,6 +181,15 @@ class X:
                                   self.atom(name), self.atom("CARDINAL"), 32, len(values))
                        + struct.pack("<%dI" % len(values), *values))
 
+    def set_prop32(self, window, name, type_name, values):
+        """ChangeProperty (Replace) to a 32-bit list of type type_name, then a round trip."""
+        atom, kind = self.atom(name), self.atom(type_name)
+        if not atom or not kind:
+            raise OSError("no atom " + (name if not atom else type_name))
+        self.s.sendall(struct.pack("<BBHIIIB3xI", 18, 0, 6 + len(values), window, atom, kind, 32, len(values))
+                       + struct.pack("<%dI" % len(values), *values))
+        self.request(struct.pack("<BxH", 43, 1))
+
 
 def windows(x):
     out = []
@@ -465,6 +474,152 @@ class VrSceneFocus:
         return self.written
 
 
+def pid_alive(pid, proc=Path("/proc")):
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+        return stat[stat.rindex(")") + 2:].split()[0] not in ("Z", "X")
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def steam_shows_itself_first(baselayer, app):
+    """True when Steam's base layer does not put the app before its own UI: Steam no longer runs it."""
+    if app not in baselayer:
+        return True
+    return STEAM_UI_APP in baselayer and baselayer.index(STEAM_UI_APP) < baselayer.index(app)
+
+
+class FocusReassert:
+    """Opt-in (BL_FOCUS_REASSERT=1, off by default): bring back a game whose launch Steam lost.
+
+    When the Steam launch chain of a Ubisoft/Epic shortcut is killed early (`Killed`, `game stopped`), Steam
+    keeps its own UI first in GAMESCOPECTRL_BASELAYER_APPID although the game lives on. Its window is tagged
+    (tag_game_windows) but never focused, so it stays minimized (WM_STATE Iconic) and DXVK never gets a
+    swap chain (0x0 extent): no frame, Steam home in front (wd2-perf2-0436 L2). For a viewable, STEAM_GAME-tagged
+    window on a game display that is Iconic, whose process lives, has no launch reaper with its own app id
+    above it, and whose app Steam does not put before 769, this
+      1. sets WM_STATE Normal on the window (what gamescope does when it focuses a window),
+      2. writes the base layer with the app first, Steam's other entries after it,
+      3. sets GAMESCOPECTRL_BASELAYER_WINDOW to the window (gamescope then focuses exactly this window, not a
+         later-mapped launcher window of the same app), and asks gamescope to restore its focus window,
+    at most TRIES times per window, GAP seconds apart. The window control is released (old value back) when the
+    window is gone or its process died. Every action is logged."""
+
+    TRIES = 3
+    GAP = 10.0
+    CONTROL = "GAMESCOPECTRL_BASELAYER_WINDOW"
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.tries = {}
+        self.control = None  # (display, window, pid, original value list)
+
+    @staticmethod
+    def enabled():
+        return os.environ.get("BL_FOCUS_REASSERT") == "1"
+
+    def candidates(self, snap, proc=Path("/proc")):
+        out = []
+        baselayer = list(snap.get("baselayerAppIds") or [])
+        for display, wins in snap.get("displays", {}).items():
+            if display == os.environ.get("DISPLAY"):
+                continue
+            for win in wins:
+                app, pid = win.get("appId"), win.get("pid")
+                if (win.get("map") != "viewable" or win.get("overrideRedirect") or win.get("inputOnly")
+                        or not app or app == STEAM_UI_APP or win.get("wmState") != "iconic" or not pid):
+                    continue
+                if not pid_alive(pid, proc):
+                    continue
+                launched = reaper_launch(pid, proc)
+                if launched is False or launched == app:
+                    continue  # Steam still runs it (its own launch reaper), or the chain is unreadable
+                if not steam_shows_itself_first(baselayer, app):
+                    continue
+                out.append((display, win, app, pid, launched))
+        return out
+
+    def plan(self, snap, proc=Path("/proc")):
+        """The actions for this snapshot: ("release", display, window, original) and
+        ("restore", display, window, app, pid, order, why)."""
+        actions = []
+        now = self.clock()
+        if self.control:
+            display, window, pid, original = self.control
+            live = any(w.get("window") == window for w in snap.get("displays", {}).get(display, []))
+            if not live or not pid_alive(pid, proc):
+                actions.append(("release", display, window, original,
+                                "window gone" if not live else "process %s gone" % pid))
+                self.control = None
+        shown = {(d, w["window"]) for d, wins in snap.get("displays", {}).items() for w in wins if w.get("window")}
+        self.tries = {k: v for k, v in self.tries.items() if k in shown}
+        baselayer = list(snap.get("baselayerAppIds") or [])
+        for display, win, app, pid, launched in self.candidates(snap, proc):
+            key = (display, win["window"])
+            count, last = self.tries.get(key, (0, None))
+            if count >= self.TRIES or (last is not None and now - last < self.GAP):
+                continue
+            self.tries[key] = (count + 1, now)
+            order = [app] + [item for item in baselayer if item != app]
+            why = "Iconic, pid %s alive, %s, base layer %s" % (
+                pid, "no reaper above it" if launched is None else "under reaper AppId=%s, not its own" % (launched or "none (bare)"),
+                baselayer)
+            actions.append(("restore", display, win["window"], app, pid, order, why, count + 1))
+            break  # one window per snapshot
+        return actions
+
+    def apply(self, actions):
+        steam = os.environ.get("DISPLAY")
+        for action in actions:
+            if action[0] == "release":
+                _, display, window, original, why = action
+                try:
+                    x = X(steam)
+                    try:
+                        x.set_prop32(x.root, self.CONTROL, "CARDINAL", original or [0])
+                    finally:
+                        x.close()
+                    log("focus reassert: released %s (was 0x%x on %s, %s; back to %s)"
+                        % (self.CONTROL, window, display, why, original or [0]))
+                except OSError as e:
+                    log("focus reassert: release of 0x%x failed: %s" % (window, e))
+                continue
+            _, display, window, app, pid, order, why, attempt = action
+            steps = []
+            try:
+                x = X(display)
+                try:
+                    x.set_prop32(window, "WM_STATE", "WM_STATE", [1, 0])
+                    steps.append("WM_STATE Normal on 0x%x" % window)
+                finally:
+                    x.close()
+                x = X(steam)
+                try:
+                    x.set_prop32(x.root, "GAMESCOPECTRL_BASELAYER_APPID", "CARDINAL", order)
+                    steps.append("base layer %s" % order)
+                    if self.control is None:
+                        original = x.prop(x.root, self.CONTROL) or [0]
+                    else:
+                        original = self.control[3]
+                    x.set_prop32(x.root, self.CONTROL, "CARDINAL", [window])
+                    self.control = (display, window, pid, original)
+                    steps.append("%s 0x%x (was %s)" % (self.CONTROL, window, original))
+                finally:
+                    x.close()
+                for d in (steam, display):
+                    x = X(d)
+                    try:
+                        x.set_prop32(x.root, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1])
+                    finally:
+                        x.close()
+                steps.append("restore request")
+                log("focus reassert #%d: game window 0x%x on %s (app %s): %s; did: %s"
+                    % (attempt, window, display, app, why, ", ".join(steps)))
+            except OSError as e:
+                log("focus reassert #%d: game window 0x%x on %s (app %s): %s; failed after [%s]: %s"
+                    % (attempt, window, display, app, why, ", ".join(steps), e))
+
+
 class FocusWatcher(threading.Thread):
 
     def __init__(self, path):
@@ -474,6 +629,7 @@ class FocusWatcher(threading.Thread):
         self.last = None
         self.seq = 0
         self.vr_focus = VrSceneFocus()
+        self.reassert = FocusReassert()
         self.nudged = {}
 
     NUDGE_TRIES = 3
@@ -558,6 +714,12 @@ class FocusWatcher(threading.Thread):
             if tag_game_windows(snap):
                 self.changed.set()
                 continue
+            if FocusReassert.enabled():
+                actions = self.reassert.plan(snap)
+                if actions:
+                    self.reassert.apply(actions)
+                    if any(a[0] == "restore" for a in actions):
+                        self.changed.set()
             try:
                 self.nudge_dialog(snap)
             except OSError as e:
