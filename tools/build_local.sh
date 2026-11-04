@@ -211,6 +211,19 @@ if [[ -n "${blobferry}" ]]; then
     install -m644 "${blobferry_rootfs}/usr/lib/hybris/libhybris/linker/q.so" "${linuxfs_dir}/usr/lib/hybris/libhybris/linker/q.so"
     install -m644 "${blobferry_dir}/LICENSE" "${blobferry_dir}/NOTICE.md" "${linuxfs_dir}/usr/local/share/licenses/blobferry/"
     install -m644 "${blobferry_dir}"/licenses/libhybris/* "${linuxfs_dir}/usr/local/share/licenses/blobferry/libhybris/"
+    # The WSI layer (libVkLayer_window_system_integration.so) is vulkan-wsi-layer, MIT: its LICENSE, our patches
+    # and the source pointer ride along like libhybris'. Blobferry packages before 1.0.0-rc1 lack the folder; a
+    # release build refuses them.
+    [[ -f "${blobferry_dir}/SOURCE.txt" ]] && install -m644 "${blobferry_dir}/SOURCE.txt" "${linuxfs_dir}/usr/local/share/licenses/blobferry/"
+    if [[ -f "${blobferry_dir}/licenses/vulkan-wsi-layer/LICENSE" ]]; then
+        mkdir -p "${linuxfs_dir}/usr/local/share/licenses/blobferry/vulkan-wsi-layer"
+        install -m644 "${blobferry_dir}"/licenses/vulkan-wsi-layer/* "${linuxfs_dir}/usr/local/share/licenses/blobferry/vulkan-wsi-layer/"
+    elif [[ "${build_variant}" == release ]]; then
+        echo "${blobferry}: no licenses/vulkan-wsi-layer/ (MIT LICENSE + patches) for the bundled WSI layer" >&2
+        exit 1
+    else
+        echo "Warning: ${blobferry} has no licenses/vulkan-wsi-layer/; this debug APK lacks the WSI layer license" >&2
+    fi
     basename "${blobferry_dir}" | sed 's/^blobferry-//' > "${linuxfs_dir}/usr/lib/mali_bridge/VERSION"
     # Ubuntu's gamescope WSI manifest lacks the X11 surface extensions the bridge ICD needs (SessionFiles maliFiles),
     # and the files the per-game Mali defaults point at (droiddeck-mali-defaults)
