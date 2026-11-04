@@ -35,3 +35,7 @@ __pycache__/
 .signing.env
 app/src/main/assets/directaudio/
 /tools/vr/out/
+
+# Mali release key (normally ~/.config/droiddeck-mali-release, outside the tree)
+droiddeck-mali-release/
+store-password

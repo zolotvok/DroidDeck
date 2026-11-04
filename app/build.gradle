@@ -122,17 +122,32 @@ def variantSuffixes = rootProject.file('tools/release/variants.txt').readLines()
     .collect { def f = it.trim().split(/\s+/); "${f[1]}=${f[2] == '-' ? '' : f[2]}" }
     .join(';')
 
+def maliReleaseKeyDir = new File((project.findProperty('releaseKeyDir')
+    ?: providers.environmentVariable('DROIDDECK_RELEASE_KEY_DIR').getOrNull()
+    ?: localBuildOptions.getProperty('droiddeck.releaseKeyDir')
+    ?: "${System.getProperty('user.home')}/.config/droiddeck-mali-release").toString())
+def maliReleaseKey = null
+if (new File(maliReleaseKeyDir, 'release.jks').isFile() && new File(maliReleaseKeyDir, 'store-password').isFile()) {
+    maliReleaseKey = [
+        store   : new File(maliReleaseKeyDir, 'release.jks'),
+        password: new File(maliReleaseKeyDir, 'store-password').text.trim(),
+        alias   : (project.findProperty('releaseKeyAlias') ?: 'droiddeck-mali').toString(),
+    ]
+}
+
 android {
     namespace 'com.droiddeck.launcher'
     compileSdk 34
     ndkVersion project.findProperty('ndkVersion') ?: '27.3.13750724'
 
     defaultConfig {
-        applicationId "com.droiddeck.launcher"
+        // Own id: installs next to the official DroidDeck (com.droiddeck.launcher), with its own data.
+        applicationId "com.droiddeck.launcher.mali"
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode 17
-        versionName "0.6.9-mali.1"
+        versionCode 18
+        versionName "0.6.9-mali.1-rc1"
+        manifestPlaceholders = [appLabel: 'DroidDeck Mali']
         buildConfigField "String", "BUILD_LABEL", "\"${escapedBuildLabel}\""
         buildConfigField "String", "SOURCE_COMMIT", "\"${sourceCommit}\""
         buildConfigField "int", "PR_NUMBER", "${prNumber}"
@@ -172,6 +187,21 @@ android {
     }
 
     signingConfigs {
+        // The Mali release key lives outside every git tree: <dir>/release.jks + <dir>/store-password
+        // (one line; the key password is the same). <dir> = -PreleaseKeyDir, DROIDDECK_RELEASE_KEY_DIR,
+        // droiddeck.releaseKeyDir in local.properties, or ~/.config/droiddeck-mali-release.
+        if (maliReleaseKey) {
+            maliRelease {
+                storeFile maliReleaseKey.store
+                storeType "PKCS12"
+                storePassword maliReleaseKey.password
+                keyAlias maliReleaseKey.alias
+                keyPassword maliReleaseKey.password
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
         testkey {
             storeFile file("${rootDir}/keystore/testkey.p12")
             storeType "PKCS12"
@@ -192,11 +222,17 @@ android {
             if (localSuffix) {
                 applicationIdSuffix localSuffix
                 resValue 'string', 'app_name', 'DroidDeck XR Dev'
+                manifestPlaceholders.appLabel = 'DroidDeck XR Dev'
             }
         }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.testkey
+            if (maliReleaseKey) {
+                signingConfig signingConfigs.maliRelease
+            } else {
+                logger.warn("DroidDeck Mali: no release key in ${maliReleaseKeyDir} - the release APK is signed with the testkey")
+                signingConfig signingConfigs.testkey
+            }
         }
     }
 
