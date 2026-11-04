@@ -548,6 +548,27 @@ if [[ -n "${signing_env}" ]]; then
     mv "${apk}.release" "${apk}"
 fi
 
+# DroidDeck Mali: a release build signs with the Mali release key when it is there (its own app id, so no
+# lineage from the testkey is needed). DROIDDECK_RELEASE_KEY_DIR as in app/build.gradle; the password is read
+# from the file, never printed (the key password is the same; apksigner then reads it once).
+mali_key_dir=${DROIDDECK_RELEASE_KEY_DIR:-${HOME}/.config/droiddeck-mali-release}
+if [[ -z "${signing_env}" && "${build_variant}" == release && -f "${mali_key_dir}/release.jks" && -f "${mali_key_dir}/store-password" ]]; then
+    echo "Signing with the DroidDeck Mali release key (${mali_key_dir}/release.jks)"
+    "${build_tools}/apksigner" sign \
+        --ks "${mali_key_dir}/release.jks" --ks-type PKCS12 --ks-pass "file:${mali_key_dir}/store-password" \
+        --ks-key-alias "${DROIDDECK_RELEASE_KEY_ALIAS:-droiddeck-mali}" \
+        --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+        --out "${apk}.mali" "${apk}"
+    rm -f "${apk}.mali.idsig"
+    mali_certs=$("${build_tools}/apksigner" verify --min-sdk-version 21 --print-certs "${apk}.mali" 2>/dev/null)
+    grep -q 'certificate DN: CN=zolotvok' <<<"${mali_certs}" || {
+        echo "APK signature check failed: the Mali release key did not sign the APK." >&2
+        exit 1
+    }
+    mv "${apk}.mali" "${apk}"
+    grep -E 'certificate (DN|SHA-256)' <<<"${mali_certs}"
+fi
+
 printf 'APK: %s\n' "${apk}"
 printf 'SHA-256: '
 shasum -a 256 "${apk}" | awk '{print $1}'
