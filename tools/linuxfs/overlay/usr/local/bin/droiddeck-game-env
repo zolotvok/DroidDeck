@@ -997,6 +997,60 @@ def start(launch, launch_env, digest, after=None):
     return os.execvpe(launch[0], launch, launch_env)
 
 
+LAUNCH_WRAPPERS = ("pw-audio-namespace", "steam-launch-wrapper")
+
+
+def proc_parent(proc, pid):
+    with open(os.path.join(proc, str(pid), "stat"), encoding="utf-8", errors="replace") as source:
+        return int(source.read().rsplit(")", 1)[1].split()[1])
+
+
+def proc_name(proc, pid):
+    with open(os.path.join(proc, str(pid), "cmdline"), "rb") as source:
+        return os.path.basename(source.read().split(b"\0", 1)[0].decode("utf-8", "replace"))
+
+
+def launch_chain_oom(proc="/proc", start=None, levels=6):
+    # Steam starts every game as steam-launch-wrapper --oom-score-adjust 900, which execs
+    # pw-audio-namespace -> reaper -> this compat tool. On Android those three keep 900 and are
+    # the first victims when memory runs short; their SIGKILL makes Steam drop the game
+    # ("Killed", "game stopped") while the game lives on. Lower them to 0 like the game itself:
+    # only the ancestors above 0 up to Steam's launch wrapper, never steam, nothing without a wrapper.
+    pid = os.getppid() if start is None else start
+    chain = []
+    for _ in range(levels):
+        if pid <= 1:
+            return [], []
+        try:
+            name = proc_name(proc, pid)
+            if name == "steam":
+                return [], []
+            path = os.path.join(proc, str(pid), "oom_score_adj")
+            with open(path, encoding="utf-8") as source:
+                value = int(source.read().strip() or 0)
+            if value <= 0:
+                return [], []
+            chain.append((pid, name, value, path))
+            if name in LAUNCH_WRAPPERS:
+                break
+            pid = proc_parent(proc, pid)
+        except (OSError, ValueError, IndexError):
+            return [], []
+    else:
+        return [], []
+    done, failed = [], []
+    for pid, name, value, path in chain:
+        try:
+            with open(path, "w", encoding="utf-8") as target:
+                target.write("0\n")
+            done.append("%d %s %d" % (pid, name, value))
+        except OSError as error:
+            failed.append("%d %s %d (%s)" % (pid, name, value, error.strerror or error))
+    print("droiddeck-game-env: oom_score_adj 0 for the Steam launch chain: %s%s"
+          % (", ".join(done) or "none", "; not set: " + ", ".join(failed) if failed else ""), file=sys.stderr)
+    return done, failed
+
+
 def main():
     command = sys.argv[1:]
     if not command:
@@ -1006,6 +1060,7 @@ def main():
             adj.write("0\n")
     except OSError:
         pass
+    launch_chain_oom()
     env = game_gpu(os.environ.copy())
     app_id = game_id(env)
     path = Path.home() / ".config/droiddeck/game-environment.json"

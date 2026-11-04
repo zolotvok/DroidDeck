@@ -2161,6 +2161,77 @@ class UbisoftOverlayTest(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.yaml"])
 
 
+
+class LaunchChainOomTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proc = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def task(self, pid, ppid, argv, adj):
+        folder = Path(self.proc) / str(pid)
+        folder.mkdir()
+        (folder / "stat").write_text("%d (%s) S %d 1640 1640 0 -1\n" % (pid, argv[0][:15], ppid))
+        (folder / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+        (folder / "oom_score_adj").write_text("%d\n" % adj)
+
+    def adj(self, pid):
+        return int((Path(self.proc) / str(pid) / "oom_score_adj").read_text())
+
+    def steam_chain(self, sh_adj=0):
+        self.task(14123, 13966, ["steam", "-gamepadui"], 0)
+        self.task(25094, 14123, ["sh", "-c", "steam-launch-wrapper --oom-score-adjust 900 -- reaper"], sh_adj)
+        self.task(25095, 25094, ["pw-audio-namespace", "--", "reaper", "SteamLaunch", "AppId=2274579123"], 900)
+        self.task(25096, 25095, ["/root/.local/share/Steam/steamrtarm64/reaper", "SteamLaunch", "AppId=2274579123"], 900)
+        self.task(25097, 25096, ["bash", "/root/.local/share/Steam/compatibilitytools.d/x/droiddeck-proton"], 900)
+
+    def run_chain(self, start=25097):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            result = MODULE["launch_chain_oom"](self.proc, start)
+        return result, err.getvalue()
+
+    def test_lowers_the_wrapper_chain_and_stops_there(self):
+        self.steam_chain(sh_adj=900)
+        (done, failed), log = self.run_chain()
+        self.assertEqual([self.adj(p) for p in (25097, 25096, 25095)], [0, 0, 0])
+        self.assertEqual(self.adj(25094), 900)
+        self.assertEqual(failed, [])
+        self.assertEqual(done, ["25097 bash 900", "25096 reaper 900", "25095 pw-audio-namespace 900"])
+        self.assertIn("oom_score_adj 0 for the Steam launch chain: 25097 bash 900", log)
+
+    def test_leaves_a_chain_without_wrapper_alone(self):
+        self.task(500, 1, ["gnome-terminal"], 200)
+        self.task(501, 500, ["bash"], 200)
+        (done, failed), log = self.run_chain(501)
+        self.assertEqual((done, failed, log), ([], [], ""))
+        self.assertEqual(self.adj(501), 200)
+
+    def test_stops_at_zero_or_steam(self):
+        self.steam_chain()
+        (Path(self.proc) / "25096/oom_score_adj").write_text("0\n")
+        self.assertEqual(self.run_chain(), (([], []), ""))
+        self.assertEqual(self.adj(25097), 900)
+        self.task(30001, 14123, ["bash"], 900)
+        self.assertEqual(self.run_chain(30001), (([], []), ""))
+        self.assertEqual(self.adj(30001), 900)
+
+    def test_reports_a_write_it_may_not_do(self):
+        self.steam_chain()
+        real = open
+
+        def guarded(path, mode="r", *args, **kwargs):
+            if str(path).endswith("25096/oom_score_adj") and "w" in mode:
+                raise PermissionError(13, "Permission denied")
+            return real(path, mode, *args, **kwargs)
+
+        with mock.patch("builtins.open", guarded):
+            (done, failed), log = self.run_chain()
+        self.assertEqual(done, ["25097 bash 900", "25095 pw-audio-namespace 900"])
+        self.assertEqual(failed, ["25096 reaper 900 (Permission denied)"])
+        self.assertIn("not set: 25096 reaper 900 (Permission denied)", log)
+
 if __name__ == "__main__":
     unittest.main()
 
