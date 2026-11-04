@@ -1081,6 +1081,36 @@ case $mode in
         echo "== steam: Deck mode on (-steamdeck -steamos3)"
       fi
     fi
+    # Web helper GPU heap on PanVK. PanVK reports 3/4 of the RAM as its one heap, and zink sizes its BO reuse cache
+    # (heap/8) and its out-of-memory flush (0.8 x heap) from it, per screen; the web helper's browser process holds five
+    # zink screens (Steam's compositor, ANGLE, the GPU probe), 5-9 GB of GPU memory with GPU-drawn menus. Mesa reads this
+    # driconf file only in a process named steamwebhelper (PanVK's own config dir; Ubuntu's Mesa reads /usr/share/drirc.d),
+    # so games keep the full heap. PanVK does not cap allocations at the heap size, the smaller heap only shrinks those caches.
+    # BL_WEBHELPER_HEAP_PERCENT=<0.01..1> sets the share of RAM, 0 or off removes the file (the old behaviour).
+    _bl_drirc=${BL_DRIRC_DIR:-/usr/local/share/drirc.d}/90-droiddeck-steamwebhelper.conf
+    _bl_heap=${BL_WEBHELPER_HEAP_PERCENT:-0.125}
+    if [ "$_bl_heap" = off ] || [[ $_bl_heap =~ ^0(\.0*)?$ ]]; then
+      _bl_heap=0
+    elif ! [[ $_bl_heap =~ ^(0\.0[1-9][0-9]*|0\.[1-9][0-9]*|1|1\.0*)$ ]]; then
+      echo "== steam: BL_WEBHELPER_HEAP_PERCENT=$_bl_heap is not a share of RAM (0.01..1), using 0.125"
+      _bl_heap=0.125
+    fi
+    [ "${BL_SESSION_PANVK:-0}" = 1 ] || _bl_heap=0
+    if [ "$_bl_heap" != 0 ]; then
+      if mkdir -p "${_bl_drirc%/*}" && printf '%s\n' '<?xml version="1.0" standalone="yes"?>' \
+           '<!-- droiddeck-session: the Steam web helper on PanVK, see BL_WEBHELPER_HEAP_PERCENT -->' '<driconf>' \
+           '  <device>' '    <application name="Steam web helper" executable="steamwebhelper">' \
+           "      <option name=\"heap_memory_percent\" value=\"$_bl_heap\" />" '    </application>' '  </device>' \
+           '</driconf>' > "$_bl_drirc.tmp" && mv -f "$_bl_drirc.tmp" "$_bl_drirc"; then
+        echo "== steam: web helper GPU heap $_bl_heap of RAM (PanVK driconf $_bl_drirc)"
+      else
+        rm -f "$_bl_drirc.tmp"
+        echo "== steam: could not write $_bl_drirc, web helper keeps PanVK's full heap"
+      fi
+    else
+      rm -f "$_bl_drirc"
+    fi
+    unset _bl_drirc _bl_heap
     export STEAMOS_STEAM_SHUTDOWN_SENTINEL="$HOME/.bl-steam-shutdown"
     export STEAMOS_STEAM_REBOOT_SENTINEL="$HOME/.bl-steam-reboot"
     if ! pgrep -f 'steamwebhelper|steamrtarm64/steam|steamrt64/steam' >/dev/null 2>&1; then

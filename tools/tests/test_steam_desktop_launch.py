@@ -217,6 +217,39 @@ class DesktopSteamLaunchTest(unittest.TestCase):
                                         env=env, text=True, capture_output=True, check=True).stdout
                 self.assertEqual(result, want)
 
+    def test_web_helper_gpu_heap_driconf_on_panvk(self):
+        source = (BIN / 'droiddeck-session').read_text()
+        setup = source[source.index('    # Web helper GPU heap on PanVK.'):source.index('    export STEAMOS_STEAM_SHUTDOWN_SENTINEL=')]
+        conf = self.root / 'drirc.d/90-droiddeck-steamwebhelper.conf'
+        for panvk, value, want in [('1', None, '0.125'), ('1', '0.25', '0.25'), ('1', '0.05', '0.05'), ('1', '1', '1'),
+                                   ('1', '0', None), ('1', 'off', None), ('1', '0.0', None), ('1', '2', '0.125'),
+                                   ('1', '0.1x', '0.125'), ('', None, None), ('', '0.25', None)]:
+            with self.subTest(panvk=panvk, value=value):
+                conf.parent.mkdir(exist_ok=True)
+                conf.write_text('stale')
+                env = dict(self.env, BL_SESSION_PANVK=panvk, BL_DRIRC_DIR=str(conf.parent))
+                env.pop('BL_WEBHELPER_HEAP_PERCENT', None)
+                if value is not None:
+                    env['BL_WEBHELPER_HEAP_PERCENT'] = value
+                result = subprocess.run(['bash', '-c', 'set -u\n' + setup], env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if want is None:
+                    self.assertFalse(conf.exists())
+                    continue
+                text = conf.read_text()
+                self.assertIn('executable="steamwebhelper"', text)
+                self.assertIn(f'<option name="heap_memory_percent" value="{want}" />', text)
+                self.assertIn(f'web helper GPU heap {want} of RAM', result.stdout)
+                self.assertFalse(conf.with_name(conf.name + '.tmp').exists())
+        # The file parses as XML and has no <device driver=...> filter.
+        import xml.etree.ElementTree as ET
+        conf.unlink(missing_ok=True)
+        subprocess.run(['bash', '-c', setup], env=dict(self.env, BL_SESSION_PANVK='1', BL_DRIRC_DIR=str(conf.parent)),
+                       check=True, capture_output=True)
+        root = ET.parse(conf).getroot()
+        self.assertEqual(root.tag, 'driconf')
+        self.assertEqual(root.find('device').attrib, {})
+
     def test_web_helper_default_matches_the_preload(self):
         source = (BIN / 'droiddeck-session').read_text()
         preload = (BIN.parents[3] / 'preload/webhelper.c').read_text()
