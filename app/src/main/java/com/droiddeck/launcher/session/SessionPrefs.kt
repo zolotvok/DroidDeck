@@ -438,10 +438,20 @@ object SessionPrefs {
         prefs(context).edit().putString("osc", mode).apply()
     }
 
-    fun linuxDriver(context: Context): String =
+    fun linuxDriver(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): String =
+        storedLinuxDriver(context) ?: maliDefaultLinuxDriver(context, mali)
+
+    private fun storedLinuxDriver(context: Context): String? =
         prefs(context).getString("linuxDriver", null)
             ?: prefs(context).getString("linuxDriver.steam", null)
-            ?: prefs(context).getString("linuxDriver.desktop", "") ?: ""
+            ?: prefs(context).getString("linuxDriver.desktop", null)
+
+    // Mali with no Linux driver chosen: games draw on the bundled Mali system driver (the session stays on PanVK, see
+    // LinuxVulkanDriver.effective). A stored choice wins, "Runtime default" ("") included.
+    private fun maliDefaultLinuxDriver(context: Context, mali: Boolean): String {
+        val id = com.droiddeck.launcher.gpu.LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID
+        return if (mali && com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).isBridge(id)) id else ""
+    }
 
     fun setLinuxDriver(context: Context, id: String) {
         prefs(context).edit().putString("linuxDriver", id).apply()
@@ -474,7 +484,7 @@ object SessionPrefs {
     fun settleGpuDriverMode(context: Context) {
         val p = prefs(context)
         if (p.contains("gpuDriverMode")) return
-        val chosen = androidDriver(context).isNotEmpty() || linuxDriver(context).isNotEmpty()
+        val chosen = androidDriver(context).isNotEmpty() || !storedLinuxDriver(context).isNullOrEmpty()
         p.edit().putString("gpuDriverMode", if (chosen) GPU_DRIVERS_MANUAL else GPU_DRIVERS_AUTO).apply()
     }
 
