@@ -321,52 +321,112 @@ def sandboxed_apps(proc=Path("/proc")):
     return apps
 
 
+def ancestry(pid, proc=Path("/proc"), limit=12):
+    """'pid comm < parent comm < ...' for the decision log; a reaper shows its launch id."""
+    parts = []
+    for _ in range(limit):
+        try:
+            comm = (proc / str(pid) / "comm").read_text().strip()
+            if comm == "reaper":
+                launched = reaper_launch_id(pid, proc)
+                comm = "reaper[%s]" % ("?" if launched is None else "AppId=%d" % launched if launched else "bare")
+            parts.append("%d %s" % (pid, comm))
+            stat = (proc / str(pid) / "stat").read_text()
+            pid = int(stat[stat.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            parts.append("%s ?" % pid)
+            break
+        if pid <= 1:
+            parts.append("%d" % pid)
+            break
+    return " < ".join(parts)
+
+
 def window_steam_app(win, flatpaks, proc=Path("/proc")):
-    match = STEAM_APP_CLASS.match(win.get("class") or "")
-    if match:
-        return match.group(1) if os.environ.get("BL_STEAM_CLIENT_ARCH") == "x86_64" else None
+    """The app id to tag the window with, or None, and the reason."""
+    cls = win.get("class") or ""
+    match = STEAM_APP_CLASS.match(cls)
+    if match and os.environ.get("BL_STEAM_CLIENT_ARCH") == "x86_64":
+        return match.group(1), "x86-64 client, class %s" % cls
     pid = win.get("pid")
     if pid:
         launched = reaper_launch(pid, proc)
-        app = steam_app_id(process_env(pid, proc))
-        if launched is not None:
-            # A window opened after its launch's reaper died (Ubisoft Connect starting the game) sits
-            # under another reaper, so gamescope gives it that reaper's id (769 or none) instead of its own.
-            if launched is False or not app or app == STEAM_UI_APP or launched == app:
-                return None
-            return str(app)
+        # Proton names every window steam_app_<SteamAppId>, so on the arm64 client the class gives the id too.
+        app = steam_app_id(process_env(pid, proc)) or (steam_app_id({b"SteamAppId": match.group(1).encode()}) if match else None)
+        if launched is False:
+            return None, "a reaper above it has no readable cmdline"
+        if app == STEAM_UI_APP:
+            return None, "Steam's own app id 769"
+        if app and launched == app:
+            return None, "under its own launch reaper AppId=%d, gamescope resolves it" % app
         if app:
-            return str(app)
-    app = flatpaks().get((win.get("class") or "").lower())
-    return str(app) if app else None
+            # A window opened after its launch's reaper died (Ubisoft Connect starting the game) sits under
+            # another reaper or none, so gamescope gives it that reaper's id (769 or none) instead of its own.
+            return str(app), ("no reaper above it" if launched is None
+                              else "under reaper AppId=%s, not its own" % (launched or "none (bare)"))
+        if launched is not None:
+            return None, "no SteamAppId in its process"
+    elif match:
+        return None, "class %s but no _NET_WM_PID" % cls
+    app = flatpaks().get(cls.lower())
+    if app:
+        return str(app), "sandboxed app %s" % cls
+    return None, "no SteamAppId, no reaper, no sandboxed app match"
+
+
+TAG_DECISIONS = {}
 
 
 def tag_game_windows(snap, proc=Path("/proc")):
+    """Tag game-display windows gamescope cannot give an app id. Every decision on a viewable managed
+    window is logged once (and again when it changes), so a session log shows why a window was or
+    was not tagged."""
     tagged = False
     found = []
+    seen = set()
 
     def flatpaks():
         if not found:
             found.append(sandboxed_apps(proc))
         return found[0]
 
+    def note(display, win, decision):
+        key = (display, win["window"])
+        seen.add(key)
+        if TAG_DECISIONS.get(key) == decision:
+            return False
+        TAG_DECISIONS[key] = decision
+        return True
+
     for display, wins in snap.get("displays", {}).items():
         if display == os.environ.get("DISPLAY"):
             continue
         for win in wins:
-            if win.get("appId") or win.get("map") != "viewable" or win.get("overrideRedirect") or win.get("inputOnly"):
+            if win.get("map") != "viewable" or win.get("overrideRedirect") or win.get("inputOnly"):
                 continue
-            app = window_steam_app(win, flatpaks, proc)
+            pid = win.get("pid")
+            label = "game window 0x%x on %s (class %s, pid %s)" % (win["window"], display, win.get("class"), pid)
+            if win.get("appId"):
+                if note(display, win, ("has", win["appId"])):
+                    log("%s skipped: already has STEAM_GAME=%s" % (label, win["appId"]))
+                continue
+            app, reason = window_steam_app(win, flatpaks, proc)
             if not app:
+                if note(display, win, ("skip", reason)):
+                    log("%s skipped: %s; chain %s" % (label, reason, ancestry(pid, proc) if pid else "-"))
                 continue
+            note(display, win, ("tag", app))
             try:
                 done = subprocess.run(["xprop", "-display", display, "-id", str(win["window"]), "-f", "STEAM_GAME", "32c",
                                        "-set", "STEAM_GAME", app],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0
             except (OSError, subprocess.TimeoutExpired):
                 done = False
-            log("game window %s on %s tagged STEAM_GAME=%s: %s" % (win["window"], display, app, "ok" if done else "failed"))
+            log("%s tagged STEAM_GAME=%s: %s (%s; chain %s)" % (label, app, "ok" if done else "failed", reason,
+                                                               ancestry(pid, proc) if pid else "-"))
             tagged = tagged or done
+    for key in [key for key in TAG_DECISIONS if key not in seen]:
+        del TAG_DECISIONS[key]
     return tagged
 
 

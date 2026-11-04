@@ -270,6 +270,44 @@ class AgentTest(unittest.TestCase):
                 {"window": 11, "map": "viewable", "class": "helper", "pid": 32}]
         self.assertEqual(self.tag(wins), (False, []))
 
+    def test_a_proton_window_left_by_its_killed_launch_is_tagged_on_the_arm64_client(self):
+        # Proton names its windows steam_app_<SteamAppId>; the arm64 client must not stop at the class.
+        self.fake_proc(20, 1, "reaper", {}, ["reaper", "SteamLaunch", "AppId=769", "--", "steam"])
+        self.fake_proc(21, 20, "upc.exe", {"SteamAppId": "2274579123"})
+        self.fake_proc(30, 1, "wineserver", {})
+        self.fake_proc(31, 30, "WatchDogs2.exe", {"SteamAppId": "2274579123"})
+        self.fake_proc(40, 1, "reaper", {}, ["reaper", "SteamLaunch", "AppId=2274579123", "--", "proton"])
+        self.fake_proc(41, 40, "WatchDogs2.exe", {"SteamAppId": "2274579123"})
+        wins = [{"window": 9, "map": "viewable", "class": "steam_app_2274579123", "pid": 21},
+                {"window": 10, "map": "viewable", "class": "steam_app_2274579123", "pid": 31},
+                {"window": 11, "map": "viewable", "class": "steam_app_2274579123", "pid": 41}]
+        self.assertEqual(self.tag(wins), (True, ["2274579123", "2274579123"]))
+
+    def test_the_class_gives_the_id_when_the_environment_cannot_be_read(self):
+        self.fake_proc(30, 1, "wineserver", {})
+        self.fake_proc(31, 30, "WatchDogs2.exe", {})
+        win = {"window": 10, "map": "viewable", "class": "steam_app_2274579123", "pid": 31}
+        self.assertEqual(self.tag([win]), (True, ["2274579123"]))
+
+    def test_every_tag_decision_is_logged_once(self):
+        self.fake_proc(40, 1, "reaper", {}, ["reaper", "SteamLaunch", "AppId=550", "--", "proton"])
+        self.fake_proc(41, 40, "game.exe", {"SteamAppId": "550"})
+        self.fake_proc(30, 1, "wineserver", {})
+        self.fake_proc(31, 30, "upc.exe", {"SteamAppId": "2274579123"})
+        snap = {"displays": {":0": [], ":1": [
+            {"window": 50, "map": "viewable", "class": "steam_app_550", "pid": 41},
+            {"window": 51, "map": "viewable", "class": "steam_app_2274579123", "pid": 31}]}}
+        with patch.dict(os.environ, {"DISPLAY": ":0", "BL_STEAM_CLIENT_ARCH": "arm64"}), \
+                patch.object(agent.subprocess, "run") as run, patch.object(agent, "log") as log:
+            run.return_value.returncode = 0
+            agent.tag_game_windows(snap, proc=self.dir / "proc")
+            agent.tag_game_windows(snap, proc=self.dir / "proc")
+        lines = [call.args[0] for call in log.call_args_list]
+        self.assertEqual(1, sum("0x32 on :1" in line and "skipped: under its own launch reaper AppId=550" in line
+                                and "41 game.exe < 40 reaper[AppId=550] < 1" in line for line in lines), lines)
+        self.assertEqual(2, sum("0x33 on :1" in line and "tagged STEAM_GAME=2274579123: ok (no reaper above it" in line
+                                for line in lines), lines)
+
     def test_the_x86_client_still_tags_its_game_classes(self):
         win = {"window": 13, "map": "viewable", "class": "steam_app_550", "pid": None}
         self.assertEqual(self.tag([win], arch="x86_64"), (True, ["550"]))
