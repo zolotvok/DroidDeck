@@ -173,6 +173,17 @@ if [ -n "${BL_VK_DRIVER:-}" ]; then
     export VK_ICD_FILENAMES="$BL_VK_DRIVER"
     echo "== vulkan driver: imported $bl_icd_lib (via $BL_VK_DRIVER)"
     [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ] && export BL_SESSION_PANVK=1
+    if [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ]; then
+      # Mali defaults for the PanVK session, each only when unset. Steam's GPU-drawn menus hold 3-7 GB in the web helper
+      # (zink asks PanVK for multisampled-render-to-single-sampled on every image, and PanVK backs each with hidden MSAA
+      # copies), so the menus are drawn in software until the PanVK fix for that is verified; BL_STEAM_GPU_MENUS=1 keeps
+      # them on the GPU. "PanVK light" (no GS/tess, no AFBC/CRC, tiler heap renewed every 32 frames) removed the Steam UI
+      # artifacts and the tiler-heap OOM, and vkd3d-proton runs without VK_EXT_present_timing.
+      [ "${BL_STEAM_GPU_MENUS:-0}" = 1 ] || export BL_STEAM_SOFTWARE_MENUS=${BL_STEAM_SOFTWARE_MENUS:-1}
+      export PANVK_DEBUG=${PANVK_DEBUG-no_gs,no_tess,noafbc,no_crc}
+      export PANVK_KBASE_HEAP_RENEW_INTERVAL=${PANVK_KBASE_HEAP_RENEW_INTERVAL-32}
+      export VKD3D_DISABLE_EXTENSIONS=${VKD3D_DISABLE_EXTENSIONS-VK_EXT_present_timing}
+    fi
     if [ "${bl_icd_lib##*/}" = libvulkan_panfrost.so ] && [ -z "${ENABLE_GAMESCOPE_WSI+set}" ]; then
       export ENABLE_GAMESCOPE_WSI=0
       echo "== vulkan driver: PanVK, games present through Xwayland (ENABLE_GAMESCOPE_WSI=0): through gamescope's WSI layer only their first frames reach the screen"
@@ -1058,7 +1069,7 @@ case $mode in
     [ "${steam_cef_gpu:-1}" = 1 ] || _bl_cef=(-cef-disable-gpu)
     if [ "${BL_STEAM_SOFTWARE_MENUS:-0}" = 1 ]; then
       _bl_cef=(-cef-disable-gpu)
-      echo "== steam: menus drawn in software (session on the Mali system driver)"
+      echo "== steam: menus drawn in software (BL_STEAM_SOFTWARE_MENUS=1; BL_STEAM_GPU_MENUS=1 for the GPU)"
     fi
     if [ "${BL_DESKTOP:-}" = 1 ] && [ "${BL_STEAM_UI:-}" = desktop ]; then
       _bl_cef=(-cef-disable-gpu)

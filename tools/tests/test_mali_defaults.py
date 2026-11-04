@@ -185,5 +185,40 @@ class GameEnvMaliDefaultsTest(unittest.TestCase):
             self.assertIn('"%s"' % name, source)
 
 
+class SessionMaliDefaultsTest(unittest.TestCase):
+    def block(self):
+        source = (BIN / "droiddeck-session").read_text()
+        start = source.index('if [ -n "${BL_VK_DRIVER:-}" ]; then')
+        return source[start:source.index("  unset bl_icd_lib\nfi\n", start) + len("  unset bl_icd_lib\nfi\n")]
+
+    def session(self, library, **extra):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp) / library
+            lib.write_bytes(b"")
+            icd = Path(tmp) / "icd.json"
+            icd.write_text(json.dumps({"ICD": {"library_path": str(lib)}}))
+            env = {"PATH": os.environ["PATH"], "BL_VK_DRIVER": str(icd), **extra}
+            script = self.block() + '\nfor n in BL_STEAM_SOFTWARE_MENUS PANVK_DEBUG PANVK_KBASE_HEAP_RENEW_INTERVAL ' \
+                'VKD3D_DISABLE_EXTENSIONS; do printf "%s=%s\\n" "$n" "${!n-unset}"; done >&3'
+            out = subprocess.run(["bash", "-c", "exec 3>&1 >/dev/null\n" + script], env=env, text=True,
+                                 capture_output=True, check=True).stdout
+            return dict(line.split("=", 1) for line in out.splitlines())
+
+    def test_panvk_session_defaults_to_software_menus_and_panvk_light(self):
+        self.assertEqual(self.session("libvulkan_panfrost.so"), {
+            "BL_STEAM_SOFTWARE_MENUS": "1", "PANVK_DEBUG": "no_gs,no_tess,noafbc,no_crc",
+            "PANVK_KBASE_HEAP_RENEW_INTERVAL": "32", "VKD3D_DISABLE_EXTENSIONS": "VK_EXT_present_timing"})
+
+    def test_the_users_own_values_win(self):
+        got = self.session("libvulkan_panfrost.so", BL_STEAM_GPU_MENUS="1", PANVK_DEBUG="", VKD3D_DISABLE_EXTENSIONS="X")
+        self.assertEqual(got["BL_STEAM_SOFTWARE_MENUS"], "unset")
+        self.assertEqual(got["PANVK_DEBUG"], "")
+        self.assertEqual(got["VKD3D_DISABLE_EXTENSIONS"], "X")
+        self.assertEqual(self.session("libvulkan_panfrost.so", BL_STEAM_SOFTWARE_MENUS="0")["BL_STEAM_SOFTWARE_MENUS"], "0")
+
+    def test_other_session_drivers_are_untouched(self):
+        self.assertEqual(set(self.session("libvulkan_freedreno.so").values()), {"unset"})
+
+
 if __name__ == "__main__":
     unittest.main()
