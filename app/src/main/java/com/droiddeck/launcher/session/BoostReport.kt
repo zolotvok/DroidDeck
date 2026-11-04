@@ -195,7 +195,7 @@ object BoostReport {
     fun start(context: Context, dir: File): String {
         stop()
         synchronized(letGoCounts) { letGoCounts.clear() }
-        if (!SessionPrefs.performanceBoost(context)) return "boost report: off"
+        if (!SessionPrefs.performanceBoostActive(context)) return "boost report: off"
         val r = Run(File(dir, "boost.log"), SessionPrefs.boostCheck(context))
         run = r
         val soc = if (Build.VERSION.SDK_INT >= 31) ", ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}" else ""

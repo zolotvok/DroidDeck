@@ -740,6 +740,21 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("performanceBoost", on).apply()
     }
 
+    /**
+     * What a session runs with: `BL_GAME_BOOST=1` or `=0` in the shared game environment beats the
+     * switch (the test lane's A/B path, no UI step); anything else leaves the switch. Default off on
+     * every phone but the Odin 3 ([GameThreadHints.measuredHere]).
+     */
+    fun performanceBoostActive(context: Context): Boolean =
+        boostOverride(runCatching { GameEnvironmentStore.read(context).shared["BL_GAME_BOOST"] }.getOrNull())
+            ?: performanceBoost(context)
+
+    internal fun boostOverride(value: String?): Boolean? = when (value?.trim()) {
+        "1" -> true
+        "0" -> false
+        else -> null
+    }
+
     /** Check the boost: BoostReport pauses the boost every other minute of play and compares. */
     fun boostCheck(context: Context): Boolean = prefs(context).getBoolean("boostCheck", false)
 

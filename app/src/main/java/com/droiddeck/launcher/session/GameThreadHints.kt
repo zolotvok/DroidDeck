@@ -78,7 +78,7 @@ object GameThreadHints {
 
     private fun begin(context: Context): String {
         refused = 0
-        if (!SessionPrefs.performanceBoost(context)) return "game thread hints: off"
+        if (!SessionPrefs.performanceBoostActive(context)) return "game thread hints: off"
         if (Build.VERSION.SDK_INT < 31) return "game thread hints: needs Android 12"
         val hm = context.getSystemService(PerformanceHintManager::class.java)
             ?: return "game thread hints: no PerformanceHintManager"

@@ -223,7 +223,7 @@ object SamsungPerf {
     /** At a session's start. The line is for the log. */
     @Synchronized
     fun start(context: Context): String {
-        if (!SessionPrefs.performanceBoost(context)) return "samsung boost: off"
+        if (!SessionPrefs.performanceBoostActive(context)) return "samsung boost: off"
         unavailable?.let { return "samsung boost: $it" }
         val app = context.applicationContext
         worker?.interrupt()
