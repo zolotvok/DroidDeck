@@ -217,13 +217,13 @@ class DesktopSteamLaunchTest(unittest.TestCase):
                                         env=env, text=True, capture_output=True, check=True).stdout
                 self.assertEqual(result, want)
 
-    def test_web_helper_gpu_heap_driconf_on_panvk(self):
+    def test_web_helper_gpu_heap_driconf_is_opt_in(self):
         source = (BIN / 'droiddeck-session').read_text()
-        setup = source[source.index('    # Web helper GPU heap on PanVK.'):source.index('    export STEAMOS_STEAM_SHUTDOWN_SENTINEL=')]
+        setup = source[source.index('    # Web helper GPU heap on PanVK, off by default.'):source.index('    export STEAMOS_STEAM_SHUTDOWN_SENTINEL=')]
         conf = self.root / 'drirc.d/90-droiddeck-steamwebhelper.conf'
-        for panvk, value, want in [('1', None, '0.125'), ('1', '0.25', '0.25'), ('1', '0.05', '0.05'), ('1', '1', '1'),
-                                   ('1', '0', None), ('1', 'off', None), ('1', '0.0', None), ('1', '2', '0.125'),
-                                   ('1', '0.1x', '0.125'), ('', None, None), ('', '0.25', None)]:
+        for panvk, value, want in [('1', None, None), ('1', '0.25', '0.25'), ('1', '0.05', '0.05'), ('1', '1', '1'),
+                                   ('1', '0', None), ('1', 'off', None), ('1', '0.0', None), ('1', '2', None),
+                                   ('1', '0.1x', None), ('', None, None), ('', '0.25', None)]:
             with self.subTest(panvk=panvk, value=value):
                 conf.parent.mkdir(exist_ok=True)
                 conf.write_text('stale')
@@ -244,7 +244,8 @@ class DesktopSteamLaunchTest(unittest.TestCase):
         # The file parses as XML and has no <device driver=...> filter.
         import xml.etree.ElementTree as ET
         conf.unlink(missing_ok=True)
-        subprocess.run(['bash', '-c', setup], env=dict(self.env, BL_SESSION_PANVK='1', BL_DRIRC_DIR=str(conf.parent)),
+        subprocess.run(['bash', '-c', setup], env=dict(self.env, BL_SESSION_PANVK='1', BL_DRIRC_DIR=str(conf.parent),
+                                                        BL_WEBHELPER_HEAP_PERCENT='0.125'),
                        check=True, capture_output=True)
         root = ET.parse(conf).getroot()
         self.assertEqual(root.tag, 'driconf')

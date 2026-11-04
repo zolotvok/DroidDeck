@@ -1081,19 +1081,18 @@ case $mode in
         echo "== steam: Deck mode on (-steamdeck -steamos3)"
       fi
     fi
-    # Web helper GPU heap on PanVK. PanVK reports 3/4 of the RAM as its one heap, and zink sizes its BO reuse cache
-    # (heap/8) and its out-of-memory flush (0.8 x heap) from it, per screen; the web helper's browser process holds five
-    # zink screens (Steam's compositor, ANGLE, the GPU probe), 5-9 GB of GPU memory with GPU-drawn menus. Mesa reads this
-    # driconf file only in a process named steamwebhelper (PanVK's own config dir; Ubuntu's Mesa reads /usr/share/drirc.d),
-    # so games keep the full heap. PanVK does not cap allocations at the heap size, the smaller heap only shrinks those caches.
-    # BL_WEBHELPER_HEAP_PERCENT=<0.01..1> sets the share of RAM, 0 or off removes the file (the old behaviour).
+    # Web helper GPU heap on PanVK, off by default. A smaller heap (driconf heap_memory_percent for the executable
+    # steamwebhelper, PanVK's own config dir) did not shrink the 5-9 GB the browser holds with GPU-drawn menus: those are
+    # live images (zink 26.0 asks PanVK for MSRTSS on every single-sample image, and PanVK backs each one with its 2x-16x
+    # copies), not zink caches. It only made zink flush for out-of-memory all the time (menus at 1-2 fps). The default
+    # removes the file an earlier build wrote; BL_WEBHELPER_HEAP_PERCENT=<0.01..1> still writes it, for an A/B.
     _bl_drirc=${BL_DRIRC_DIR:-/usr/local/share/drirc.d}/90-droiddeck-steamwebhelper.conf
-    _bl_heap=${BL_WEBHELPER_HEAP_PERCENT:-0.125}
+    _bl_heap=${BL_WEBHELPER_HEAP_PERCENT:-0}
     if [ "$_bl_heap" = off ] || [[ $_bl_heap =~ ^0(\.0*)?$ ]]; then
       _bl_heap=0
     elif ! [[ $_bl_heap =~ ^(0\.0[1-9][0-9]*|0\.[1-9][0-9]*|1|1\.0*)$ ]]; then
-      echo "== steam: BL_WEBHELPER_HEAP_PERCENT=$_bl_heap is not a share of RAM (0.01..1), using 0.125"
-      _bl_heap=0.125
+      echo "== steam: BL_WEBHELPER_HEAP_PERCENT=$_bl_heap is not a share of RAM (0.01..1), leaving PanVK's heap alone"
+      _bl_heap=0
     fi
     [ "${BL_SESSION_PANVK:-0}" = 1 ] || _bl_heap=0
     if [ "$_bl_heap" != 0 ]; then
