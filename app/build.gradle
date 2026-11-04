@@ -122,6 +122,12 @@ def variantSuffixes = rootProject.file('tools/release/variants.txt').readLines()
     .collect { def f = it.trim().split(/\s+/); "${f[1]}=${f[2] == '-' ? '' : f[2]}" }
     .join(';')
 
+// Smoke-test builds only: -PtestApplicationId=<id> or DROIDDECK_TEST_APPLICATION_ID builds the same code under
+// another app id (the team's test phone: the old com.droiddeck.launcher install with its runtime and games). Such a
+// build is debuggable, so the phone tools' run-as keeps working, and tools/build_local.sh signs it with the testkey.
+def testApplicationId = (project.findProperty('testApplicationId')
+    ?: providers.environmentVariable('DROIDDECK_TEST_APPLICATION_ID').getOrNull())?.toString()?.trim() ?: null
+
 def maliReleaseKeyDir = new File((project.findProperty('releaseKeyDir')
     ?: providers.environmentVariable('DROIDDECK_RELEASE_KEY_DIR').getOrNull()
     ?: localBuildOptions.getProperty('droiddeck.releaseKeyDir')
@@ -142,7 +148,7 @@ android {
 
     defaultConfig {
         // Own id: installs next to the official DroidDeck (com.droiddeck.launcher), with its own data.
-        applicationId "com.droiddeck.launcher.mali"
+        applicationId testApplicationId ?: "com.droiddeck.launcher.mali"
         minSdkVersion 26
         targetSdkVersion 28
         versionCode 18
@@ -227,7 +233,11 @@ android {
         }
         release {
             minifyEnabled false
-            if (maliReleaseKey) {
+            if (testApplicationId) {
+                debuggable true
+                manifestPlaceholders.appLabel = 'DroidDeck Mali (test)'
+            }
+            if (maliReleaseKey && !testApplicationId) {
                 signingConfig signingConfigs.maliRelease
             } else {
                 logger.warn("DroidDeck Mali: no release key in ${maliReleaseKeyDir} - the release APK is signed with the testkey")

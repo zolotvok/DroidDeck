@@ -565,7 +565,11 @@ fi
 # lineage from the testkey is needed). DROIDDECK_RELEASE_KEY_DIR as in app/build.gradle; the password is read
 # from the file, never printed (the key password is the same; apksigner then reads it once).
 mali_key_dir=${DROIDDECK_RELEASE_KEY_DIR:-${HOME}/.config/droiddeck-mali-release}
-if [[ -z "${signing_env}" && "${build_variant}" == release && -f "${mali_key_dir}/release.jks" && -f "${mali_key_dir}/store-password" ]]; then
+# A smoke-test build under another app id (DROIDDECK_TEST_APPLICATION_ID, app/build.gradle) keeps the testkey, so it
+# installs over the team's old com.droiddeck.launcher install.
+if [[ -n "${DROIDDECK_TEST_APPLICATION_ID:-}" ]]; then
+    echo "Test app id ${DROIDDECK_TEST_APPLICATION_ID}: the APK stays signed with the testkey"
+elif [[ -z "${signing_env}" && "${build_variant}" == release && -f "${mali_key_dir}/release.jks" && -f "${mali_key_dir}/store-password" ]]; then
     echo "Signing with the DroidDeck Mali release key (${mali_key_dir}/release.jks)"
     "${build_tools}/apksigner" sign \
         --ks "${mali_key_dir}/release.jks" --ks-type PKCS12 --ks-pass "file:${mali_key_dir}/store-password" \
