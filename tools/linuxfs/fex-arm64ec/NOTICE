@@ -1,0 +1,16 @@
+libarm64ecfex.dll (md5 a2448b03b9ca32b6a641d687e9773074)
+
+FEX (https://github.com/FEX-Emu/FEX) at tag FEX-2610-101-g1c4f04b (commit 1c4f04b71a4d, the arm64ec FEX in
+Proton Experimental (ARM64)), built with one patch that recompiles JIT blocks which keep trapping on unaligned atomics
+with an out-of-line fallback:
+
+  patches/fex/0001-arm64ec-recompile-blocks-that-keep-trapping-on-unaligned-atomics.patch
+  in Blobferry, https://github.com/zolotvok/blobferry, commit ab9f7d7 (md5 of the patch 52cceab2a86f9242a52572d424660405)
+
+FEX and this patch are under the MIT license; see LICENSE (FEX's own LICENSE, Copyright (c) 2019 Ryan Houdek and the FEX
+contributors). The patch is not part of FEX and is not supported by the FEX project.
+
+DroidDeck puts this DLL into an ARM64 Proton's files/lib/wine/aarch64-windows/ before a game starts, only over a stock
+DLL of the same FEX build, and again after a Proton update or verify. BL_FEX_ARM64EC_PATCH=0 (session or a game's
+environment) keeps or puts back the stock DLL. FEX_UNALIGNED_ATOMIC_FALLBACK=0 turns the patched behaviour off inside
+the DLL.

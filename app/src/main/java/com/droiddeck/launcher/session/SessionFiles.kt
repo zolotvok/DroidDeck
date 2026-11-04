@@ -190,6 +190,10 @@ object SessionFiles {
             // Files the per-game Mali defaults point at (droiddeck-mali-defaults).
             listOf("usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv", "usr/share/droiddeck-mali/mali-debug-wd2.config")
                 .map { it to it }
+        // The patched FEX arm64ec DLL with its MIT notice; droiddeck-mali-defaults puts it into ARM64 Protons at game start.
+        val fexArm64ec = listOf("libarm64ecfex.dll", "LICENSE", "NOTICE").map {
+            "usr/local/lib/droiddeck-fex-arm64ec/$it" to "usr/local/lib/droiddeck-fex-arm64ec/$it"
+        }
         val optional = (arrayOf(
             "usr/local/bin/gamescope" to "usr/local/bin/gamescope",
             "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so" to "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so",
@@ -197,7 +201,7 @@ object SessionFiles {
             "usr/local/lib/droiddeck-pipewire.tzst" to "usr/local/lib/droiddeck-pipewire.tzst",
             "usr/local/share/licenses/uruntime/LICENSE" to "usr/local/share/licenses/uruntime/LICENSE",
             "usr/local/lib/droiddeck-dirt/ws2_32.dll" to "usr/local/lib/droiddeck-dirt/ws2_32.dll",
-        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge + maliFiles).filter { (asset, _) ->
+        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge + maliFiles + fexArm64ec).filter { (asset, _) ->
             val dir = asset.substringBeforeLast('/')
             runCatching { context.assets.list("linuxfs/$dir")?.contains(asset.substringAfterLast('/')) == true }.getOrDefault(false)
         }

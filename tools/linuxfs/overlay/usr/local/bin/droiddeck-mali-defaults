@@ -1,19 +1,22 @@
 #!/usr/bin/python3
 """Mali defaults, loaded by droiddeck-game-env: the settings each game needed on the Mali system driver (the bridge)
-in the fork's phone runs.
+in the fork's phone runs, and the patched FEX arm64ec DLL.
 
 Games are keyed by their Steam app id or their store id (an Epic AppName from the game folder's store sidecar), never
 by the compatdata id of a store game's Steam shortcut, which differs per install. Only a game on the bridge gets its
 recipe; the app's own game settings still win key by key (a null value there removes a key). BL_MALI_GAME_DEFAULTS=0
 in the session, the shared settings or a game's settings turns the recipes off."""
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
 
 SWITCH = "BL_MALI_GAME_DEFAULTS"
+FEX_SWITCH = "BL_FEX_ARM64EC_PATCH"
 SIDECAR = ".droiddeck-store.json"
 SIDECAR_DEPTH = 6
 MALI_DATA = "/usr/share/droiddeck-mali"
@@ -222,3 +225,116 @@ def apply_prefix(found, env):
     prefix = env.get("STEAM_COMPAT_DATA_PATH", "").rstrip("/")
     return wpad_off(prefix) if prefix else None
 
+
+FEX_DLL = "files/lib/wine/aarch64-windows/libarm64ecfex.dll"
+FEX_PATCHED = "/usr/local/lib/droiddeck-fex-arm64ec/libarm64ecfex.dll"
+FEX_PATCHED_MD5 = "a2448b03b9ca32b6a641d687e9773074"
+FEX_BASE = b"FEX-2610-101-g1c4f04b"
+FEX_BASE_MD5 = ("863695500852d6df6a7b6b971893b4c1",)
+FEX_VERSION = re.compile(rb"FEX-\d{4}(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?")
+
+
+def components_dir():
+    return Path(os.environ.get("HOME", "/root")) / ".local/share/droiddeck-components"
+
+
+def md5_of(path):
+    try:
+        digest = hashlib.md5(usedforsecurity=False)
+    except TypeError:
+        digest = hashlib.md5()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fex_version(path):
+    try:
+        found = FEX_VERSION.findall(Path(path).read_bytes())
+    except OSError:
+        return None
+    return max(found, key=len) if found else None
+
+
+def proton_build(tool):
+    try:
+        with open(tool / "version", encoding="utf-8", errors="replace") as f:
+            parts = f.readline().split()
+    except OSError:
+        return ""
+    return parts[1] if len(parts) > 1 else (parts[0] if parts else "")
+
+
+def components_choice(tool, app_id, folder):
+    """True when the app's Components screen manages this Proton's FEX DLL for this game."""
+    build = proton_build(tool)
+    try:
+        with open(folder / "desired.tsv", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                fields = line.rstrip("\n").split("\t")
+                if (len(fields) == 7 and fields[0] in ("*", app_id) and fields[1] == tool.name and fields[2] == build
+                        and fields[3] == "fex" and fields[4] == FEX_DLL):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def place(source, target):
+    staged = target.with_name(target.name + ".bl-new")
+    shutil.copyfile(source, staged)
+    os.chmod(staged, 0o644)
+    os.replace(staged, target)
+
+
+def fex_patch(command, env, app_id=None, folder=None, patched=FEX_PATCHED):
+    """Puts the patched libarm64ecfex.dll into an ARM64 Proton before a game starts, and puts it back after a Proton
+    update or verify replaced it. Only over a stock DLL of the FEX build the patch was made from; a game with
+    BL_FEX_ARM64EC_PATCH=0 gets the stock DLL back. Returns a note or None."""
+    if len(command) < 2 or command[1] != "waitforexitandrun":
+        return None
+    tool = Path(command[0]).parent
+    target = tool / FEX_DLL
+    if not target.is_file():
+        return None
+    folder = Path(folder) if folder else components_dir()
+    if components_choice(tool, app_id or "", folder):
+        return "FEX arm64ec: the Components choice for %s stays" % tool.name
+    stock_dir = folder / "fex-arm64ec"
+    record = stock_dir / (re.sub(r"[^A-Za-z0-9._+-]+", "_", tool.name) + ".stock")
+    try:
+        current = md5_of(target)
+        if switch_off(FEX_SWITCH, env):
+            if current != FEX_PATCHED_MD5:
+                return None
+            try:
+                stock = stock_dir / (record.read_text().strip() + ".dll")
+            except OSError:
+                stock = None
+            if stock is None or not stock.is_file() or md5_of(stock) != stock.stem:
+                return "FEX arm64ec: %s=0 but no stock copy of %s's DLL; the patched one stays" % (FEX_SWITCH, tool.name)
+            place(stock, target)
+            return "FEX arm64ec: stock DLL for this game (%s=0)" % FEX_SWITCH
+        if current == FEX_PATCHED_MD5:
+            return None
+        if current not in FEX_BASE_MD5 and fex_version(target) != FEX_BASE:
+            version = fex_version(target)
+            return "FEX arm64ec: %s has %s, not the patched DLL's base %s; left as it is" % (
+                tool.name, (version or b"an unnamed FEX").decode(), FEX_BASE.decode())
+        if not os.path.isfile(patched) or md5_of(patched) != FEX_PATCHED_MD5:
+            return "FEX arm64ec: the bundled patched DLL is missing or damaged (%s); stock kept" % patched
+        stock_dir.mkdir(parents=True, exist_ok=True)
+        stock = stock_dir / (current + ".dll")
+        if not stock.is_file() or md5_of(stock) != current:
+            place(target, stock)
+        record.write_text(current + "\n")
+        place(Path(patched), target)
+    except OSError as error:
+        return "FEX arm64ec: not changed (%s)" % error
+    try:
+        with open(folder / "reapplied.log", "a", encoding="utf-8") as log:
+            log.write("%d\t%s\t1\n" % (time.time(), tool.name))
+    except OSError:
+        pass
+    return "FEX arm64ec: patched DLL put in %s (unaligned-atomic fallback; %s=0 for stock)" % (tool.name, FEX_SWITCH)

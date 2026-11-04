@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import runpy
@@ -6,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 BIN = Path(__file__).resolve().parents[1] / "linuxfs/overlay/usr/local/bin"
 OVERLAY = BIN.parents[2]
@@ -13,6 +15,10 @@ MALI = runpy.run_path(str(BIN / "droiddeck-mali-defaults"))
 GAME_ENV = runpy.run_path(str(BIN / "droiddeck-game-env"))
 BRIDGE = {"ENABLE_MALI_COMPAT": "1", "VK_DRIVER_FILES": "/usr/lib/mali_bridge/mali_bridge_icd.json",
           "DXVK_CONFIG": "dxvk.enableGraphicsPipelineLibrary = False"}
+
+
+def md5(data):
+    return hashlib.md5(data).hexdigest()
 
 
 class RecipeTest(unittest.TestCase):
@@ -142,6 +148,78 @@ class WpadTest(unittest.TestCase):
         self.assertFalse(self.reg.parent.exists())
 
 
+class FexPatchTest(unittest.TestCase):
+    STOCK = b"MZ stock FEX-2610-101-g1c4f04b"
+    PATCHED = b"MZ patched FEX-2610-101-g1c4f04b uafb"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.tool = root / "steamapps/common/Proton Experimental (ARM64)"
+        self.target = self.tool / MALI["FEX_DLL"]
+        self.target.parent.mkdir(parents=True)
+        self.target.write_bytes(self.STOCK)
+        (self.tool / "version").write_text("1761000000 experimental-11.0-20261027b\n")
+        self.bundled = root / "usr/local/lib/droiddeck-fex-arm64ec/libarm64ecfex.dll"
+        self.bundled.parent.mkdir(parents=True)
+        self.bundled.write_bytes(self.PATCHED)
+        self.components = root / "components"
+        self.components.mkdir()
+        self.patch = mock.patch.dict(MALI["fex_patch"].__globals__, {
+            "FEX_PATCHED_MD5": md5(self.PATCHED), "FEX_BASE_MD5": (md5(self.STOCK),)})
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def run_patch(self, verb="waitforexitandrun", app="2274579123", **env):
+        return MALI["fex_patch"]([str(self.tool / "proton"), verb, "game.exe"], env, app, self.components, str(self.bundled))
+
+    def test_stock_is_replaced_saved_and_put_back_after_a_proton_update(self):
+        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+        self.assertEqual((self.components / "fex-arm64ec" / (md5(self.STOCK) + ".dll")).read_bytes(), self.STOCK)
+        self.assertIn("Proton Experimental (ARM64)", (self.components / "reapplied.log").read_text())
+        self.assertIsNone(self.run_patch())
+        self.target.write_bytes(self.STOCK)
+        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+
+    def test_a_game_can_opt_out_and_back_in(self):
+        self.run_patch()
+        self.assertIn("stock DLL for this game", self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+        self.assertIsNone(self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
+        self.run_patch(BL_FEX_ARM64EC_PATCH="1")
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+
+    def test_another_fex_build_is_never_replaced(self):
+        self.target.write_bytes(b"MZ FEX-2611-3-gabcdef0")
+        self.assertIn("FEX-2611-3-gabcdef0, not the patched DLL's base", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), b"MZ FEX-2611-3-gabcdef0")
+
+    def test_same_fex_build_with_another_checksum_counts_as_stock(self):
+        self.target.write_bytes(b"MZ rebuilt FEX-2610-101-g1c4f04b")
+        self.assertIn("patched DLL put in", self.run_patch())
+
+    def test_a_damaged_bundle_keeps_stock(self):
+        self.bundled.write_bytes(b"MZ truncated")
+        self.assertIn("missing or damaged", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+
+    def test_the_components_choice_for_this_proton_wins(self):
+        row = "\t".join(["*", self.tool.name, "experimental-11.0-20261027b", "fex", MALI["FEX_DLL"], "abc", "/src"])
+        (self.components / "desired.tsv").write_text(row + "\n")
+        self.assertIn("Components choice", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+        (self.components / "desired.tsv").write_text(row.replace("*", "123", 1) + "\n")
+        self.assertIn("patched DLL put in", self.run_patch())
+
+    def test_only_game_launches_of_an_arm64_proton(self):
+        self.assertIsNone(self.run_patch(verb="run"))
+        self.target.unlink()
+        self.assertIsNone(self.run_patch())
+
+
 class GameEnvMaliDefaultsTest(unittest.TestCase):
     def test_launch_on_the_bridge_gets_the_recipe_below_the_games_own_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,7 +259,8 @@ class GameEnvMaliDefaultsTest(unittest.TestCase):
     def test_the_module_is_extracted_at_session_start(self):
         source = (Path(__file__).resolve().parents[2] / "app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt").read_text()
         for name in ("usr/local/bin/droiddeck-mali-defaults", "usr/share/droiddeck-mali/mali-debug-wd2.config",
-                     "usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv"):
+                     "usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv",
+                     "usr/local/lib/droiddeck-fex-arm64ec/$it"):
             self.assertIn('"%s"' % name, source)
 
 

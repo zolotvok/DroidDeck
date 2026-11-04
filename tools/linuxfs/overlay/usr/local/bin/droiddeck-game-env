@@ -1084,6 +1084,13 @@ def main():
             env = apply_game_debug_logs(env, config if isinstance(config, dict) else {}, debug_dir)
             if env is not before_debug:
                 print("droiddeck-game-env: game debug logs enabled for this launch", file=sys.stderr)
+            if mali:
+                try:
+                    note = mali["fex_patch"](command, env, app_id)
+                except Exception as error:
+                    note = "FEX arm64ec: not changed (%s)" % error
+                if note:
+                    print("droiddeck-game-env: " + note, file=sys.stderr)
         if gl_default and env.get("vblank_mode") == "0":
             print("droiddeck-game-env: OpenGL does not wait for the screen refresh (vblank_mode=0)", file=sys.stderr)
     if app_id and len(command) > 1 and command[1] == "waitforexitandrun":

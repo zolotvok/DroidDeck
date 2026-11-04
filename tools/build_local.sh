@@ -224,6 +224,23 @@ else
     echo "No Blobferry package found (DROIDDECK_BLOBFERRY); the APK has no bundled Mali system driver" >&2
 fi
 
+# The patched FEX arm64ec DLL (tools/linuxfs/fex-arm64ec/NOTICE): DROIDDECK_FEX_ARM64EC, by default the build of a
+# ../bridge checkout. Only the exact build droiddeck-mali-defaults expects is bundled.
+fex_arm64ec=${DROIDDECK_FEX_ARM64EC:-${repo_root}/../bridge/build/fex-build/patched-arm64ec/Bin/libarm64ecfex.dll}
+fex_arm64ec_md5=a2448b03b9ca32b6a641d687e9773074
+fex_arm64ec_out="${linuxfs_dir}/usr/local/lib/droiddeck-fex-arm64ec"
+rm -rf "${fex_arm64ec_out}"
+if [[ -f "${fex_arm64ec}" ]]; then
+    if [[ "$(python3 -c 'import hashlib, sys; print(hashlib.md5(open(sys.argv[1], "rb").read()).hexdigest())' "${fex_arm64ec}")" != "${fex_arm64ec_md5}" ]]; then
+        echo "${fex_arm64ec} is not the patched FEX arm64ec DLL (md5 ${fex_arm64ec_md5})" >&2
+        exit 1
+    fi
+    install -D -m644 "${fex_arm64ec}" "${fex_arm64ec_out}/libarm64ecfex.dll"
+    install -m644 "${repo_root}/tools/linuxfs/fex-arm64ec/LICENSE" "${repo_root}/tools/linuxfs/fex-arm64ec/NOTICE" "${fex_arm64ec_out}/"
+    echo "Bundled the patched FEX arm64ec DLL from ${fex_arm64ec}"
+else
+    echo "No patched FEX arm64ec DLL (DROIDDECK_FEX_ARM64EC); games keep Proton's own" >&2
+fi
 
 github_repo=${DROIDDECK_GITHUB_REPOSITORY:-}
 if [[ -z "${github_repo}" ]]; then
