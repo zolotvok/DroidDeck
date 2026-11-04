@@ -1,0 +1,224 @@
+#!/usr/bin/python3
+"""Mali defaults, loaded by droiddeck-game-env: the settings each game needed on the Mali system driver (the bridge)
+in the fork's phone runs.
+
+Games are keyed by their Steam app id or their store id (an Epic AppName from the game folder's store sidecar), never
+by the compatdata id of a store game's Steam shortcut, which differs per install. Only a game on the bridge gets its
+recipe; the app's own game settings still win key by key (a null value there removes a key). BL_MALI_GAME_DEFAULTS=0
+in the session, the shared settings or a game's settings turns the recipes off."""
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+SWITCH = "BL_MALI_GAME_DEFAULTS"
+SIDECAR = ".droiddeck-store.json"
+SIDECAR_DEPTH = 6
+MALI_DATA = "/usr/share/droiddeck-mali"
+CONTROL_OVERRIDE = MALI_DATA + "/vkd3d-override/control"
+WD2_DEBUG_CONFIG = MALI_DATA + "/mali-debug-wd2.config"
+
+DXVK_PACK = {
+    "MALI_COMPAT_ASYNC_PSO": "50",
+    "MALI_COMPAT_PIPELINE_CACHE": "1",
+    "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs",
+    "MALI_COMPAT_NOATT_AREA": "4096x4096",
+    "MALI_COMPAT_XFB_VS": "1",
+}
+# Ubisoft Connect stalled at the game start with the user-space ntsync (17 % -> 57 %); esync again, Connect quiet.
+UBISOFT_SYNC = {"PROTON_NO_NTSYNC": "1", "BL_SYNC": "0", "FEX_SILENTLOG": "1"}
+
+
+class Recipe:
+
+    def __init__(self, title, env, note=None, wpad=False):
+        self.title = title
+        self.env = env
+        self.note = note
+        self.wpad = wpad
+
+
+RECIPES = {
+    "epic:Angelonia": Recipe("Watch Dogs 2", dict(
+        UBISOFT_SYNC,
+        MALI_COMPAT_ASYNC_PSO="50",
+        MALI_COMPAT_PIPELINE_CACHE="1",
+        MALI_COMPAT_PIPELINE_CACHE_THREADS="dxvk-cs,MainThread",
+        MALI_COMPAT_BUDGET_MB="2048",
+        MALI_COMPAT_WLS_CLAMP="e0ff8b4d,46aad60b,653351e8,ae9a9376,92ae90c3,25785cbd",
+        MALI_DEBUG_CONFIG=WD2_DEBUG_CONFIG,
+    ), wpad=True),
+    "epic:Jasper": Recipe("Watch Dogs", dict(
+        UBISOFT_SYNC,
+        MALI_COMPAT_WLS_CLAMP="all",
+        MALI_WSI_ASYNC_PRESENT="1",
+    )),
+    "epic:Calluna": Recipe("Control", {
+        "MALI_WSI_ASYNC_PRESENT": "1",
+        "VKD3D_CONFIG": "nodxr",
+        "MALI_COMPAT_SPV_FIX": "1",
+        "VKD3D_SHADER_OVERRIDE": "Z:" + CONTROL_OVERRIDE,
+        "VKD3D_SHADER_CACHE_PATH": "0",
+        "FEX_DISKCACHE": "0",
+        "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
+        "PROTON_NO_ESYNC": "1",
+        "PROTON_NO_FSYNC": "1",
+        "PROTON_NO_NTSYNC": "1",
+        "WINEESYNC": "0",
+        "WINEFSYNC": "0",
+    }, note="tested on the game's Low preset (renderer.ini); the app does not change game settings"),
+    "steam:1245620": Recipe("Elden Ring", {
+        "VKD3D_FEATURE_LEVEL": "12_1",
+        "MALI_COMPAT_BUDGET_MB": "2048",
+        "DXVK_CONFIG": "dxgi.maxDeviceMemory = 2048",
+    }, note="feature level 12_1 (12_2 advertises ray tracing pipelines the driver does not have), 2 GB GPU budget"),
+    "steam:292030": Recipe("The Witcher 3", dict(
+        DXVK_PACK,
+        MALI_COMPAT_PIPELINE_CACHE_THREADS="dxvk-cs,MainThread",
+        DXVK_CONFIG="d3d11.maxTessFactor = 1; d3d11.samplerAnisotropy = 1; d3d11.invariantPosition = True; "
+                    "d3d11.relaxedBarriers = True; dxvk.numCompilerThreads = 4",
+    )),
+    "steam:1151640": Recipe("Horizon Zero Dawn", {
+        "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
+        "MALI_COMPAT_PIPELINE_CACHE": "2",
+        "MALI_COMPAT_FORCE_COHERENT": "1",
+    }),
+    "steam:203160": Recipe("Tomb Raider (2013)", dict(DXVK_PACK)),
+    "steam:22330": Recipe("Oblivion", dict(DXVK_PACK)),
+    "epic:ed93b18355a84230938c705121c63661": Recipe("The Long Dark", dict(
+        DXVK_PACK, DXVK_CONFIG="dxgi.deferSurfaceCreation = True")),
+    "epic:Lyrebird": Recipe("Hob", dict(
+        DXVK_PACK,
+        FEX_STRICTINPROCESSSPLITLOCKS="1",
+        WINE_CPU_TOPOLOGY="4:4,5,6,7",
+        WINEDLLOVERRIDES="d3dcompiler_43=n,b",
+    )),
+    "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1"}),
+}
+
+APPENDED = ("DXVK_CONFIG", "WINEDLLOVERRIDES")
+
+
+def say(note):
+    print("droiddeck-game-env: " + note, file=sys.stderr)
+
+
+def switch_off(name, env, config=None, app_id=None):
+    value = env.get(name)
+    if isinstance(config, dict):
+        shared = config.get("shared")
+        if isinstance(shared, dict) and name in shared:
+            value = shared[name]
+        games = config.get("games")
+        game = games.get(app_id) if isinstance(games, dict) and app_id else None
+        if isinstance(game, dict) and name in game:
+            value = game[name]
+    return isinstance(value, str) and value.strip().lower() in ("0", "off", "false", "no")
+
+
+def steam_app(env):
+    prefix = env.get("STEAM_COMPAT_DATA_PATH", "").rstrip("/")
+    value = prefix.rsplit("/", 1)[-1] if prefix else ""
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", value) or int(value) >= 2**31:
+        return None
+    return value
+
+
+def store_game(command):
+    for raw in command[2:3]:
+        arg = raw.strip().strip('"').strip("'").replace("\\", "/")
+        if "/" not in arg:
+            continue
+        folder = Path(arg).parent
+        for _ in range(SIDECAR_DEPTH):
+            try:
+                sidecar = json.loads((folder / SIDECAR).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                sidecar = None
+            if isinstance(sidecar, dict) and isinstance(sidecar.get("store"), str) and isinstance(sidecar.get("id"), str) \
+                    and sidecar["store"] and sidecar["id"]:
+                return sidecar["store"] + ":" + sidecar["id"]
+            if folder.parent == folder:
+                break
+            folder = folder.parent
+    return None
+
+
+def game_key(command, env):
+    app = steam_app(env)
+    if app and "steam:" + app in RECIPES:
+        return "steam:" + app
+    return store_game(command) if len(command) > 2 else None
+
+
+def on_bridge(env):
+    return env.get("ENABLE_MALI_COMPAT") == "1" and bool(env.get("VK_DRIVER_FILES"))
+
+
+def recipe(command, env, config=None, app_id=None):
+    """(values, notes, recipe) for this game on the bridge, or ({}, [], None)."""
+    if not on_bridge(env) or switch_off(SWITCH, env, config, app_id):
+        return {}, [], None
+    key = game_key(command, env)
+    found = RECIPES.get(key) if key else None
+    if found is None:
+        return {}, [], None
+    values = dict(found.env)
+    if "DXVK_CONFIG" in values:
+        own = env.get("DXVK_CONFIG", "").strip().rstrip(";").strip()
+        values["DXVK_CONFIG"] = own + "; " + values["DXVK_CONFIG"] if own else values["DXVK_CONFIG"]
+    notes = ["Mali defaults for %s (%s)" % (found.title, key)]
+    if found.note:
+        notes.append("%s: %s" % (found.title, found.note))
+    return values, notes, found
+
+
+def merge(fixes, values):
+    result = dict(fixes)
+    for name, value in values.items():
+        if name == "WINEDLLOVERRIDES" and result.get(name):
+            value = result[name] + ";" + value
+        result[name] = value
+    return result
+
+
+WPAD_KEY = "[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Internet Settings\\\\Connections]"
+# DefaultConnectionSettings version 0x46 with flags 0x01 (direct, no auto-detect): without the key winhttp auto-detects
+# WPAD, and the Easy Anti-Cheat thread unloads winhttp with its NotifyAddrChange still pending (the menu-freeze death).
+WPAD_VALUE = '"DefaultConnectionSettings"=hex:46,00,00,00,00,00,00,00,01' + ",00" * 47
+
+
+def wpad_off(prefix, now=None):
+    """Writes the no-auto-detect proxy key into the prefix's user.reg once. Returns a note or None."""
+    reg = Path(prefix) / "pfx" / "user.reg"
+    try:
+        text = reg.read_text(encoding="utf-8", errors="surrogateescape")
+    except FileNotFoundError:
+        return "proxy auto-detect: no user.reg yet, the key is written at the next launch"
+    except OSError as error:
+        return "proxy auto-detect left on (%s)" % error
+    if WPAD_KEY.lower() in text.lower():
+        return None
+    block = "\n%s %d\n%s\n" % (WPAD_KEY, int(now if now is not None else time.time()), WPAD_VALUE)
+    staged = reg.with_name(reg.name + ".droiddeck-tmp")
+    try:
+        staged.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", errors="surrogateescape")
+        os.chmod(staged, reg.stat().st_mode & 0o7777)
+        os.replace(staged, reg)
+    except OSError as error:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
+        return "proxy auto-detect left on (%s)" % error
+    return "proxy auto-detect off in this prefix (Internet Settings\\Connections, no WPAD)"
+
+
+def apply_prefix(found, env):
+    if found is None or not found.wpad:
+        return None
+    prefix = env.get("STEAM_COMPAT_DATA_PATH", "").rstrip("/")
+    return wpad_off(prefix) if prefix else None
+

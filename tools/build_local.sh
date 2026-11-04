@@ -212,14 +212,18 @@ if [[ -n "${blobferry}" ]]; then
     install -m644 "${blobferry_dir}/LICENSE" "${blobferry_dir}/NOTICE.md" "${linuxfs_dir}/usr/local/share/licenses/blobferry/"
     install -m644 "${blobferry_dir}"/licenses/libhybris/* "${linuxfs_dir}/usr/local/share/licenses/blobferry/libhybris/"
     basename "${blobferry_dir}" | sed 's/^blobferry-//' > "${linuxfs_dir}/usr/lib/mali_bridge/VERSION"
-    # Ubuntu's gamescope WSI manifest lacks the X11 surface extensions the bridge ICD needs (SessionFiles maliGamescopeWsi)
-    install -D -m644 "${repo_root}"/tools/linuxfs/overlay/usr/share/droiddeck-mali/VkLayer_FROG_gamescope_wsi.aarch64.json \
-        "${linuxfs_dir}/usr/share/droiddeck-mali/VkLayer_FROG_gamescope_wsi.aarch64.json"
+    # Ubuntu's gamescope WSI manifest lacks the X11 surface extensions the bridge ICD needs (SessionFiles maliFiles),
+    # and the files the per-game Mali defaults point at (droiddeck-mali-defaults)
+    for name in VkLayer_FROG_gamescope_wsi.aarch64.json vkd3d-override/control/bf125ef61cc75d97.spv mali-debug-wd2.config; do
+        install -D -m644 "${repo_root}/tools/linuxfs/overlay/usr/share/droiddeck-mali/${name}" \
+            "${linuxfs_dir}/usr/share/droiddeck-mali/${name}"
+    done
     echo "Bundled Blobferry $(cat "${linuxfs_dir}/usr/lib/mali_bridge/VERSION") from ${blobferry}"
     [[ -n "${blobferry_unpack:-}" ]] && rm -rf "${blobferry_unpack}"
 else
     echo "No Blobferry package found (DROIDDECK_BLOBFERRY); the APK has no bundled Mali system driver" >&2
 fi
+
 
 github_repo=${DROIDDECK_GITHUB_REPOSITORY:-}
 if [[ -z "${github_repo}" ]]; then

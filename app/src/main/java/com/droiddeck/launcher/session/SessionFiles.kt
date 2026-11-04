@@ -43,6 +43,7 @@ object SessionFiles {
         val files = arrayOf(
             "usr/local/bin/droiddeck-game-env" to "usr/local/bin/droiddeck-game-env",
             "usr/local/bin/droiddeck-wincomponents" to "usr/local/bin/droiddeck-wincomponents",
+            "usr/local/bin/droiddeck-mali-defaults" to "usr/local/bin/droiddeck-mali-defaults",
             "usr/local/bin/droiddeck-msi-install" to "usr/local/bin/droiddeck-msi-install",
             "usr/local/bin/droiddeck-esync" to "usr/local/bin/droiddeck-esync",
             "usr/local/bin/droiddeck-steam-compat" to "usr/local/bin/droiddeck-steam-compat",
@@ -183,9 +184,12 @@ object SessionFiles {
         // Mali: the bridge ICD (Android's driver) has no X11 surface, so Wine finds VK_KHR_xlib/xcb_surface only through the
         // gamescope WSI layer's manifest. Ubuntu's gamescope manifest does not list them (Arch's did): without them winevulkan
         // fails every DXVK/vkd3d vkCreateInstance (VK_KHR_win32_surface has no host surface) and the game quits at start.
-        val maliGamescopeWsi = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) emptyList()
+        val maliFiles = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) emptyList()
         else listOf("usr/share/droiddeck-mali/VkLayer_FROG_gamescope_wsi.aarch64.json" to
-            "usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.aarch64.json")
+            "usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.aarch64.json") +
+            // Files the per-game Mali defaults point at (droiddeck-mali-defaults).
+            listOf("usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv", "usr/share/droiddeck-mali/mali-debug-wd2.config")
+                .map { it to it }
         val optional = (arrayOf(
             "usr/local/bin/gamescope" to "usr/local/bin/gamescope",
             "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so" to "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so",
@@ -193,7 +197,7 @@ object SessionFiles {
             "usr/local/lib/droiddeck-pipewire.tzst" to "usr/local/lib/droiddeck-pipewire.tzst",
             "usr/local/share/licenses/uruntime/LICENSE" to "usr/local/share/licenses/uruntime/LICENSE",
             "usr/local/lib/droiddeck-dirt/ws2_32.dll" to "usr/local/lib/droiddeck-dirt/ws2_32.dll",
-        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge + maliGamescopeWsi).filter { (asset, _) ->
+        ) + mangoapp + msitools.map { it to it } + vr + gpuLoad + fexPreloads + bridge + maliFiles).filter { (asset, _) ->
             val dir = asset.substringBeforeLast('/')
             runCatching { context.assets.list("linuxfs/$dir")?.contains(asset.substringAfterLast('/')) == true }.getOrDefault(false)
         }

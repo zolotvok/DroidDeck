@@ -305,6 +305,14 @@ def win_components(compat, app_id):
         return ""
 
 
+def mali_defaults():
+    try:
+        return runpy.run_path(str(Path(__file__).resolve().parent / "droiddeck-mali-defaults"))
+    except Exception as error:
+        print("droiddeck-game-env: Mali defaults not applied (%s)" % error, file=sys.stderr)
+        return None
+
+
 def game_gpu(env):
     if GAME_TU_DEBUG not in env:
         return env
@@ -1028,6 +1036,7 @@ def main():
         if waiting:
             game_images(env)
         fixes = {}
+        mali = None
         if waiting:
             command = skip_red_launcher(command)
             ubisoft_overlay_off(env)
@@ -1037,6 +1046,16 @@ def main():
             for note in notes:
                 print("droiddeck-game-env: " + note, file=sys.stderr)
             command += extra
+            mali = mali_defaults()
+            if mali:
+                try:
+                    values, notes, found = mali["recipe"](command, env, config if isinstance(config, dict) else None, app_id)
+                    fixes = mali["merge"](fixes, values)
+                    prefix_note = mali["apply_prefix"](found, env)
+                    for note in notes + ([prefix_note] if prefix_note else []):
+                        print("droiddeck-game-env: " + note, file=sys.stderr)
+                except Exception as error:
+                    print("droiddeck-game-env: Mali defaults not applied (%s)" % error, file=sys.stderr)
             components = win_components(env.get("STEAM_COMPAT_DATA_PATH", ""), app_id)
             if components:
                 own = fixes.get("WINEDLLOVERRIDES")
