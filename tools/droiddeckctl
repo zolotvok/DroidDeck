@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -381,6 +382,82 @@ def require_commands(adb: str, serial: str) -> dict:
     return access
 
 
+BLOBFERRY_ZIP = re.compile(r"blobferry-[A-Za-z0-9._-]{1,40}\.zip")
+SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def expected_sha256(source: Path, given: str | None) -> tuple[str | None, str | None]:
+    """The sha256 the package must have: --sha256, else a blobferry-<V>.zip.sha256 next to it (package.sh writes one)."""
+    if given:
+        if not SHA256.fullmatch(given):
+            raise ControlError("--sha256 must be 64 hex digits", "INVALID_ARGUMENTS")
+        return given.lower(), "flag"
+    sidecar = source.with_name(source.name + ".sha256")
+    if sidecar.is_file():
+        words = sidecar.read_text(errors="replace").split()
+        if not words or not SHA256.fullmatch(words[0]):
+            raise ControlError(f"{sidecar} is not a sha256sum line", "BAD_CHECKSUM")
+        return words[0].lower(), "sidecar"
+    return None, None
+
+
+def stop_for_switch(adb: str, serial: str, force_stop: bool, timeout: float) -> bool:
+    """A Blobferry switch needs a stopped session; --force-stop stops it, otherwise refuse before anything is pushed."""
+    session = get_state(adb, serial)["session"]
+    if session.get("phase") in {"IDLE", "FAILED"} and not session.get("running"):
+        return False
+    if not force_stop:
+        raise ControlError("A session is running; stop it first or pass --force-stop", "SESSION_ACTIVE")
+    checked(provider_call(adb, serial, "stop"), "STOP_FAILED")
+    wait_for_phase(adb, serial, "IDLE", timeout)
+    return True
+
+
+def blobferry(args: argparse.Namespace, adb: str, serial: str) -> dict:
+    """Blobferry package ops; the device verifies the zip (structure, MD5SUMS, SOURCE.txt, AArch64) before switching."""
+    op = args.blobferry_op
+    if op == "status":
+        return checked(provider_call(adb, serial, "blobferry", request={"op": "status"}), "BLOBFERRY_FAILED")
+    access = require_commands(adb, serial)
+    request: dict = {"op": op}
+    local: dict = {}
+    if op == "install":
+        source = Path(args.zip).expanduser()
+        if not source.is_file():
+            raise ControlError(f"No such file: {source}", "FILE_IO")
+        if not BLOBFERRY_ZIP.fullmatch(source.name):
+            raise ControlError("The package must be a blobferry-<version>.zip (package.sh output)", "INVALID_NAME")
+        actual = file_sha256(source)
+        wanted, origin = expected_sha256(source, args.sha256)
+        if wanted is not None and wanted != actual:
+            raise ControlError(f"sha256 {actual} does not match the expected {wanted} ({origin})", "BAD_CHECKSUM")
+        # the device checks the pushed bytes against the local sha256 too, so a broken push is caught there
+        request.update(name=source.name, sha256=actual)
+        local = {"zip": str(source), "sha256": actual, "sha256Checked": origin or "local only"}
+    stopped = stop_for_switch(adb, serial, args.force_stop, args.timeout)
+    if op == "install":
+        inbox = access["inbox"]
+        run_adb(adb, serial, "shell", "mkdir", "-p", inbox)
+        pushed = run_adb(adb, serial, "push", str(source), f"{inbox}/{source.name}", timeout=300)
+        if pushed.returncode != 0:
+            raise ControlError(pushed.stderr.decode(errors="replace").strip() or "adb push failed", "PUSH_FAILED")
+    result = checked(provider_call(adb, serial, "blobferry", request=request, timeout=180), "BLOBFERRY_FAILED")
+    result.update(local)
+    result["stoppedSession"] = stopped
+    if args.restart:
+        started = start_session(adb, serial, {"mode": "steam"})
+        result["restarted"] = started["session"].get("id")
+    return result
+
+
 def input_request(args: argparse.Namespace) -> dict:
     kind = args.input_type
     if kind == "key":
@@ -657,6 +734,9 @@ def execute(args: argparse.Namespace, adb: str, serial: str) -> dict:
     if command == "access":
         return add_serial(checked(provider_call(adb, serial, "access"), "ACCESS_FAILED"), serial)
 
+    if command == "blobferry":
+        return add_serial(blobferry(args, adb, serial), serial)
+
     if command == "glasses":
         request = {"op": args.glasses_op or "status"}
         if args.glasses_op == "set":
@@ -858,6 +938,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("access", help="whether debugging tools are enabled on the device")
 
+    blob = commands.add_parser("blobferry", help="the Blobferry (Mali system driver) package: status, install, rollback, reset")
+    blob_ops = blob.add_subparsers(dest="blobferry_op", required=True)
+    blob_ops.add_parser("status", help="active package: source, version, commit, md5s, previous, markers")
+    switches = [
+        blob_ops.add_parser("install", help="install a blobferry-<V>.zip (debugging tools; replaces a .dev deploy)"),
+        blob_ops.add_parser("rollback", help="swap the active package and the previous one (debugging tools)"),
+        blob_ops.add_parser("reset", help="back to the package the APK bundles (debugging tools)"),
+    ]
+    switches[0].add_argument("zip", help="the package.sh zip, e.g. ../bridge/build/dist/blobferry-1.0.0.zip")
+    switches[0].add_argument("--sha256", help="expected sha256 (default: <zip>.sha256 next to the zip, when it exists)")
+    for sub in switches:
+        sub.add_argument("--force-stop", action="store_true", help="stop a running session first")
+        sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
+        sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
+
     glasses = commands.add_parser("glasses", help="VITURE glasses: status, settings, head tracking test")
     glasses_ops = glasses.add_subparsers(dest="glasses_op")
     glasses_ops.add_parser("status")
@@ -916,6 +1011,7 @@ EXIT_SESSION = {
     "SESSION_ACTIVE", "NO_ACTIVE_SESSION", "SESSION_NOT_SUSPENDED", "SESSION_FAILED", "GUEST_EXIT",
     "GUEST_START_FAILED", "RUNTIME_INSTALL_FAILED", "DESKTOP_INSTALL_FAILED", "ACTIVITY_START_FAILED",
     "NO_STEAM_SESSION", "SESSION_NOT_READY", "AGENT_UNAVAILABLE", "LAUNCH_REJECTED", "NO_PAD", "NO_FRAMES",
+    "SESSION_RUNNING",
 }
 EXIT_TIMEOUT = {"TIMEOUT", "ARTIFACT_TIMEOUT"}
 EXIT_FILE = {"NO_SESSION_LOGS", "LOG_PULL_FAILED", "SCREENSHOT_FAILED", "FILE_IO", "RECORD_FAILED", "PUSH_FAILED",

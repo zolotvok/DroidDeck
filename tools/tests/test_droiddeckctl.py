@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -444,6 +445,101 @@ class DroiddeckctlTest(FakeAdbTest):
         code, out = self.run_ctl("override", "gamescope", str(binary))
         self.assertEqual(7, code)
         self.assertFalse([c for c in self.calls() if c["args"][:1] == ["push"]])
+
+
+class BlobferryCtlTest(FakeAdbTest):
+    INBOX = "/sdcard/Android/data/x/files/agent-inbox"
+
+    def package(self, name="blobferry-1.0.0.zip", data=b"PK zip bytes"):
+        path = self.dir / name
+        path.write_bytes(data)
+        return path
+
+    def provider(self, session="IDLE", **extra):
+        answers = {
+            "access": {"ok": True, "commands": True, "inbox": self.INBOX},
+            "state": state(session),
+            "blobferry": {"ok": True, "command": "blobferry", "source": "adb", "version": "1.0.0"},
+            "stop": {"ok": True, "command": "stop"},
+        }
+        answers.update(extra)
+        self.configure(answers)
+
+    def test_status_needs_no_debugging_tools(self):
+        self.provider(blobferry={"ok": True, "source": "bundled", "version": "1.0.0-rc1"})
+        code, out = self.run_ctl("blobferry", "status")
+        self.assertEqual(0, code)
+        self.assertEqual("bundled", out["source"])
+        self.assertEqual([{"op": "status"}], [c["request"] for c in self.calls("blobferry")])
+        self.assertEqual([], self.calls("access"))
+
+    def test_install_pushes_to_the_inbox_and_sends_the_local_sha256(self):
+        self.provider()
+        zip_path = self.package()
+        code, out = self.run_ctl("blobferry", "install", str(zip_path))
+        self.assertEqual(0, code)
+        sha = hashlib.sha256(b"PK zip bytes").hexdigest()
+        push = [c for c in self.calls() if c["args"][:1] == ["push"]][0]
+        self.assertEqual([str(zip_path), self.INBOX + "/blobferry-1.0.0.zip"], push["args"][1:3])
+        self.assertEqual([{"op": "install", "name": "blobferry-1.0.0.zip", "sha256": sha}],
+                         [c["request"] for c in self.calls("blobferry")])
+        self.assertEqual("local only", out["sha256Checked"])
+        self.assertFalse(out["stoppedSession"])
+
+    def test_install_checks_the_sidecar_sha256_before_pushing(self):
+        self.provider()
+        zip_path = self.package()
+        (self.dir / "blobferry-1.0.0.zip.sha256").write_text("0" * 64 + "  blobferry-1.0.0.zip\n")
+        code, out = self.run_ctl("blobferry", "install", str(zip_path))
+        self.assertEqual(2, code)
+        self.assertEqual("BAD_CHECKSUM", out["error"]["code"])
+        self.assertEqual([], [c for c in self.calls() if c["args"][:1] == ["push"]])
+        self.assertEqual([], self.calls("blobferry"))
+
+    def test_install_accepts_a_matching_sidecar(self):
+        self.provider()
+        zip_path = self.package()
+        sha = hashlib.sha256(b"PK zip bytes").hexdigest()
+        (self.dir / "blobferry-1.0.0.zip.sha256").write_text(sha + "  blobferry-1.0.0.zip\n")
+        code, out = self.run_ctl("blobferry", "install", str(zip_path))
+        self.assertEqual(0, code)
+        self.assertEqual("sidecar", out["sha256Checked"])
+
+    def test_install_refuses_a_running_session_without_force_stop(self):
+        self.provider(session="READY")
+        code, out = self.run_ctl("blobferry", "install", str(self.package()))
+        self.assertEqual(4, code)
+        self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
+        self.assertEqual([], [c for c in self.calls() if c["args"][:1] == ["push"]])
+        self.assertEqual([], self.calls("stop"))
+
+    def test_force_stop_stops_the_session_first(self):
+        self.provider(state=[state("READY"), state("IDLE")])
+        code, out = self.run_ctl("blobferry", "rollback", "--force-stop", "--timeout", "5")
+        self.assertEqual(0, code, out)
+        self.assertTrue(out["stoppedSession"])
+        methods = [c.get("method") for c in self.calls() if c.get("method")]
+        self.assertLess(methods.index("stop"), methods.index("blobferry"))
+        self.assertEqual([{"op": "rollback"}], [c["request"] for c in self.calls("blobferry")])
+
+    def test_install_rejects_names_that_are_not_packages(self):
+        self.provider()
+        code, out = self.run_ctl("blobferry", "install", str(self.package("Mali_Bridge.zip")))
+        self.assertEqual(2, code)
+        self.assertEqual("INVALID_NAME", out["error"]["code"])
+
+    def test_reset_needs_debugging_tools(self):
+        self.provider(access={"ok": True, "commands": False, "inbox": "/x"})
+        code, out = self.run_ctl("blobferry", "reset")
+        self.assertEqual(7, code)
+        self.assertEqual("AGENT_COMMANDS_DISABLED", out["error"]["code"])
+        self.assertEqual([], self.calls("blobferry"))
+
+    def test_device_rejection_keeps_its_code(self):
+        self.provider(blobferry={"ok": False, "error": {"code": "BAD_ARCH", "message": "q.so is not AArch64"}})
+        code, out = self.run_ctl("blobferry", "install", str(self.package()))
+        self.assertEqual(2, code)
+        self.assertEqual("BAD_ARCH", out["error"]["code"])
 
 
 class ScenarioTest(FakeAdbTest):

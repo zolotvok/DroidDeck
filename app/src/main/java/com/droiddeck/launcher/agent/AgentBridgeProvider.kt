@@ -95,6 +95,7 @@ class AgentBridgeProvider : ContentProvider() {
             AgentEnv.override(context, request.optString("name")).put("ok", true).put("command", "override")
         }
         "prefs" -> prefs(context, request)
+        "blobferry" -> blobferry(context, request)
         "glasses" -> glasses(context, request)
         "access" -> JSONObject().put("ok", true).put("commands", AgentAccess.commandsAllowed(context))
             .put("debugBuild", BuildConfig.DEBUG).put("inbox", AgentEnv.inbox(context).absolutePath)
@@ -275,6 +276,49 @@ class AgentBridgeProvider : ContentProvider() {
             .put("session", session ?: JSONObject.NULL).put("sessionName", label(session))
             .put("games", games ?: JSONObject.NULL).put("gamesName", label(games))
             .put("applied", SessionState.running)
+    }
+
+    /** Blobferry package ops for tools/droiddeckctl: status (read-only, always), and behind Debugging tools install (a zip
+     *  pushed to the agent inbox), rollback, reset.
+     *  The adb user is the confirmer, so install skips the UI dialog but runs every check of BlobferryPackage.prepare. */
+    private fun blobferry(context: Context, request: JSONObject): JSONObject {
+        val bf = com.droiddeck.launcher.gpu.BlobferryPackage
+        val op = request.optString("op", "status")
+        if (op != "status") AgentAccess.requireCommands(context)
+        return try {
+            val extra = JSONObject()
+            val status = when (op) {
+                "status" -> bf.status(context)
+                "install" -> {
+                    val name = request.optString("name")
+                    if (!Regex("[A-Za-z0-9._-]{1,96}").matches(name) || name in setOf(".", "..")) {
+                        throw AgentException("INVALID_NAME", "The package name must be a simple filename")
+                    }
+                    val source = File(AgentEnv.inbox(context), name)
+                    if (java.nio.file.Files.isSymbolicLink(source.toPath()) || !source.isFile) {
+                        throw AgentException("NO_SUCH_FILE", "Push the package to ${source.path} first")
+                    }
+                    val sha = request.optString("sha256").ifEmpty { null }
+                    extra.put("replacedDev", bf.status(context).devMarker)
+                        .put("verifiedBy", if (sha != null) "sha256+MD5SUMS" else "MD5SUMS")
+                    try {
+                        val input = java.nio.file.Files.newInputStream(source.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        bf.install(context, bf.prepare(context, input, sha), bf.SOURCE_ADB)
+                    } finally {
+                        source.delete()
+                    }
+                }
+                "rollback" -> bf.rollback(context)
+                "reset" -> bf.reset(context)
+                else -> throw AgentException("INVALID_REQUEST", "Unknown blobferry op '$op'")
+            }
+            val out = status.json().put("ok", true).put("command", "blobferry").put("op", op)
+            if (op != "status") out.put("appliesAt", "next session start")
+            extra.keys().forEach { out.put(it, extra.get(it)) }
+            out
+        } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
+            error(e.code, e.message ?: e.code)
+        }
     }
 
     private fun stop(context: Context): JSONObject {

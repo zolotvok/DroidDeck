@@ -29,7 +29,8 @@ Player controls and observations work over authorized ADB on any build: `state`,
 `displays`, `wake`, `glasses` (except `glasses raw`), and `access`.
 
 **Setup > Diagnostics > Debugging tools** is off by default in every build, including debug builds.
-It enables `run`, `guest`, `cdp`, all `env` operations, `override`, `prefs`, and `glasses raw`. The
+It enables `run`, `guest`, `cdp`, all `env` operations, `override`, `prefs`, `blobferry install|rollback|reset`
+and `glasses raw`. The
 toggle switches directly without a confirmation dialog. The bridge refuses to change it through `ui`
 or preference writes. The existing preference key, `setting-agent-commands` test tag, JSON command
 names, and `AGENT_COMMANDS_DISABLED` error code are unchanged. Refusals exit 7; `droiddeckctl access`
@@ -114,6 +115,10 @@ tools/droiddeckctl env list
 tools/droiddeckctl env clear [next|persistent|all]
 tools/droiddeckctl override gamescope ./gamescope
 tools/droiddeckctl override libblfastpath.so ./libblfastpath.so
+tools/droiddeckctl blobferry status
+tools/droiddeckctl blobferry install ../bridge/build/dist/blobferry-1.0.0.zip [--force-stop] [--restart]
+tools/droiddeckctl blobferry rollback
+tools/droiddeckctl blobferry reset
 tools/droiddeckctl proot-profile enable --slow-us 1000
 tools/droiddeckctl proot-profile disable
 tools/droiddeckctl proot-profile report ./session.log --sort wall
@@ -136,6 +141,13 @@ tools/droiddeckctl glasses stop-simulate
 tools/droiddeckctl glasses mode 0x34
 tools/droiddeckctl glasses raw 0x0007
 ```
+
+`blobferry install` (Mali fork) pushes a package.sh zip to the agent inbox. The app checks it before switching: one
+`blobferry-<V>/` folder, MD5SUMS over every file, SOURCE.txt naming the version and the commit, AArch64 ELF libraries,
+the same shim in `Mali_Bridge.zip`, and the sha256 of the pushed bytes (a `<zip>.sha256` next to the zip or `--sha256`
+is checked on the PC first). The package stays in `files/blobferry/active/`, the one before it in `previous/`; the files
+apply at the next session start. A running session is refused (`SESSION_ACTIVE`, exit 4) unless `--force-stop`.
+`install` replaces a hand-deployed `.dev` build; `reset` goes back to the package the APK bundles.
 
 Glasses status reports `deviceMode` from the MCU separately from `sbs`, which
 requires a physical stereo display mode. `switching3d` marks the bounded
