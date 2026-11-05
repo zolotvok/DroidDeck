@@ -151,8 +151,8 @@ android {
         applicationId testApplicationId ?: "com.droiddeck.launcher.mali"
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode 18
-        versionName "0.6.9-mali.1-rc1"
+        versionCode 19
+        versionName "0.6.9-mali.1-rc2"
         manifestPlaceholders = [appLabel: 'DroidDeck Mali']
         buildConfigField "String", "BUILD_LABEL", "\"${escapedBuildLabel}\""
         buildConfigField "String", "SOURCE_COMMIT", "\"${sourceCommit}\""
