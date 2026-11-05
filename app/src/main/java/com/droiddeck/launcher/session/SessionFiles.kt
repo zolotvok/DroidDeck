@@ -33,7 +33,39 @@ object SessionFiles {
         "etc/xdg/autostart/droiddeck-clipboard.desktop" to "etc/xdg/autostart/droiddeck-clipboard.desktop",
     )
 
-    fun stage(context: Context, root: File, startsSession: Boolean = false) {
+    /** Under BlobferryPackage.LOCK: a Blobferry install, roll back or reset never runs while files are staged. */
+    fun stage(context: Context, root: File, startsSession: Boolean = false) = synchronized(com.droiddeck.launcher.gpu.BlobferryPackage.LOCK) {
+        stageLocked(context, root, startsSession)
+    }
+
+    /** The bundled Blobferry files into the rootfs now (Reset to bundled), without waiting for the next stage(). */
+    fun stageBridge(context: Context, root: File) {
+        for ((asset, relative) in com.droiddeck.launcher.gpu.BlobferryPackage.BUNDLED_FILES) {
+            if (!stageAsset(context, asset, File(root, relative))) Log.e(TAG, "bundled $relative NOT staged")
+        }
+    }
+
+    private fun stageAsset(context: Context, asset: String, target: File): Boolean {
+        val staged = File(target.parentFile, target.name + ".staged")
+        var installed = false
+        try {
+            target.parentFile?.mkdirs()
+            context.assets.open("linuxfs/$asset").use { input ->
+                staged.outputStream().use { output -> FileUtils.copy(input, output) }
+            }
+            installed = staged.setExecutable(true, false) && staged.renameTo(target)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not stage ${target.path}", e)
+        } finally {
+            if (!installed) staged.delete()
+        }
+        return installed
+    }
+
+    private fun stageLocked(context: Context, root: File, startsSession: Boolean) {
+        // a Blobferry switch a crash interrupted is finished first, so the files below are of one package
+        if (com.droiddeck.launcher.core.DeviceSupport.mali()) runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.recover(context) }
+            .onFailure { Log.w(TAG, "Blobferry recovery failed", it) }
         if (DesktopCatalog.desktopInstalled(root) && !DesktopCatalog.desktopFromPack(root)) try { DesktopCatalog.cleanLegacy(context) }
         catch (e: Exception) { Log.w(TAG, "LXQt cleanup will retry next session", e) }
         GameEnvironmentStore.publish(context)
@@ -173,14 +205,10 @@ object SessionFiles {
         } + listOf("libvulkan-thunk.so", "libwebkitinput.so").map { "x86_64/$it" to "usr/local/lib/droiddeck-fex/x86_64/$it" }
         // Blobferry, the Mali system driver, when the APK bundles it (tools/build_local.sh): the shim, both layers and
         // libhybris into the runtime, the layer manifests where the loader finds implicit layers. A usr/lib/mali_bridge/.dev
-        // file (Blobferry's build-bridge.sh deploy) keeps hand-deployed test builds in place.
-        val bridge = if (!com.droiddeck.launcher.core.DeviceSupport.mali() || File(root, "usr/lib/mali_bridge/.dev").exists()) emptyList()
-        else listOf(
-            "libvulkan_mali_bridge.so", "libVkLayer_droiddeck_mali_compat.so", "libVkLayer_window_system_integration.so",
-            "mali_bridge_icd.json", "VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json", "VERSION",
-        ).map { "usr/lib/mali_bridge/$it" to "usr/lib/mali_bridge/$it" } + listOf("VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json")
-            .map { "usr/lib/mali_bridge/$it" to "usr/share/vulkan/implicit_layer.d/$it" } +
-            listOf("usr/lib/hybris/libhybris-common.so.1", "usr/lib/hybris/libhybris/linker/q.so").map { it to it }
+        // file (Blobferry's build-bridge.sh deploy) keeps hand-deployed test builds in place, a .user file a package the
+        // user installed (gpu/BlobferryPackage).
+        val bridge = if (!com.droiddeck.launcher.core.DeviceSupport.mali() || com.droiddeck.launcher.gpu.BlobferryPackage.handsOff(root)) emptyList()
+        else com.droiddeck.launcher.gpu.BlobferryPackage.BUNDLED_FILES
         // Mali: the bridge ICD (Android's driver) has no X11 surface, so Wine finds VK_KHR_xlib/xcb_surface only through the
         // gamescope WSI layer's manifest. Ubuntu's gamescope manifest does not list them (Arch's did): without them winevulkan
         // fails every DXVK/vkd3d vkCreateInstance (VK_KHR_win32_surface has no host surface) and the game quits at start.
@@ -210,19 +238,7 @@ object SessionFiles {
         for ((asset, relative) in all) {
             val target = File(root, relative)
             if (ledger.current(relative, target)) continue
-            val staged = File(target.parentFile, target.name + ".staged")
-            var installed = false
-            try {
-                target.parentFile?.mkdirs()
-                context.assets.open("linuxfs/$asset").use { input ->
-                    staged.outputStream().use { output -> FileUtils.copy(input, output) }
-                }
-                installed = staged.setExecutable(true, false) && staged.renameTo(target)
-            } catch (e: Exception) {
-                Log.w(TAG, "could not stage $relative", e)
-            } finally {
-                if (!installed) staged.delete()
-            }
+            val installed = stageAsset(context, asset, target)
             if (installed) ledger.staged(relative, target) else Log.e(TAG, "$relative NOT staged")
         }
         File(root, "usr/local/bin/bannerlator-steam-compat").delete()

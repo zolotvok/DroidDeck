@@ -137,7 +137,8 @@ public class LinuxVulkanDriverManager {
     }
 
     /** On a Mali phone, keeps the Mali_Bridge slot on the shim the APK bundles, so the Mali system driver is there
-     *  without importing a zip and follows app updates. A .dev file in the slot keeps a hand-installed shim. */
+     *  without importing a zip and follows app updates. A .dev file in the slot keeps a hand-installed shim, a .user file
+     *  an installed Blobferry package. */
     public boolean ensureBundledBridge() throws IOException {
         if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return false;
         byte[] shim;
@@ -147,7 +148,8 @@ public class LinuxVulkanDriverManager {
             return false;
         }
         File dir = getDriverDir(BUNDLED_BRIDGE_ID);
-        if (new File(dir, ".dev").exists()) return isBridge(BUNDLED_BRIDGE_ID);
+        // .dev: a hand-installed test shim; .user: a Blobferry package the user installed (BlobferryPackage)
+        if (new File(dir, ".dev").exists() || new File(dir, ".user").exists()) return isBridge(BUNDLED_BRIDGE_ID);
         File so = new File(dir, BRIDGE_LIB_NAME);
         String version = bundledBridgeVersion();
         if (isBridge(BUNDLED_BRIDGE_ID) && version.equals(getDriverVersion(BUNDLED_BRIDGE_ID).replace("Blobferry ", ""))) {

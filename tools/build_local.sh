@@ -225,6 +225,27 @@ if [[ -n "${blobferry}" ]]; then
         echo "Warning: ${blobferry} has no licenses/vulkan-wsi-layer/; this debug APK lacks the WSI layer license" >&2
     fi
     basename "${blobferry_dir}" | sed 's/^blobferry-//' > "${linuxfs_dir}/usr/lib/mali_bridge/VERSION"
+    # BUNDLE.json: commit and md5s of the bundled package for the app's Blobferry card (gpu/BlobferryPackage.bundled);
+    # files = the rootfs targets SessionFiles stages, md5 of what the APK carries. Not staged into the rootfs.
+    python3 - "${linuxfs_dir}" "${blobferry_dir}" "${blobferry%/}" <<'PY'
+import hashlib, json, os, re, sys
+linuxfs, package, given = sys.argv[1:4]
+md5 = lambda p: hashlib.md5(open(p, "rb").read()).hexdigest()
+b = "usr/lib/mali_bridge"
+names = ["libvulkan_mali_bridge.so", "libVkLayer_droiddeck_mali_compat.so", "libVkLayer_window_system_integration.so",
+         "mali_bridge_icd.json", "VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json", "VERSION"]
+files = {f"{b}/{n}": md5(f"{linuxfs}/{b}/{n}") for n in names}
+for n in ["VkLayer_droiddeck_mali_compat.json", "VkLayer_window_system_integration.json"]:
+    files[f"usr/share/vulkan/implicit_layer.d/{n}"] = files[f"{b}/{n}"]
+for p in ["usr/lib/hybris/libhybris-common.so.1", "usr/lib/hybris/libhybris/linker/q.so"]:
+    files[p] = md5(f"{linuxfs}/{p}")
+source = open(f"{package}/SOURCE.txt").read().splitlines() if os.path.isfile(f"{package}/SOURCE.txt") else []
+m = re.match(r"Source: https://github\.com/zolotvok/blobferry commit ([0-9a-f]{40})", source[1] if len(source) > 1 else "")
+bundle = {"version": open(f"{linuxfs}/{b}/VERSION").read().strip(), "commit": m.group(1) if m else "",
+          "dirty": "dirty" in (source[1] if len(source) > 1 else ""), "zipMd5": md5(given) if os.path.isfile(given) else "",
+          "files": files}
+json.dump(bundle, open(f"{linuxfs}/{b}/BUNDLE.json", "w"), indent=2, sort_keys=True)
+PY
     # Ubuntu's gamescope WSI manifest lacks the X11 surface extensions the bridge ICD needs (SessionFiles maliFiles),
     # and the files the per-game Mali defaults point at (droiddeck-mali-defaults)
     for name in VkLayer_FROG_gamescope_wsi.aarch64.json vkd3d-override/control/bf125ef61cc75d97.spv mali-debug-wd2.config; do
