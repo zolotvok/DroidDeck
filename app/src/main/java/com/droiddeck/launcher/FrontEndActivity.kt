@@ -254,6 +254,9 @@ class FrontEndActivity : ComponentActivity() {
     private val pickBootMovie = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == RESULT_OK) InAppFilePicker.pickedFile(r.data)?.let { importBootMovie(it) }
     }
+    private val pickBlobferry = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == RESULT_OK) InAppFilePicker.pickedUri(r.data)?.let { drivers.importBlobferry(it) }
+    }
     private val pickAnyDriver = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == RESULT_OK) InAppFilePicker.pickedUri(r.data)?.let { drivers.importDriver(it, linux = null) }
     }
@@ -1982,6 +1985,14 @@ class FrontEndActivity : ComponentActivity() {
                 onMode = { m -> drivers.chooseMode(m) },
                 onRestart = { drivers.restartApp() },
                 onTpUbwcMode = { drivers.chooseTpUbwcMode(it) },
+                blobferry = com.droiddeck.launcher.ui.BlobferryActions(
+                    onImport = { pickBlobferry.launch(InAppFilePicker.buildIntent(this, ZIP_EXT, getString(R.string.blobferry_pick))) },
+                    onCheck = { drivers.checkBlobferry() },
+                    onRollback = { drivers.rollbackBlobferry() },
+                    onReset = { drivers.resetBlobferry() },
+                    onConfirm = { yes -> drivers.confirmBlobferry(yes) },
+                    onOffer = { yes -> drivers.acceptBlobferryOffer(yes) },
+                ),
             ),
             protons = com.droiddeck.launcher.ui.ProtonsState(
                 rows = protons.protonRows, busyId = protons.protonBusyId, stage = protons.protonStage, percent = protons.protonPercent,

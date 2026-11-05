@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
 import com.droiddeck.launcher.gpu.AutoDriverTrial
+import com.droiddeck.launcher.gpu.BlobferryPackage
+import com.droiddeck.launcher.gpu.BlobferryReleases
 import com.droiddeck.launcher.gpu.AutoPicks
 import com.droiddeck.launcher.gpu.DriverBundle
 import com.droiddeck.launcher.gpu.DriverPairs
@@ -78,6 +80,7 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         checkedAt = TurnipReleases.cached(activity)?.checkedAt ?: 0L,
         tpUbwcMode = tpUbwcMode.takeIf { gpu.model == 740 },
         tpUbwcRestartRequired = com.droiddeck.launcher.gpu.TpUbwcHint.restartRequired(activity),
+        blobferry = blobferryState(),
     )
 
     fun chooseTpUbwcMode(mode: String) {
@@ -192,6 +195,165 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         runtimePending = sessionRunning && SessionState.runtimeDriver.let { it != null && it != linuxSelected }
         refreshReleaseRows()
         refreshPairs()
+        refreshBlobferry()
+    }
+
+    // ---- Blobferry, the Mali system driver package (gpu/BlobferryPackage): card state and its actions ----
+    private var bfStatus by mutableStateOf<BlobferryPackage.Status?>(null)
+    private var bfBusy by mutableStateOf<String?>(null)
+    private var bfNote by mutableStateOf("")
+    private var bfPending by mutableStateOf<Pair<BlobferryPackage.Prepared, String>?>(null)
+    private var bfOffer by mutableStateOf<BlobferryReleases.Release?>(null)
+    private var bfRefreshing = false
+
+    fun refreshBlobferry() {
+        if (!com.droiddeck.launcher.core.DeviceSupport.mali() || bfRefreshing) return
+        bfRefreshing = true
+        Thread({
+            val status = runCatching { BlobferryPackage.status(activity) }.onFailure { Log.w(TAG, "Blobferry status", it) }.getOrNull()
+            ui.post { bfStatus = status; bfRefreshing = false }
+        }, "blobferry-status").start()
+    }
+
+    private fun bfSource(source: String) = activity.getString(when (source) {
+        "bundled" -> R.string.blobferry_src_bundled
+        BlobferryPackage.SOURCE_FILE -> R.string.blobferry_src_file
+        BlobferryPackage.SOURCE_DOWNLOAD -> R.string.blobferry_src_download
+        BlobferryPackage.SOURCE_ADB -> R.string.blobferry_src_adb
+        "dev" -> R.string.blobferry_src_dev
+        else -> R.string.blobferry_src_none
+    })
+
+    private fun blobferryState(): com.droiddeck.launcher.ui.BlobferryCardState? {
+        val s = bfStatus ?: return null
+        val imported = s.source in setOf(BlobferryPackage.SOURCE_FILE, BlobferryPackage.SOURCE_DOWNLOAD, BlobferryPackage.SOURCE_ADB)
+        val note = when {
+            bfNote.isNotEmpty() -> bfNote
+            imported && s.bundledVersion != null && s.bundledVersion != s.version -> activity.getString(R.string.blobferry_bundled_newer, s.bundledVersion)
+            else -> activity.getString(R.string.blobferry_next_session)
+        }
+        val current = activity.getString(R.string.blobferry_version, s.version.ifEmpty { "?" }) + " (" + bfSource(s.source) + ")"
+        return com.droiddeck.launcher.ui.BlobferryCardState(
+            version = s.version, source = bfSource(s.source), commit = s.commit, shimMd5 = s.shimMd5, zipMd5 = s.zipMd5,
+            testBuild = s.dirty, changed = s.changed,
+            rollback = s.previous?.let {
+                if (it == "bundled") activity.getString(R.string.blobferry_rollback_bundled) else activity.getString(R.string.blobferry_rollback, it)
+            },
+            bundledVersion = s.bundledVersion, canReset = s.bundledVersion != null && s.source != "bundled",
+            canSwitch = !BlobferryPackage.sessionBusy(), busy = bfBusy, note = note, files = s.files,
+            confirm = bfPending?.first?.let { p ->
+                com.droiddeck.launcher.ui.BlobferryConfirm(
+                    activity.getString(R.string.blobferry_confirm_title, p.version),
+                    activity.getString(R.string.blobferry_confirm_text, p.commit, p.zipMd5, current) +
+                        if (p.dirty) "\n\n" + activity.getString(R.string.blobferry_confirm_dirty) else "",
+                )
+            },
+            offer = bfOffer?.let { r ->
+                activity.getString(R.string.blobferry_offer_text, r.version, s.version.ifEmpty { "?" },
+                    activity.getString(R.string.common_size_mb, r.size / 1_048_576.0))
+            },
+        )
+    }
+
+    private fun bfProblem(e: Throwable): String {
+        if (e !is BlobferryPackage.BlobferryException) Log.w(TAG, "Blobferry", e)
+        return activity.getString(R.string.blobferry_failed, e.message ?: e.javaClass.simpleName)
+    }
+
+    private fun bfToast(text: String) = android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_LONG).show()
+
+    /** Verify first (on a thread), then the confirm dialog; nothing changes before the user's yes. */
+    fun importBlobferry(uri: Uri) = prepareBlobferry(BlobferryPackage.SOURCE_FILE) {
+        (activity.contentResolver.openInputStream(uri) ?: throw java.io.IOException("cannot open $uri")) to null
+    }
+
+    private fun prepareBlobferry(source: String, open: () -> Pair<java.io.InputStream, String?>) {
+        if (bfBusy != null) return
+        bfBusy = activity.getString(R.string.blobferry_verifying)
+        bfNote = ""
+        Thread({
+            val result = runCatching { open().let { (input, sha) -> BlobferryPackage.prepare(activity, input, sha) } }
+            ui.post {
+                bfBusy = null
+                result.onSuccess { bfPending = it to source }.onFailure { bfToast(bfProblem(it)) }
+            }
+        }, "blobferry-verify").start()
+    }
+
+    fun confirmBlobferry(yes: Boolean) {
+        val (prepared, source) = bfPending ?: return
+        bfPending = null
+        if (!yes) {
+            Thread({ BlobferryPackage.discard(prepared) }, "blobferry-discard").start()
+            return
+        }
+        switchBlobferry { activity.getString(R.string.blobferry_installed, BlobferryPackage.install(activity, prepared, source).version) }
+    }
+
+    fun rollbackBlobferry() = switchBlobferry {
+        activity.getString(R.string.blobferry_rolled_back, BlobferryPackage.rollback(activity).version)
+    }
+
+    fun resetBlobferry() = switchBlobferry {
+        activity.getString(R.string.blobferry_reset_done, BlobferryPackage.reset(activity).version)
+    }
+
+    private fun switchBlobferry(op: () -> String) {
+        if (bfBusy != null) return
+        bfBusy = ""
+        Thread({
+            val result = runCatching(op)
+            ui.post {
+                bfBusy = null
+                bfToast(result.getOrElse { bfProblem(it) })
+                refreshDrivers()
+            }
+        }, "blobferry-switch").start()
+    }
+
+    /** Only on the user's tap; a newer release is offered in a dialog, downloaded only on "Download". */
+    fun checkBlobferry() {
+        if (bfBusy != null) return
+        bfBusy = activity.getString(R.string.blobferry_checking)
+        Thread({
+            val result = runCatching { BlobferryReleases.check(activity) }
+            ui.post {
+                bfBusy = null
+                result.onSuccess { r ->
+                    when {
+                        r == null -> bfNote = activity.getString(R.string.blobferry_no_release)
+                        r.version == bfStatus?.version -> bfNote = activity.getString(R.string.blobferry_up_to_date, r.version)
+                        else -> { bfNote = ""; bfOffer = r }
+                    }
+                }.onFailure {
+                    Log.w(TAG, "Blobferry release check", it)
+                    bfNote = activity.getString(R.string.blobferry_check_failed, it.message ?: it.javaClass.simpleName)
+                }
+            }
+        }, "blobferry-check").start()
+    }
+
+    fun acceptBlobferryOffer(yes: Boolean) {
+        val release = bfOffer ?: return
+        bfOffer = null
+        if (!yes || bfBusy != null) return
+        bfBusy = activity.getString(R.string.blobferry_downloading, 0)
+        Thread({
+            val result = runCatching {
+                val (file, sha) = BlobferryReleases.download(activity, release) { pct ->
+                    if (pct >= 0) ui.post { if (bfBusy != null) bfBusy = activity.getString(R.string.blobferry_downloading, pct) }
+                }
+                try {
+                    BlobferryPackage.prepare(activity, file.inputStream(), sha)
+                } finally {
+                    file.delete()
+                }
+            }
+            ui.post {
+                bfBusy = null
+                result.onSuccess { bfPending = it to BlobferryPackage.SOURCE_DOWNLOAD }.onFailure { bfToast(bfProblem(it)) }
+            }
+        }, "blobferry-download").start()
     }
 
     fun summary(): String {

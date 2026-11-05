@@ -132,6 +132,8 @@ class GpuDriversState(
     val checkedAt: Long = 0L,
     val tpUbwcMode: String? = null,
     val tpUbwcRestartRequired: Boolean = false,
+    /** Mali only: the Blobferry package card. */
+    val blobferry: BlobferryCardState? = null,
 ) {
     val activePair: PairRow? get() = pairs.firstOrNull { it.active }
 }
@@ -152,6 +154,7 @@ class GpuDriversActions(
     val onMode: (String) -> Unit = {},
     val onRestart: () -> Unit = {},
     val onTpUbwcMode: (String) -> Unit = {},
+    val blobferry: BlobferryActions = BlobferryActions(),
 )
 
 @Composable
@@ -239,6 +242,7 @@ internal fun GpuDriversBody(
             .focusProperties { enter = { first } }.focusGroup(),
     ) {
         InUseCard(gpu, actions, first)
+        gpu.blobferry?.let { BlobferryCard(it, actions.blobferry) }
         PanelHeading(stringResource(R.string.gpu_mode_title))
         val modes = listOf(
             Triple(GPU_MODE_AUTO, R.string.common_auto, R.string.gpu_mode_auto_detail),
