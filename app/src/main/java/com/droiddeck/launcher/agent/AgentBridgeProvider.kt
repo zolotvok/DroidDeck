@@ -96,6 +96,7 @@ class AgentBridgeProvider : ContentProvider() {
         }
         "prefs" -> prefs(context, request)
         "blobferry" -> blobferry(context, request)
+        "report" -> report(context, request)
         "glasses" -> glasses(context, request)
         "access" -> JSONObject().put("ok", true).put("commands", AgentAccess.commandsAllowed(context))
             .put("debugBuild", BuildConfig.DEBUG).put("inbox", AgentEnv.inbox(context).absolutePath)
@@ -318,6 +319,39 @@ class AgentBridgeProvider : ContentProvider() {
             out
         } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
             error(e.code, e.message ?: e.code)
+        }
+    }
+
+    /** Problem report for tools/droiddeckctl: summary (read-only, redacted), and behind Debugging tools export (the zip to
+     *  the app's external files dir for adb pull; raw only on a debuggable build) and next-launch-log on|off. */
+    private fun report(context: Context, request: JSONObject): JSONObject {
+        val rb = com.droiddeck.launcher.session.ReportBundle
+        val op = request.optString("op", "summary")
+        if (op != "summary") AgentAccess.requireCommands(context)
+        return when (op) {
+            "summary" -> JSONObject().put("ok", true).put("command", "report").put("op", op)
+                .put("summary", rb.collect(context).summaryText)
+            "export" -> {
+                val raw = request.optBoolean("raw", false)
+                val debuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                if (raw && !debuggable) throw AgentException("RAW_NOT_ALLOWED", "Unredacted reports need a debuggable build")
+                val mb = request.optInt("maxMb", 20)
+                if (mb !in 1..200) throw AgentException("INVALID_REQUEST", "maxMb must be 1..200")
+                val options = com.droiddeck.launcher.session.ReportBundle.Options(previous = !request.optBoolean("noPrevious", false), proton = request.optBoolean("proton", true),
+                    maxBytes = mb * 1024L * 1024, raw = raw)
+                val plan = rb.collect(context, options)
+                val dir = File(context.getExternalFilesDir(null) ?: context.cacheDir, "report-export").apply { deleteRecursively(); mkdirs() }
+                val result = rb.write(plan.parts, plan.notes, File(dir, rb.zipName()), options)
+                result.json().put("ok", true).put("command", "report").put("op", op).put("path", result.zip.absolutePath)
+                    .put("raw", raw).put("summary", plan.summaryText)
+            }
+            "next-launch-log" -> {
+                val on = request.optBoolean("on", true)
+                com.droiddeck.launcher.session.SessionPrefs.setNextLaunchLog(context, on)
+                JSONObject().put("ok", true).put("command", "report").put("op", op).put("on", on)
+                    .put("appliesAt", if (SessionState.running) "the next game launch" else "the next session's first game")
+            }
+            else -> throw AgentException("INVALID_REQUEST", "Unknown report op '$op'")
         }
     }
 

@@ -104,6 +104,10 @@ class AgentSecurityTest {
             assertEquals(op, "AGENT_COMMANDS_DISABLED",
                 call(provider, "blobferry", JSONObject().put("op", op).put("name", "blobferry-1.0.0.zip")).getJSONObject("error").getString("code"))
         }
+        for (op in listOf("export", "next-launch-log")) {
+            assertEquals(op, "AGENT_COMMANDS_DISABLED",
+                call(provider, "report", JSONObject().put("op", op)).getJSONObject("error").getString("code"))
+        }
         assertFalse(call(provider, "access").getBoolean("commands"))
         assertTrue(call(provider, "state").getBoolean("ok"))
     }

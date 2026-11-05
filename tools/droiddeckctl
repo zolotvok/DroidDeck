@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -458,6 +459,58 @@ def blobferry(args: argparse.Namespace, adb: str, serial: str) -> dict:
     return result
 
 
+def safe_extract(archive: Path, destination: Path) -> list[str]:
+    """Unzips a report into destination; names that would leave it (absolute, '..') are refused."""
+    root = destination.resolve()
+    names = []
+    with zipfile.ZipFile(archive) as bundle:
+        for member in bundle.infolist():
+            target = (root / member.filename).resolve()
+            if member.filename.startswith("/") or (target != root and root not in target.parents):
+                raise ControlError(f"Unsafe path in the report: {member.filename}", "FILE_IO")
+            if member.is_dir():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.open(member) as source, target.open("wb") as sink:
+                shutil.copyfileobj(source, sink)
+            names.append(member.filename)
+    return names
+
+
+def report(args: argparse.Namespace, adb: str, serial: str) -> dict:
+    """Problem report: summary (redacted, no debugging tools), export <dir> and next-launch-log (debugging tools)."""
+    op = args.report_op
+    if op == "summary":
+        return checked(provider_call(adb, serial, "report", request={"op": "summary"}, timeout=120), "REPORT_FAILED")
+    if op == "export" and not 1 <= args.max_mb <= 200:
+        raise ControlError("--max-mb must be 1..200", "INVALID_ARGUMENTS")
+    require_commands(adb, serial)
+    if op == "next-launch-log":
+        return checked(provider_call(adb, serial, "report", request={"op": op, "on": args.state == "on"}), "REPORT_FAILED")
+    request = {"op": "export", "noPrevious": args.no_previous, "proton": not args.no_proton, "maxMb": args.max_mb, "raw": args.raw}
+    result = checked(provider_call(adb, serial, "report", request=request, timeout=args.timeout), "REPORT_FAILED")
+    remote = result.get("path")
+    if not isinstance(remote, str) or not remote.startswith("/") or not remote.endswith(".zip"):
+        raise ControlError("The device returned no report path", "INVALID_PROVIDER_RESPONSE")
+    destination = Path(args.directory).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    local_zip = destination / Path(remote).name
+    pulled = run_adb(adb, serial, "pull", remote, str(local_zip), timeout=args.timeout)
+    run_adb(adb, serial, "shell", "rm", "-f", remote)
+    if pulled.returncode != 0 or not local_zip.is_file():
+        detail = (pulled.stderr or pulled.stdout).decode(errors="replace").strip()
+        raise ControlError(detail or "adb pull failed", "LOG_PULL_FAILED")
+    try:
+        files = safe_extract(local_zip, destination)
+    except zipfile.BadZipFile as exc:
+        raise ControlError(f"The pulled report is not a zip: {exc}", "FILE_IO") from exc
+    if args.no_zip:
+        local_zip.unlink()
+    result.pop("path", None)
+    result.update(directory=str(destination), zip=None if args.no_zip else str(local_zip), files=len(files))
+    return result
+
+
 def input_request(args: argparse.Namespace) -> dict:
     kind = args.input_type
     if kind == "key":
@@ -737,6 +790,9 @@ def execute(args: argparse.Namespace, adb: str, serial: str) -> dict:
     if command == "blobferry":
         return add_serial(blobferry(args, adb, serial), serial)
 
+    if command == "report":
+        return add_serial(report(args, adb, serial), serial)
+
     if command == "glasses":
         request = {"op": args.glasses_op or "status"}
         if args.glasses_op == "set":
@@ -953,6 +1009,20 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
         sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
 
+    rep = commands.add_parser("report", help="problem report: export the redacted report zip, show its summary, one-shot PROTON_LOG")
+    rep_ops = rep.add_subparsers(dest="report_op", required=True)
+    rep_ops.add_parser("summary", help="print the report summary (the GitHub issue block), redacted")
+    export = rep_ops.add_parser("export", help="build the report on the device, pull and unzip it into DIR (debugging tools)")
+    export.add_argument("directory", help="local directory for the report files")
+    export.add_argument("--no-previous", action="store_true", help="leave out the previous session's logs")
+    export.add_argument("--no-proton", action="store_true", help="leave out the Proton logs")
+    export.add_argument("--max-mb", type=int, default=20, help="size cap of the uncompressed report (default 20)")
+    export.add_argument("--raw", action="store_true", help="no redaction (debuggable builds only, for our own phone)")
+    export.add_argument("--no-zip", action="store_true", help="delete the pulled zip after unpacking")
+    export.add_argument("--timeout", type=float, default=300, help="seconds for building and pulling the report")
+    nll = rep_ops.add_parser("next-launch-log", help="one-shot PROTON_LOG=1 for the next game launch (debugging tools)")
+    nll.add_argument("state", choices=["on", "off"])
+
     glasses = commands.add_parser("glasses", help="VITURE glasses: status, settings, head tracking test")
     glasses_ops = glasses.add_subparsers(dest="glasses_op")
     glasses_ops.add_parser("status")
@@ -1016,7 +1086,7 @@ EXIT_SESSION = {
 EXIT_TIMEOUT = {"TIMEOUT", "ARTIFACT_TIMEOUT"}
 EXIT_FILE = {"NO_SESSION_LOGS", "LOG_PULL_FAILED", "SCREENSHOT_FAILED", "FILE_IO", "RECORD_FAILED", "PUSH_FAILED",
              "PACING_FAILED", "XR_CAPTURE_FAILED"}
-EXIT_DENIED = {"AGENT_COMMANDS_DISABLED", "PROTECTED_PREFS", "PROTECTED_CONTROL"}
+EXIT_DENIED = {"AGENT_COMMANDS_DISABLED", "PROTECTED_PREFS", "PROTECTED_CONTROL", "RAW_NOT_ALLOWED"}
 
 
 def exit_code(exc: Exception) -> int:

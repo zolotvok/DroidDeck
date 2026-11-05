@@ -29,8 +29,8 @@ Player controls and observations work over authorized ADB on any build: `state`,
 `displays`, `wake`, `glasses` (except `glasses raw`), and `access`.
 
 **Setup > Diagnostics > Debugging tools** is off by default in every build, including debug builds.
-It enables `run`, `guest`, `cdp`, all `env` operations, `override`, `prefs`, `blobferry install|rollback|reset`
-and `glasses raw`. The
+It enables `run`, `guest`, `cdp`, all `env` operations, `override`, `prefs`, `blobferry install|rollback|reset`,
+`report export|next-launch-log` and `glasses raw`. The
 toggle switches directly without a confirmation dialog. The bridge refuses to change it through `ui`
 or preference writes. The existing preference key, `setting-agent-commands` test tag, JSON command
 names, and `AGENT_COMMANDS_DISABLED` error code are unchanged. Refusals exit 7; `droiddeckctl access`
@@ -119,6 +119,9 @@ tools/droiddeckctl blobferry status
 tools/droiddeckctl blobferry install ../bridge/build/dist/blobferry-1.0.0.zip [--force-stop] [--restart]
 tools/droiddeckctl blobferry rollback
 tools/droiddeckctl blobferry reset
+tools/droiddeckctl report summary
+tools/droiddeckctl report export ./report [--no-previous] [--no-proton] [--max-mb 20] [--raw] [--no-zip]
+tools/droiddeckctl report next-launch-log on|off
 tools/droiddeckctl proot-profile enable --slow-us 1000
 tools/droiddeckctl proot-profile disable
 tools/droiddeckctl proot-profile report ./session.log --sort wall
@@ -148,6 +151,14 @@ the same shim in `Mali_Bridge.zip`, and the sha256 of the pushed bytes (a `<zip>
 is checked on the PC first). The package stays in `files/blobferry/active/`, the one before it in `previous/`; the files
 apply at the next session start. A running session is refused (`SESSION_ACTIVE`, exit 4) unless `--force-stop`.
 `install` replaces a hand-deployed `.dev` build; `reset` goes back to the package the APK bundles.
+
+`report export` builds the same zip as Setup > Diagnostics > Report a problem with every part ticked (summary, last
+two sessions, the newest Proton logs, layer lines, filtered logcat, exit traces, per-game env), writes it to the app's
+external files dir, pulls it into the directory, unpacks it there and removes the device copy. The JSON lists every
+part with its size, whether it was trimmed and how many values were redacted. `--raw` skips the redaction and is
+refused (`RAW_NOT_ALLOWED`, exit 7) unless the build is debuggable. `report summary` prints the redacted summary
+table (the GitHub issue block) and needs no Debugging tools. `report next-launch-log on` publishes `PROTON_LOG=1`
+for every game until a game has written a Proton log, without changing the stored game settings.
 
 Glasses status reports `deviceMode` from the MCU separately from `sbs`, which
 requires a physical stereo display mode. `switching3d` marks the bounded

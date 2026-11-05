@@ -61,6 +61,8 @@ FAKE_ADB = textwrap.dedent('''\
         print(config.get("timestats", ""))
     elif args[:2] == ["exec-out", "screencap"]:
         sys.stdout.buffer.write(b"\\x89PNG fake")
+    elif args[:1] == ["pull"] and args[1] in config.get("pulls", {}):
+        open(args[2], "wb").write(open(config["pulls"][args[1]], "rb").read())
     with open(config["log"], "a") as log:
         log.write(json.dumps(entry) + "\\n")
 ''')
@@ -540,6 +542,82 @@ class BlobferryCtlTest(FakeAdbTest):
         code, out = self.run_ctl("blobferry", "install", str(self.package()))
         self.assertEqual(2, code)
         self.assertEqual("BAD_ARCH", out["error"]["code"])
+
+
+class ReportCtlTest(FakeAdbTest):
+    REMOTE = "/sdcard/Android/data/x/files/report-export/DroidDeck-report-20261105-1200.zip"
+
+    def report_zip(self, members):
+        import zipfile
+        path = self.dir / "device-report.zip"
+        with zipfile.ZipFile(path, "w") as bundle:
+            for name, text in members.items():
+                bundle.writestr(name, text)
+        return path
+
+    def provider(self, report=None, commands=True, pulls=None):
+        answers = {
+            "access": {"ok": True, "commands": commands, "inbox": "/x"},
+            "report": report or {"ok": True, "command": "report", "op": "export", "path": self.REMOTE,
+                                 "parts": [{"path": "summary.md", "hits": 0}], "notes": []},
+        }
+        self.config.write_text(json.dumps({"provider": answers, "log": str(self.log), "pulls": pulls or {}}))
+
+    def test_summary_needs_no_debugging_tools(self):
+        self.provider(report={"ok": True, "command": "report", "op": "summary", "summary": "| DroidDeck | 0.6.9 |"}, commands=False)
+        code, out = self.run_ctl("report", "summary")
+        self.assertEqual(0, code)
+        self.assertIn("DroidDeck", out["summary"])
+        self.assertEqual([{"op": "summary"}], [c["request"] for c in self.calls("report")])
+        self.assertEqual([], self.calls("access"))
+
+    def test_export_pulls_unzips_and_removes_the_device_copy(self):
+        source = self.report_zip({"summary.md": "# report\n", "session/s1/session.log": "line\n", "manifest.txt": "m\n"})
+        self.provider(pulls={self.REMOTE: str(source)})
+        target = self.dir / "out"
+        code, out = self.run_ctl("report", "export", str(target), "--no-previous", "--max-mb", "8")
+        self.assertEqual(0, code, out)
+        self.assertEqual([{"op": "export", "noPrevious": True, "proton": True, "maxMb": 8, "raw": False}],
+                         [c["request"] for c in self.calls("report")])
+        self.assertEqual("line\n", (target / "session/s1/session.log").read_text())
+        self.assertTrue((target / "DroidDeck-report-20261105-1200.zip").is_file())
+        self.assertEqual(3, out["files"])
+        self.assertEqual(str(target.resolve()), out["directory"])
+        self.assertIn(["shell", "rm", "-f", self.REMOTE], [c["args"] for c in self.calls()])
+
+    def test_export_refuses_paths_that_leave_the_directory(self):
+        source = self.report_zip({"../escape.txt": "x"})
+        self.provider(pulls={self.REMOTE: str(source)})
+        code, out = self.run_ctl("report", "export", str(self.dir / "out"))
+        self.assertEqual(6, code)
+        self.assertEqual("FILE_IO", out["error"]["code"])
+        self.assertFalse((self.dir / "escape.txt").exists())
+
+    def test_export_needs_debugging_tools(self):
+        self.provider(commands=False)
+        code, out = self.run_ctl("report", "export", str(self.dir / "out"))
+        self.assertEqual(7, code)
+        self.assertEqual("AGENT_COMMANDS_DISABLED", out["error"]["code"])
+        self.assertEqual([], self.calls("report"))
+
+    def test_raw_refusal_keeps_its_code(self):
+        self.provider(report={"ok": False, "error": {"code": "RAW_NOT_ALLOWED", "message": "debuggable only"}})
+        code, out = self.run_ctl("report", "export", str(self.dir / "out"), "--raw")
+        self.assertEqual(7, code)
+        self.assertEqual("RAW_NOT_ALLOWED", out["error"]["code"])
+        self.assertTrue(self.calls("report")[0]["request"]["raw"])
+
+    def test_max_mb_is_checked_before_the_device_is_asked(self):
+        self.provider()
+        code, out = self.run_ctl("report", "export", str(self.dir / "out"), "--max-mb", "0")
+        self.assertEqual(2, code)
+        self.assertEqual([], self.calls("report"))
+
+    def test_next_launch_log_sends_the_state(self):
+        self.provider(report={"ok": True, "command": "report", "op": "next-launch-log", "on": False})
+        code, out = self.run_ctl("report", "next-launch-log", "off")
+        self.assertEqual(0, code)
+        self.assertEqual([{"op": "next-launch-log", "on": False}], [c["request"] for c in self.calls("report")])
 
 
 class ScenarioTest(FakeAdbTest):
