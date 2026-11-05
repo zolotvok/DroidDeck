@@ -1039,6 +1039,279 @@ class FocusReassertTest(unittest.TestCase):
         self.assertIn("released GAMESCOPECTRL_BASELAYER_WINDOW", lines[1])
 
 
+class FocusGuardTest(unittest.TestCase):
+    """wd1-vivoboost-0800 L1 (upstream-rebase-1102 § 20): the web helper crashed, the reloaded Steam UI took the
+    front and dropped WD1 (3529167647) from its base layer while the game and its launch reaper lived on."""
+
+    APP = 3529167647
+    GAME = 0x4200005
+    STEAM_WIN = 0x2200037
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.proc = Path(self.temp.name)
+        self.now = [1000.0]
+        self.events = []
+        self.menu = [None]
+        self.browser_pids = [{500}]
+        self.guard = agent.FocusGuard(clock=lambda: self.now[0], proc=self.proc, menu_press=lambda: self.menu[0],
+                                      events=self.events, browsers=lambda: set(self.browser_pids[0]))
+        self.fake_proc(9451, 1, "reaper", cmdline=["reaper", "SteamLaunch", "AppId=%d" % self.APP, "--", "sh"])
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1", "ENABLE_MALI_WSI": "1"})
+        self.env = patch.dict(os.environ, {"DISPLAY": ":0"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        os.environ.pop("BL_FOCUS_GUARD", None)
+        self.logs = patch.object(agent, "log")
+        self.log = self.logs.start()
+        self.addCleanup(self.logs.stop)
+
+    def fake_proc(self, pid, parent, comm, cmdline=None, state="S", env=None):
+        root = self.proc / str(pid)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "comm").write_text(comm + "\n")
+        if cmdline is not None:
+            (root / "cmdline").write_bytes(b"".join(arg.encode() + b"\0" for arg in cmdline))
+        (root / "environ").write_bytes(b"".join(("%s=%s" % kv).encode() + b"\0" for kv in (env or {}).items()))
+        (root / "stat").write_text("%d (%s) %s %d 0 0" % (pid, comm, state, parent))
+
+    def snap(self, focused, baselayer, focusable=None, wm_state="normal", steam_pid=8300, game=True):
+        wins = [{"window": self.GAME, "map": "viewable", "appId": None, "pid": 10747, "wmState": wm_state,
+                 "geometry": [0, 0, 1600, 720]}] if game else []
+        return {"focusedApp": focused, "focusedWindow": self.GAME if focused == self.APP else self.STEAM_WIN,
+                "focusableApps": focusable if focusable is not None else [self.APP, 769],
+                "focusableWindows": [{"window": self.GAME, "appId": self.APP, "pid": 10747}],
+                "baselayerAppIds": list(baselayer),
+                "displays": {":0": [{"window": self.STEAM_WIN, "map": "viewable", "appId": 769, "pid": steam_pid}],
+                             ":1": wins}}
+
+    def playing(self, seconds=60):
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+        self.now[0] += seconds
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+
+    def dropped(self, **kw):
+        return self.snap(769, [413091, 769], focusable=[769], **kw)
+
+    def lines(self):
+        return [c.args[0] for c in self.log.call_args_list]
+
+    def test_reload_after_a_web_helper_crash_puts_the_game_back(self):
+        self.playing()
+        self.events.append((self.now[0] - 110, "Steam keyboard: Target crashed"))
+        self.now[0] += 5
+        self.assertEqual([], self.guard.plan(self.dropped(wm_state="iconic")))  # settles first
+        self.assertAlmostEqual(self.now[0] + agent.FocusGuard.BACKOFF[0], self.guard.wake)
+        self.now[0] += agent.FocusGuard.BACKOFF[0]
+        actions = self.guard.plan(self.dropped(wm_state="iconic"))
+        self.assertEqual(1, len(actions))
+        kind, display, window, app, pid, order = actions[0][:6]
+        self.assertEqual(("restore", ":1", self.GAME, self.APP, 10747), (kind, display, window, app, pid))
+        self.assertEqual([413091, self.APP, 769], order)  # Steam's own layout while a game runs
+        self.assertEqual((1, "iconic"), actions[0][7:])
+        text = "\n".join(self.lines())
+        self.assertIn("Steam took the front from app %d" % self.APP, text)
+        self.assertIn("its launch reaper alive", text)
+        self.assertIn("Target crashed (115 s ago)", text)
+
+    def test_tries_back_off_and_stop_at_the_cap(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        tries = []
+        for _ in range(40):
+            self.now[0] += 1
+            for action in self.guard.plan(self.dropped()):
+                tries.append((action[7], self.now[0]))
+        self.assertEqual([1, 2, 3], [t for t, _ in tries])
+        gaps = [b - a for (_, a), (_, b) in zip(tries, tries[1:])]
+        self.assertEqual(list(agent.FocusGuard.BACKOFF[1:]), gaps)
+        self.assertIn("giving up for this reload", "\n".join(self.lines()))
+
+    def test_back_in_front_then_dropped_again_counts_in_the_same_reload(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 3
+        self.assertEqual([], self.guard.plan(self.dropped()))
+        self.now[0] += 3
+        self.assertEqual(1, self.guard.plan(self.dropped())[0][7])
+        self.now[0] += 1
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))  # back in front
+        self.assertIn("back in front after try 1", "\n".join(self.lines()))
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.dropped()))
+        self.now[0] += agent.FocusGuard.BACKOFF[1]
+        self.assertEqual(2, self.guard.plan(self.dropped())[0][7])
+        # Stable for EPISODE_SPAN: the reload is handled; the old crash does not arm a new one.
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.now[0] += agent.FocusGuard.EPISODE_SPAN
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.guard.episode)
+        for _ in range(10):
+            self.now[0] += 2
+            self.assertEqual([], [a for a in self.guard.plan(self.dropped()) if a[0] == "restore"])
+
+    def test_steam_menu_over_the_game_is_left_alone(self):
+        # Guide/QAM: Steam goes before the game but keeps it in its base layer.
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        for _ in range(10):
+            self.now[0] += 2
+            self.assertEqual([], self.guard.plan(self.snap(769, [413091, 769, self.APP])))
+        self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_a_guide_press_before_steam_took_the_front_is_the_user(self):
+        self.playing()
+        self.events.append((self.now[0] - 30, "Steam keyboard: Target crashed"))
+        self.menu[0] = (self.now[0] + 0.5, "guide")
+        self.now[0] += 1.5
+        for _ in range(10):
+            self.assertEqual([], self.guard.plan(self.dropped()))
+            self.now[0] += 2
+        self.assertIn("after a user guide press; left alone", "\n".join(self.lines()))
+
+    def test_no_reload_evidence_no_action(self):
+        # A quit from Steam's menu also drops the game while it is still exiting.
+        self.playing()
+        self.events.append((self.now[0] - agent.FocusGuard.EVIDENCE_WINDOW - 60, "Steam keyboard: Target crashed"))
+        for _ in range(10):
+            self.now[0] += 2
+            self.assertEqual([], self.guard.plan(self.dropped()))
+        self.assertIn("no web helper crash or Steam window remap", "\n".join(self.lines()))
+
+    def test_a_steam_window_remap_or_web_helper_restart_is_evidence(self):
+        self.playing()
+        self.now[0] += 3
+        self.guard.plan(self.dropped(steam_pid=13802))  # Steam's window now belongs to another process
+        self.now[0] += agent.FocusGuard.BACKOFF[0]
+        actions = self.guard.plan(self.dropped(steam_pid=13802))
+        self.assertEqual("restore", actions[0][0])
+        self.assertIn("Steam window remap", "\n".join(self.lines()))
+        self.assertEqual(["steamwebhelper restarted (browser pid [500] -> [501])"], [
+            w for _, w in self.restart_seen()])
+
+    def restart_seen(self):
+        guard = agent.FocusGuard(clock=lambda: self.now[0], proc=self.proc, menu_press=lambda: None, events=[],
+                                 browsers=lambda: set(self.browser_pids[0]))
+        guard.sample_browsers(self.now[0])
+        self.browser_pids[0] = {501}
+        guard.sample_browsers(self.now[0] + agent.FocusGuard.BROWSER_EVERY)
+        return guard.seen
+
+    def test_only_games_on_the_bridge_unless_asked(self):
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={})
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        for _ in range(6):
+            self.now[0] += 2
+            self.assertEqual([], self.guard.plan(self.dropped()))
+        self.assertIn("not watching app %d" % self.APP, "\n".join(self.lines()))
+        self.guard.held = None
+        with patch.dict(os.environ, {"BL_FOCUS_GUARD": "1"}):
+            self.assertEqual((True, "BL_FOCUS_GUARD=1"), self.guard.enabled_for(10747))
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1", "BL_FOCUS_GUARD": "0"})
+        self.assertEqual((False, "the game's BL_FOCUS_GUARD=0"), self.guard.enabled_for(10747))
+        with patch.dict(os.environ, {"BL_FOCUS_GUARD": "0"}):
+            self.assertTrue(agent.FocusGuard.off())
+        self.assertFalse(agent.FocusGuard.off())
+
+    def test_gone_game_stops_and_the_window_control_is_released(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.dropped()))
+        self.now[0] += agent.FocusGuard.BACKOFF[0]
+        self.assertEqual("restore", self.guard.plan(self.dropped())[0][0])
+        self.guard.pin = {"display": ":1", "window": self.GAME, "pid": 10747, "original": [0], "at": self.now[0],
+                          "back": None}
+        self.now[0] += 1
+        self.assertEqual([("release", ":1", self.GAME, [0], "window gone")],
+                         self.guard.plan(self.dropped(game=False)))
+        self.assertIsNone(self.guard.held)
+        self.assertIsNone(self.guard.pin)
+
+    def test_the_window_control_goes_at_a_user_press_or_after_the_hold(self):
+        self.playing()
+        pin = {"display": ":1", "window": self.GAME, "pid": 10747, "original": [0], "at": self.now[0], "back": None}
+        self.guard.pin = dict(pin)
+        self.menu[0] = (self.now[0] + 1, "qam")
+        self.now[0] += 2
+        self.assertEqual([("release", ":1", self.GAME, [0], "user qam press")],
+                         self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+        self.guard.pin = dict(pin, back=self.now[0])
+        self.menu[0] = None
+        self.now[0] += agent.FocusGuard.PIN_HOLD
+        self.assertEqual("release", self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))[0][0])
+        self.guard.pin = dict(pin, at=self.now[0])
+        self.assertEqual([("release", ":1", self.GAME, [0], "Steam put itself before the game [413091, 769, %d]"
+                           % self.APP)], [a for a in self.guard.plan(self.snap(769, [413091, 769, self.APP]))
+                                          if a[0] == "release"])
+
+    def test_apply_writes_state_base_layer_control_and_restore(self):
+        written = []
+
+        class FakeX:
+            root = 1
+
+            def __init__(self, display):
+                self.display = display
+
+            def set_prop32(self, window, name, kind, values):
+                written.append((self.display, window, name, kind, list(values)))
+
+            def prop(self, window, name):
+                return [0]
+
+            def close(self):
+                pass
+
+        action = ("restore", ":1", self.GAME, self.APP, 10747, [413091, self.APP, 769], "why", 1, "iconic")
+        with patch.object(agent, "X", FakeX):
+            self.guard.apply([action])
+            self.assertEqual(self.GAME, self.guard.pin["window"])
+            self.guard.apply([("release", ":1", self.GAME, [0], "window gone")])
+            self.guard.pin = None
+            self.guard.apply([action], control_busy=True)
+        self.assertEqual([
+            (":1", self.GAME, "WM_STATE", "WM_STATE", [1, 0]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_APPID", "CARDINAL", [413091, self.APP, 769]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_WINDOW", "CARDINAL", [self.GAME]),
+            (":0", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+            (":1", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_WINDOW", "CARDINAL", [0]),
+            (":1", self.GAME, "WM_STATE", "WM_STATE", [1, 0]),
+            (":0", 1, "GAMESCOPECTRL_BASELAYER_APPID", "CARDINAL", [413091, self.APP, 769]),
+            (":0", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+            (":1", 1, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1]),
+        ], written)
+        lines = self.lines()
+        self.assertTrue(lines[0].startswith("focus guard try 1/3: game window 0x4200005 on :1 (app %d" % self.APP),
+                        lines)
+        self.assertIn("WM_STATE Normal on 0x4200005 (was iconic)", lines[0])
+        self.assertIn("released GAMESCOPECTRL_BASELAYER_WINDOW", lines[1])
+        self.assertIn("left to focus reassert", lines[2])
+
+    def test_helpers(self):
+        self.assertEqual([413091, 7, 769], agent.guard_order([413091, 769], 7))
+        self.assertEqual([7, 413091], agent.guard_order([413091, 7], 7))
+        events = []
+        clock = lambda: 5.0
+        with patch.object(agent, "WEBHELPER_EVENTS", events):
+            self.assertTrue(agent.note_webhelper_trouble(Exception('{"code": -32000, "message": "Target crashed"}'),
+                                                         clock))
+            self.assertTrue(agent.note_webhelper_trouble(Exception("DevTools closed the connection"), clock))
+            self.assertFalse(agent.note_webhelper_trouble(Exception("No SharedJSContext yet"), clock))
+        self.assertEqual([(5.0, "Steam keyboard: Target crashed"),
+                          (5.0, "Steam keyboard: closed the connection")], events)
+        stamp = self.proc / "menu"
+        self.assertIsNone(agent.read_menu_press(stamp))
+        stamp.write_text("123456 guide\n")
+        self.assertEqual((123.456, "guide"), agent.read_menu_press(stamp))
+        self.fake_proc(600, 1, "steamwebhelper", cmdline=["steamwebhelper", "-lang=en"])
+        self.fake_proc(601, 600, "steamwebhelper", cmdline=["steamwebhelper", "--type=renderer"])
+        self.assertEqual({600}, agent.webhelper_browsers(self.proc))
+
+
 class VrFocusTest(unittest.TestCase):
     def test_scene_dashboard_and_external_focus_changes(self):
         focus = agent.VrSceneFocus()

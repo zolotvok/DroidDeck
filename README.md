@@ -59,6 +59,7 @@ On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an 
 **Done for you on PanVK:**
 - `ENABLE_GAMESCOPE_WSI=0` is set automatically: through gamescope's WSI layer, games showed only their first frames, then a black screen.
 - Launcher dialogs smaller than the screen are moved by one pixel once, so they take input. This is for Oblivion's launcher; turn it off with `BL_NUDGE_DIALOGS=0`.
+- If Steam's web helper crashes and its reloaded UI takes the screen from a game that is still running on the Mali bridge, the game is put back in front, at most 3 times per reload. A Steam menu or QAM you open yourself is left alone. Turn this off with `BL_FOCUS_GUARD=0`, or turn it on for other games with `BL_FOCUS_GUARD=1`.
 
 **Session environment to set yourself:** use `tools/droiddeckctl env set --persistent` from a PC with adb.
 - `VKD3D_DISABLE_EXTENSIONS=VK_EXT_present_timing`: Horizon Zero Dawn otherwise crashes in Mesa's X11 WSI.

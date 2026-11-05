@@ -246,6 +246,25 @@ static void state(char *out, size_t size) {
 
 static void ms(int n) { usleep(n * 1000); }
 
+/* The user's buttons in the snapshot (guide = bit 10, QAM = bit 11). */
+static void deck_buttons(uint32_t buttons) {
+  uint64_t *seq = (uint64_t *)(ring + 32);
+  __atomic_store_n(seq, *seq + 1, __ATOMIC_RELEASE);
+  *(uint32_t *)(ring + 40) = buttons;
+  __atomic_store_n(seq, *seq + 1, __ATOMIC_RELEASE);
+}
+
+static void menu(char *out, size_t size) {
+  char path[512];
+  snprintf(path, sizeof(path), "%s/.padapply/menu", dir);
+  FILE *f = fopen(path, "r");
+  snprintf(out, size, "none");
+  if (!f) return;
+  if (!fgets(out, (int)size, f)) snprintf(out, size, "empty");
+  fclose(f);
+  out[strcspn(out, "\n")] = 0;
+}
+
 /* Drains the Deck reports; 1 if one of them holds the Steam button. */
 static int saw_guide(int hid, int wait_ms) {
   int seen = 0;
@@ -317,6 +336,23 @@ int main(void) {
   state(s, sizeof(s));
   printf("fed %s\n", s);
   deck_stick(0);
+
+  /* The agent's guide tap above is no user press; the user's guide and QAM presses are stamped. */
+  menu(s, sizeof(s));
+  printf("menu-before %s\n", s);
+  struct timespec t0;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  deck_buttons(1u << 10);
+  ms(60);
+  menu(s, sizeof(s));
+  printf("menu-guide %s %lld\n", s, (long long)t0.tv_sec * 1000 + t0.tv_nsec / 1000000);
+  deck_buttons(0);
+  ms(60);
+  deck_buttons(1u << 11);
+  ms(60);
+  menu(s, sizeof(s));
+  printf("menu-qam %s\n", s);
+  deck_buttons(0);
   return 0;
 }
 """
@@ -421,6 +457,13 @@ class FakeinputUinputTest(unittest.TestCase):
         self.assertIn("padapply: guide tap 1 (80 ms) on request", text)
         self.assertRegex(text, r"padapply: event16 fed again \d+ ms after adopt #1 \(dead marks 1, guide taps 1\)")
         self.assertEqual(text.count("(dead mark "), 1)
+        # Focus guard: only the user's own Guide/QAM presses are stamped, in CLOCK_MONOTONIC ms.
+        self.assertEqual(out["menu-before"], "none")
+        stamp, button, start = out["menu-guide"].split()
+        self.assertEqual(button, "guide")
+        self.assertGreaterEqual(int(stamp), int(start))
+        self.assertLess(int(stamp) - int(start), 1000)
+        self.assertRegex(out["menu-qam"], r"^\d+ qam$")
 
     def test_clean_exit_in_window_removes_node(self):
         hook, log = self.run_mode("exit")

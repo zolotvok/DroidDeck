@@ -620,6 +620,366 @@ class FocusReassert:
                     % (attempt, window, display, app, why, ", ".join(steps), e))
 
 
+WEBHELPER_EVENTS = []  # (monotonic s, what): Steam's web helper page crashed or its DevTools went away
+WEBHELPER_TROUBLE = ("Target crashed", "closed the connection", "Connection refused")
+
+
+def note_webhelper_trouble(error, clock=time.monotonic):
+    """KeyboardWatcher's DevTools errors, the same ones that reach session.log ("Target crashed" and the
+    lost DevTools connection when steamwebhelper dies): evidence for FocusGuard that Steam's UI reloaded."""
+    text = str(error)
+    what = next((w for w in WEBHELPER_TROUBLE if w in text), None)
+    if what:
+        WEBHELPER_EVENTS.append((clock(), "Steam keyboard: " + what))
+        del WEBHELPER_EVENTS[:-16]
+    return what is not None
+
+
+def webhelper_browsers(proc=Path("/proc")):
+    """The steamwebhelper browser processes (not its --type= children): a new pid means the web helper restarted."""
+    pids = set()
+    try:
+        entries = [e for e in os.listdir(proc) if e.isdigit()]
+    except OSError:
+        return pids
+    for entry in entries:
+        try:
+            if (proc / entry / "comm").read_text().strip() != "steamwebhelper":
+                continue
+            args = (proc / entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if not any(arg.startswith(b"--type=") for arg in args):
+            pids.add(int(entry))
+    return pids
+
+
+def read_menu_press(path):
+    """libfakeinput's last user Guide/QAM press: (CLOCK_MONOTONIC seconds, button) or None."""
+    try:
+        ms, _, button = path.read_text().strip().partition(" ")
+        return int(ms) / 1000.0, button or "?"
+    except (OSError, ValueError):
+        return None
+
+
+def guard_order(baselayer, app):
+    """Steam's own layout while a game runs: the game right before the Steam UI ([413091, app, 769])."""
+    rest = [item for item in baselayer if item != app]
+    if STEAM_UI_APP in rest:
+        at = rest.index(STEAM_UI_APP)
+        return rest[:at] + [app] + rest[at:]
+    return [app] + rest
+
+
+class FocusGuard:
+    """Puts a running game back in front when Steam's UI reloads and takes the front by itself.
+
+    Measured (wd1-vivoboost-0800 L1, upstream-rebase-1102 § 20): steamwebhelper crashed under memory pressure
+    ("Target crashed", DevTools gone), the reloaded Steam UI took the focus (769) and rebuilt the base layer
+    without the game ([413091, 769]) although the game and its launch reaper lived on. FocusReassert skips such a
+    game (its own reaper is alive), so this guard handles it. It acts only when all of these hold:
+      - the game was in front (GAMESCOPE_FOCUSED_APP) for HOLD_MIN s; its window still exists and its process lives;
+      - it runs on the Mali bridge (its environment has ENABLE_MALI_COMPAT/ENABLE_MALI_WSI=1), or BL_FOCUS_GUARD=1
+        (the agent's or the game's environment); BL_FOCUS_GUARD=0 in either turns it off;
+      - Steam now has the focus (769) and Steam's base layer no longer lists the game. When the user opens the
+        Steam menu or the QAM over a game, Steam keeps the game in its base layer, behind itself
+        ([413091, 769, app]); that is left alone;
+      - no user Guide/QAM press (libfakeinput's .padapply/menu stamp) from MENU_LEAD s before Steam took the front
+        on: then the front is the user's choice;
+      - a reload is evidenced within EVIDENCE_WINDOW s: a web helper crash seen by the Steam keyboard watcher
+        (the session log's "Target crashed"/lost DevTools lines), a new steamwebhelper browser pid, or a Steam
+        window remap (a window or window pid on Steam's display that was not there while the game was in front).
+        Without it (a quit from Steam's menu also drops the game) nothing is done.
+    Then, with the same steps as FocusReassert, it sets WM_STATE Normal on the game window, writes the base
+    layer as Steam does while a game runs (the game before 769), sets GAMESCOPECTRL_BASELAYER_WINDOW to the
+    window and asks gamescope to restore its focus window: at most TRIES times per reload, BACKOFF s apart. The
+    window control is released when the game was back in front for PIN_HOLD s, at a user Guide/QAM press, when
+    Steam itself puts 769 before the game, or when the window or process is gone. Every decision is logged."""
+
+    TRIES = 3
+    BACKOFF = (2.0, 4.0, 8.0)  # before try 1 (after Steam took the front), 2 and 3 (after the try before)
+    HOLD_MIN = 3.0
+    MENU_LEAD = 2.0
+    EVIDENCE_WINDOW = 300.0
+    EPISODE_SPAN = 60.0  # back in front this long after the last try: the reload is over
+    PIN_HOLD = 20.0
+    BROWSER_EVERY = 5.0
+    CONTROL = "GAMESCOPECTRL_BASELAYER_WINDOW"
+
+    def __init__(self, clock=time.monotonic, proc=Path("/proc"), menu_press=None, events=None, browsers=None):
+        self.clock = clock
+        self.proc = proc
+        evdev = os.environ.get("FAKE_EVDEV_DIR")
+        self.menu_press = menu_press or (
+            (lambda: read_menu_press(Path(evdev) / ".padapply" / "menu")) if evdev else (lambda: None))
+        self.events = WEBHELPER_EVENTS if events is None else events
+        self.browsers = browsers or (lambda: webhelper_browsers(self.proc))
+        self.held = None      # the game last in front: app, display, window, pid, since, seen, steam, on, why
+        self.away = None      # Steam in front since: since, noted
+        self.episode = None   # one reload: opened, tries, last, back
+        self.pin = None       # display, window, pid, original, at, back
+        self.seen = []        # own evidence: (t, what)
+        self.spent = float("-inf")
+        self.known_browsers = None
+        self.browsers_at = None
+        self.wake = None
+
+    @staticmethod
+    def off():
+        return os.environ.get("BL_FOCUS_GUARD") == "0"
+
+    def enabled_for(self, pid):
+        if os.environ.get("BL_FOCUS_GUARD") == "0":
+            return False, "BL_FOCUS_GUARD=0"
+        env = process_env(pid, self.proc)
+        own = env.get(b"BL_FOCUS_GUARD")
+        if own == b"0":
+            return False, "the game's BL_FOCUS_GUARD=0"
+        if os.environ.get("BL_FOCUS_GUARD") == "1" or own == b"1":
+            return True, "BL_FOCUS_GUARD=1"
+        if env.get(b"ENABLE_MALI_COMPAT") == b"1" or env.get(b"ENABLE_MALI_WSI") == b"1":
+            return True, "on the Mali bridge"
+        return False, "not on the Mali bridge (BL_FOCUS_GUARD=1 turns it on)"
+
+    @staticmethod
+    def steam_windows(snap):
+        return {(w.get("window"), w.get("pid")) for w in snap.get("displays", {}).get(os.environ.get("DISPLAY"), [])
+                if w.get("map") == "viewable" and not w.get("overrideRedirect") and not w.get("inputOnly")}
+
+    @staticmethod
+    def game_window(snap, app):
+        """(display, window entry, pid) of the app's window in front: gamescope's focused window, else the
+        largest viewable window tagged STEAM_GAME=app, on a game display."""
+        steam = os.environ.get("DISPLAY")
+        triplets = {f.get("window"): f.get("pid") for f in snap.get("focusableWindows", [])}
+        best = None
+        for display, wins in snap.get("displays", {}).items():
+            if display == steam:
+                continue
+            for win in wins:
+                if win.get("map") != "viewable" or win.get("overrideRedirect") or win.get("inputOnly"):
+                    continue
+                pid = win.get("pid") or triplets.get(win.get("window"))
+                if win.get("window") == snap.get("focusedWindow") and pid:
+                    return display, win, pid
+                if win.get("appId") == app and pid:
+                    area = win.get("geometry", [0, 0, 0, 0])[2] * win.get("geometry", [0, 0, 0, 0])[3]
+                    if best is None or area > best[0]:
+                        best = (area, display, win, pid)
+        return best[1:] if best else None
+
+    @staticmethod
+    def find(snap, display, window):
+        return next((w for w in snap.get("displays", {}).get(display, []) if w.get("window") == window), None)
+
+    def note(self, key, message):
+        if self.away is not None:
+            if key in self.away["noted"]:
+                return
+            self.away["noted"].add(key)
+        log("focus guard: " + message)
+
+    def evidence(self, now):
+        """Reload evidence newer than the last reload already handled, within EVIDENCE_WINDOW."""
+        floor = max(self.spent, (self.away["since"] if self.away else now) - self.EVIDENCE_WINDOW)
+        return [e for e in list(self.events) + self.seen if e[0] >= floor]
+
+    def sample_browsers(self, now):
+        if self.browsers_at is not None and now - self.browsers_at < self.BROWSER_EVERY:
+            return
+        self.browsers_at = now
+        pids = self.browsers()
+        if self.known_browsers and pids and not pids & self.known_browsers:
+            self.seen.append((now, "steamwebhelper restarted (browser pid %s -> %s)"
+                              % (sorted(self.known_browsers), sorted(pids))))
+        elif self.known_browsers and not pids:
+            self.seen.append((now, "steamwebhelper gone (browser pid %s)" % sorted(self.known_browsers)))
+        if pids or self.known_browsers is None:
+            self.known_browsers = pids
+        del self.seen[:-16]
+
+    def plan(self, snap):
+        """The actions for this snapshot: ("release", display, window, original, why) and
+        ("restore", display, window, app, pid, order, why, attempt, wm_state)."""
+        now = self.clock()
+        self.wake = None
+        actions = []
+        focused = snap.get("focusedApp")
+        baselayer = list(snap.get("baselayerAppIds") or [])
+        menu = self.menu_press()
+        held = self.held
+        if self.pin:
+            pin = self.pin
+            win = self.find(snap, pin["display"], pin["window"])
+            why = None
+            if win is None:
+                why = "window gone"
+            elif not pid_alive(pin["pid"], self.proc):
+                why = "process %s gone" % pin["pid"]
+            elif menu and menu[0] > pin["at"]:
+                why = "user %s press" % menu[1]
+            elif (held and held["app"] in baselayer and STEAM_UI_APP in baselayer
+                  and baselayer.index(STEAM_UI_APP) < baselayer.index(held["app"])):
+                why = "Steam put itself before the game %s" % baselayer
+            elif pin["back"] is not None and now - pin["back"] >= self.PIN_HOLD:
+                why = "game back in front for %.0f s" % (now - pin["back"])
+            if why:
+                actions.append(("release", pin["display"], pin["window"], pin["original"], why))
+                self.pin = None
+        if focused and focused != STEAM_UI_APP:
+            found = self.game_window(snap, focused)
+            if not found:
+                return actions
+            display, win, pid = found
+            if held is None or (held["app"], held["window"], held["pid"]) != (focused, win["window"], pid):
+                on, why = self.enabled_for(pid)
+                held = self.held = {"app": focused, "display": display, "window": win["window"], "pid": pid,
+                                    "since": now, "on": on, "why": why}
+                log("focus guard: %s app %s, window 0x%x on %s, pid %s (%s)"
+                    % ("watching" if on else "not watching", focused, win["window"], display, pid, why))
+            held["seen"] = now
+            held["steam"] = self.steam_windows(snap)
+            if held["on"]:
+                self.sample_browsers(now)
+            self.away = None
+            ep = self.episode
+            if ep and ep["app"] == focused:
+                if ep["back"] is None:
+                    ep["back"] = now
+                    log("focus guard: app %s back in front after try %d" % (focused, ep["tries"]))
+                    if self.pin and self.pin["window"] == win["window"]:
+                        self.pin["back"] = now
+                elif ep["last"] is not None and now - ep["last"] >= self.EPISODE_SPAN:
+                    log("focus guard: app %s stayed in front %.0f s after the last try; reload handled"
+                        % (focused, now - ep["last"]))
+                    self.episode = None
+                    self.spent = now
+            return actions
+        if held is None or not held["on"]:
+            return actions
+        app = held["app"]
+        win = self.find(snap, held["display"], held["window"])
+        if win is None or not pid_alive(held["pid"], self.proc):
+            if self.episode or self.away:
+                log("focus guard: app %s %s; stopped" % (app, "window gone" if win is None else "process gone"))
+            self.held = self.away = self.episode = None
+            return actions
+        if self.away is None:
+            self.away = {"since": now, "noted": set()}
+            if self.episode:
+                self.episode["back"] = None
+        away = self.away
+        self.sample_browsers(now)
+        changed = self.steam_windows(snap) ^ held.get("steam", set())
+        if changed and "remap" not in away:
+            away["remap"] = True
+            self.seen.append((now, "Steam window remap %s" % sorted(
+                "0x%x/%s" % (w or 0, p) for w, p in changed)))
+        if focused != STEAM_UI_APP:
+            self.note("focus", "focus left app %s for %s; not Steam's UI, left alone" % (app, focused))
+            return actions
+        if held["seen"] - held["since"] < self.HOLD_MIN and self.episode is None:
+            self.note("short", "app %s was in front only %.1f s; left alone" % (app, held["seen"] - held["since"]))
+            return actions
+        if menu and menu[0] >= away["since"] - self.MENU_LEAD:
+            self.note("user", "Steam in front after a user %s press; left alone" % menu[1])
+            if self.episode:
+                log("focus guard: reload handling for app %s ends at the user's %s press" % (app, menu[1]))
+                self.episode = None
+                self.spent = now
+            return actions
+        if app in baselayer:
+            self.note("menu", "Steam in front, app %s still in its base layer %s (Steam's menu over the game); "
+                      "left alone" % (app, baselayer))
+            return actions
+        evidence = self.evidence(now)
+        if not evidence and self.episode is None:
+            self.note("quiet", "Steam in front and app %s dropped from its base layer %s, but no web helper crash "
+                      "or Steam window remap (a quit?); left alone" % (app, baselayer))
+            return actions
+        ep = self.episode
+        if ep is None or ep["app"] != app:
+            ep = self.episode = {"app": app, "opened": now, "tries": 0, "last": None, "back": None}
+            self.spent = now
+            launched = reaper_launch(held["pid"], self.proc)
+            log("focus guard: Steam took the front from app %s (window 0x%x on %s, pid %s alive, %s; %s) without "
+                "a Guide/QAM press; base layer %s, focusable %s; evidence: %s"
+                % (app, held["window"], held["display"], held["pid"],
+                   "its launch reaper alive" if launched == app else "reaper %s" % launched, held["why"], baselayer,
+                   snap.get("focusableApps"), "; ".join("%s (%.0f s ago)" % (w, now - t) for t, w in evidence[-4:])))
+        if ep["tries"] >= self.TRIES:
+            self.note("spent", "app %s still behind Steam after %d tries; giving up for this reload" % (app, self.TRIES))
+            return actions
+        due = away["since"] + self.BACKOFF[0]
+        if ep["last"] is not None:
+            due = max(due, ep["last"] + self.BACKOFF[min(ep["tries"], len(self.BACKOFF) - 1)])
+        if now < due:
+            self.wake = due
+            return actions
+        ep["tries"] += 1
+        ep["last"] = now
+        order = guard_order(baselayer, app)
+        why = "Steam in front %.1f s, base layer %s, wmState %s" % (now - away["since"], baselayer, win.get("wmState"))
+        actions.append(("restore", held["display"], held["window"], app, held["pid"], order, why, ep["tries"],
+                        win.get("wmState")))
+        if ep["tries"] < self.TRIES:
+            self.wake = now + self.BACKOFF[ep["tries"]]
+        return actions
+
+    def apply(self, actions, control_busy=False):
+        steam = os.environ.get("DISPLAY")
+        for action in actions:
+            if action[0] == "release":
+                _, display, window, original, why = action
+                try:
+                    x = X(steam)
+                    try:
+                        x.set_prop32(x.root, self.CONTROL, "CARDINAL", original or [0])
+                    finally:
+                        x.close()
+                    log("focus guard: released %s (was 0x%x on %s, %s; back to %s)"
+                        % (self.CONTROL, window, display, why, original or [0]))
+                except OSError as e:
+                    log("focus guard: release of 0x%x failed: %s" % (window, e))
+                continue
+            _, display, window, app, pid, order, why, attempt, wm_state = action
+            steps = []
+            try:
+                x = X(display)
+                try:
+                    x.set_prop32(window, "WM_STATE", "WM_STATE", [1, 0])
+                    steps.append("WM_STATE Normal on 0x%x (was %s)" % (window, wm_state))
+                finally:
+                    x.close()
+                x = X(steam)
+                try:
+                    x.set_prop32(x.root, "GAMESCOPECTRL_BASELAYER_APPID", "CARDINAL", order)
+                    steps.append("base layer %s" % order)
+                    if control_busy:
+                        steps.append("%s left to focus reassert" % self.CONTROL)
+                    else:
+                        original = self.pin["original"] if self.pin else (x.prop(x.root, self.CONTROL) or [0])
+                        x.set_prop32(x.root, self.CONTROL, "CARDINAL", [window])
+                        self.pin = {"display": display, "window": window, "pid": pid, "original": original,
+                                    "at": self.clock(), "back": None}
+                        steps.append("%s 0x%x (was %s)" % (self.CONTROL, window, original))
+                finally:
+                    x.close()
+                for d in (steam, display):
+                    x = X(d)
+                    try:
+                        x.set_prop32(x.root, "GAMESCOPE_RESTORE_FOCUS_WINDOW", "CARDINAL", [1])
+                    finally:
+                        x.close()
+                steps.append("restore request")
+                log("focus guard try %d/%d: game window 0x%x on %s (app %s, pid %s): %s; did: %s"
+                    % (attempt, self.TRIES, window, display, app, pid, why, ", ".join(steps)))
+            except OSError as e:
+                log("focus guard try %d/%d: game window 0x%x on %s (app %s, pid %s): %s; failed after [%s]: %s"
+                    % (attempt, self.TRIES, window, display, app, pid, why, ", ".join(steps), e))
+
+
 class FocusWatcher(threading.Thread):
 
     def __init__(self, path):
@@ -630,6 +990,7 @@ class FocusWatcher(threading.Thread):
         self.seq = 0
         self.vr_focus = VrSceneFocus()
         self.reassert = FocusReassert()
+        self.guard = FocusGuard()
         self.nudged = {}
 
     NUDGE_TRIES = 3
@@ -690,7 +1051,8 @@ class FocusWatcher(threading.Thread):
             notified = self.changed.wait(timeout=0.5)
             self.changed.clear()
             app = vr_scene_app()
-            if not notified and app == last_app and time.monotonic() - last_snapshot < 5:
+            due = self.guard.wake is not None and time.monotonic() >= self.guard.wake
+            if not notified and not due and app == last_app and time.monotonic() - last_snapshot < 5:
                 continue
             last_app, last_snapshot = app, time.monotonic()
             time.sleep(0.2)
@@ -720,6 +1082,13 @@ class FocusWatcher(threading.Thread):
                     self.reassert.apply(actions)
                     if any(a[0] == "restore" for a in actions):
                         self.changed.set()
+            if not FocusGuard.off():
+                try:
+                    actions = self.guard.plan(snap)
+                    if actions:
+                        self.guard.apply(actions, control_busy=self.reassert.control is not None)
+                except Exception as e:  # never let the focus watcher die
+                    log("focus guard: %s: %s" % (type(e).__name__, e))
             try:
                 self.nudge_dialog(snap)
             except OSError as e:
@@ -1290,6 +1659,7 @@ class KeyboardWatcher(threading.Thread):
             try:
                 self.watch()
             except Exception as e:
+                note_webhelper_trouble(e)
                 if self.attached:
                     log("Steam keyboard: lost the client (%s); reattaching" % e)
                     failures = 0

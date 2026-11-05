@@ -1871,13 +1871,39 @@ build_deck_report(uint8_t *report, uint32_t packet, uint32_t buttons, const int3
   put16(report + 54, stick(-axes[3]));
 }
 
+// User menu presses for droiddeck-agent's focus guard: when the user presses Guide (Steam) or QAM
+// on the pad, Steam's menu taking the front is the user's choice and must not be undone. Each
+// report thread stamps the rising edge of either button in `buttons` (the user's own input; a guide
+// tap the agent requested is OR'd into the report afterwards and is not stamped) into
+// $FAKE_EVDEV_DIR/.padapply/menu, one line "<CLOCK_MONOTONIC ms> <button>".
+static constexpr uint32_t kMenuPressButtons = kPadApplyGuideButton | SNAPSHOT_QAM_BIT;
+
+__attribute__((visibility("hidden"))) static void note_menu_press(uint32_t buttons, uint32_t &previous) {
+  uint32_t pressed = buttons & kMenuPressButtons & ~previous;
+  previous = buttons & kMenuPressButtons;
+  if (!pressed || !process_is_steam_client()) return;
+  static std::mutex lock;
+  std::lock_guard<std::mutex> guard(lock);
+  std::string dir = padapply_dir();
+  mkdir(dir.c_str(), 0700);
+  char line[64];
+  int n = snprintf(line, sizeof(line), "%lld %s\n", monotonic_ms(),
+                   (pressed & kPadApplyGuideButton) ? "guide" : "qam");
+  std::string tmp = dir + "/menu.tmp";
+  int fd = static_cast<int>(syscall(SYS_openat, AT_FDCWD, tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+  if (fd < 0) return;
+  bool ok = n > 0 && syscall(SYS_write, fd, line, static_cast<size_t>(n)) == n;
+  syscall(SYS_close, fd);
+  if (!ok || rename(tmp.c_str(), (dir + "/menu").c_str()) != 0) unlink(tmp.c_str());
+}
+
 __attribute__((visibility("hidden"))) static void *deck_report_thread(void *arg) {
   auto *deck = static_cast<std::shared_ptr<DeckHidraw> *>(arg);
   std::shared_ptr<DeckHidraw> self = *deck;
   delete deck;
   uint32_t packet = 0;
   SnapshotState snap;
-  uint32_t buttons = 0;
+  uint32_t buttons = 0, menu_buttons = 0;
   int32_t axes[8] = {};
   DeckExtras extras;
   while (live_pad_type() == PAD_TYPE_DECK) {
@@ -1885,6 +1911,7 @@ __attribute__((visibility("hidden"))) static void *deck_report_thread(void *arg)
       buttons = snap.buttons;
       memcpy(axes, snap.axes, sizeof(axes));
     }
+    note_menu_press(buttons, menu_buttons);
     padapply_note_deck_input(buttons, axes);
     read_deck_extras(*self, extras);
     uint8_t report[DECK_REPORT_BYTES];
@@ -1992,7 +2019,7 @@ __attribute__((visibility("hidden"))) static void *sony_report_thread(void *arg)
   uint32_t type = self->sony == 4 ? PAD_TYPE_DS4 : PAD_TYPE_DUALSENSE;
   uint32_t packet = 0;
   SnapshotState snap;
-  uint32_t buttons = 0;
+  uint32_t buttons = 0, menu_buttons = 0;
   int32_t axes[8] = {};
   DeckExtras extras;
   SonyTouch touch;
@@ -2002,6 +2029,7 @@ __attribute__((visibility("hidden"))) static void *sony_report_thread(void *arg)
       buttons = snap.buttons;
       memcpy(axes, snap.axes, sizeof(axes));
     }
+    note_menu_press(buttons, menu_buttons);
     read_deck_extras(*self, extras);
     uint8_t report[SONY_REPORT_BYTES];
     build_sony_report(report, self->sony, ++packet, monotonic_us() - start_us, buttons, axes, extras, touch);
@@ -2202,7 +2230,7 @@ __attribute__((visibility("hidden"))) static void *triton_pad_thread(void *arg) 
   delete holder;
   uint32_t packet = 0;
   SnapshotState snap;
-  uint32_t buttons = 0;
+  uint32_t buttons = 0, menu_buttons = 0;
   int32_t axes[8] = {};
   DeckExtras extras;
   const uint64_t start_us = monotonic_us();
@@ -2211,6 +2239,7 @@ __attribute__((visibility("hidden"))) static void *triton_pad_thread(void *arg) 
       buttons = snap.buttons;
       memcpy(axes, snap.axes, sizeof(axes));
     }
+    note_menu_press(buttons, menu_buttons);
     read_deck_extras(*self, extras);
     uint8_t report[TRITON_REPORT_ID_BYTES + TRITON_STATE_BYTES];
     report[0] = TRITON_STATE_WIRED;
