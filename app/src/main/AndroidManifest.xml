@@ -117,6 +117,14 @@
             android:theme="@style/AppTheme" />
 
         <activity
+            android:name=".ReportActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.report"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
+            android:theme="@style/AppTheme" />
+
+        <activity
             android:name=".FrontEndActivity"
             android:exported="true"
             android:screenOrientation="user"

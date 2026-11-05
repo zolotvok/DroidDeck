@@ -312,6 +312,8 @@ class DrawerActions(
     val unfoldedControlsWithController: Boolean = false,
     val onUnfoldedControlsWithController: (Boolean) -> Unit = {},
     val onShareLogs: () -> Unit,
+    val onReport: () -> Unit = {},
+    val gameCrashed: Boolean = false,
     val onStop: () -> Unit,
     val onStopFrom: ((androidx.compose.ui.geometry.Rect?) -> Unit)? = null,
     val onClose: () -> Unit,
@@ -789,6 +791,14 @@ internal fun SessionDrawer(open: Boolean, requestedPage: SessionDrawerPage, cont
                                         progress = com.droiddeck.launcher.session.SessionLogShare.progress) {
                                         host.open = null
                                         a.onShareLogs()
+                                    }
+                                }
+                                SettingsRow(stringResource(if (a.gameCrashed) R.string.report_crash_title else R.string.report_problem),
+                                    stringResource(R.string.report_problem_hint)) {
+                                    DrawerOutlineButton(stringResource(if (a.gameCrashed) R.string.report_crash_button else R.string.report_open),
+                                        modifier = focus.track(page, "report")) {
+                                        host.open = null
+                                        a.onReport()
                                     }
                                 }
                             }

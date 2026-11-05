@@ -225,6 +225,7 @@ class FrontEndActions(
     val onMemoryHud: (String) -> Unit = {},
     val onBackgroundAppLimit: (Int) -> Unit = {},
     val onShareLogs: () -> Unit = {},
+    val onReport: () -> Unit = {},
     val onClearLogs: () -> Unit = {},
     val onResetSettings: () -> Unit = {},
     val onOffline: () -> Unit,

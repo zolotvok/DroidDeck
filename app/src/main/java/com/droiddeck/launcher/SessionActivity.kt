@@ -349,9 +349,14 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             if (value == drawerOpenState) return
             drawerLayerOpen = false
             if (value) drawerDocked = dockDrawer() && openDockedMenu()
+            if (value) Thread({
+                val crashed = runCatching { com.droiddeck.launcher.session.ReportBundle.recentGameCrash(this) }.getOrDefault(false)
+                uiHandler.post { drawerGameCrashed = crashed }
+            }, "report-crash-scan").start()
             drawerOpenState = value
             if (!value && drawerDocked) closeDockedMenu()
         }
+    private var drawerGameCrashed by mutableStateOf(false)
     private var quitFrom by mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
     private var quitFlooded = false
     private var leaving by mutableStateOf(false)
@@ -916,6 +921,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
                     onRetry = { retrySession() },
                     onRepair = if (repairOffered) ({ repairRuntime() }) else null,
                     onShareLogs = { shareCurrentSessionLogs() },
+                    onReport = { ReportActivity.start(this@SessionActivity, crash = true) },
                     onClose = { finish() },
                     flood = floodColor?.let { androidx.compose.ui.graphics.Color(it) },
                     onFlooded = {
@@ -1378,6 +1384,8 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             onUnfoldedControlsWithController = ::chooseUnfoldedControlsWithController,
             onBackground = { drawerOpen = false; pip.background(); moveTaskToBack(true) },
             onShareLogs = { drawerOpen = false; shareCurrentSessionLogs() },
+            onReport = { drawerOpen = false; ReportActivity.start(this@SessionActivity, crash = drawerGameCrashed) },
+            gameCrashed = drawerGameCrashed,
             onStop = { drawerOpen = false; SessionService.stop(this@SessionActivity); finish() },
             onStopFrom = { onScreen ->
                 drawerOpen = false

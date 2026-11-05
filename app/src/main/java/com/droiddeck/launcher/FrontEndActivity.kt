@@ -1010,6 +1010,10 @@ class FrontEndActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) readIntegrationIntent(intent)
+        if (savedInstanceState == null && !crashOffered && !SessionState.running) {
+            crashOffered = true
+            ReportActivity.offerAfterCrash(this)
+        }
         readGameIntent(intent)
         gameSyncFolder = GameFileSync.folder(this)
         displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
@@ -1263,6 +1267,7 @@ class FrontEndActivity : ComponentActivity() {
                             SessionPrefs.setBackgroundAppLimit(this, limit); backgroundAppLimit = limit
                             if (limit == com.droiddeck.launcher.core.BackgroundAppLimit.OFF) com.droiddeck.launcher.core.BackgroundAppLimit.restoreAsync(this)
                         },
+                        onReport = { ReportActivity.start(this) },
                         onShareLogs = {
                             SessionLogShare.prepare(this, { SessionLogShare.latest(this) }) { zip ->
                                 if (zip == null) android.widget.Toast.makeText(this, R.string.main_no_logs_yet, android.widget.Toast.LENGTH_LONG).show()
@@ -2816,6 +2821,8 @@ class FrontEndActivity : ComponentActivity() {
     }
 
     companion object {
+        /** The crash report card is offered once per app process. */
+        @Volatile private var crashOffered = false
         private const val TAG = "MainActivity"
         private const val MEDIA_SETTLE_MS = 1500L
         private const val COMPONENT_RESTORE_MS = 60_000L
