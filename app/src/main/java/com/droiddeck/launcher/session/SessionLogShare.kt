@@ -77,7 +77,7 @@ object SessionLogShare {
         z.closeEntry()
     }
 
-    private fun liveSteamLogs(context: Context, folder: File): List<File> {
+    internal fun liveSteamLogs(context: Context, folder: File): List<File> {
         if (folder != SessionPaths.current() || File(folder, "steam").exists()) return emptyList()
         val logs = File(SessionPrefs.activeSteamRoot(context), "logs")
         return logs.listFiles()?.filter { it.isFile && it.length() <= STEAM_LOG_MAX_BYTES }.orEmpty()
@@ -111,7 +111,7 @@ object SessionLogShare {
         }
     }
 
-    private fun recent(dir: File): List<File> {
+    internal fun recent(dir: File): List<File> {
         val since = System.currentTimeMillis() - RECENT_DAYS * 86_400_000L
         return dir.listFiles { f -> f.isFile && f.lastModified() >= since }?.sortedBy { it.name }.orEmpty()
     }

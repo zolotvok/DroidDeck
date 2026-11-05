@@ -855,6 +855,16 @@ object SessionPrefs {
     fun logsEnabled(context: Context): Boolean =
         prefs(context).getBoolean("logs", true)
 
+    /** The report dialog's one-shot "next launch with PROTON_LOG=1": set at [nextLaunchLogSince], 0 = off. */
+    fun nextLaunchLogSince(context: Context): Long = prefs(context).getLong("nextLaunchLogAt", 0L)
+
+    fun nextLaunchLog(context: Context): Boolean = nextLaunchLogSince(context) > 0
+
+    fun setNextLaunchLog(context: Context, on: Boolean) {
+        prefs(context).edit().putLong("nextLaunchLogAt", if (on) System.currentTimeMillis() else 0L).commit()
+        runCatching { GameEnvironmentStore.publish(context) }
+    }
+
     fun setLogsEnabled(context: Context, on: Boolean): Boolean = synchronized(GameEnvironmentStore) {
         setLogPreference(
             context,

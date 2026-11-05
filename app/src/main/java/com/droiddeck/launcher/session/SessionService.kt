@@ -1905,6 +1905,7 @@ class SessionService : Service() {
             if (ended != null) SessionArtifacts.collectionStarted(ended)
             ended to SessionState.steamClientArch
         }
+        runCatching { ReportBundle.finishNextLaunchLog(this, ended) }
         SessionState.micAvailable = false
         SessionState.micEnabled = false
         xrActivityVisible = false

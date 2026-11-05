@@ -115,7 +115,8 @@ object GameEnvironmentStore {
         config: GameEnvironment.Config = read(context),
         gameDebugLogsOverride: Boolean? = null,
     ) {
-        val resolved = config.copy(shared = GameEnvironment.defaults(SessionPrefs.fexPreset(context), SessionPrefs.forceSsbs(context)) + config.shared)
+        val defaulted = config.copy(shared = GameEnvironment.defaults(SessionPrefs.fexPreset(context), SessionPrefs.forceSsbs(context)) + config.shared)
+        val resolved = if (SessionPrefs.nextLaunchLog(context)) withProtonLog(defaulted) else defaulted
         val json = encode(resolved)
         val dxvk = TextureFiltering.dxvkOptions(
             SessionPrefs.textureAnisotropy(context), SessionPrefs.textureLodBias(context),
@@ -144,6 +145,14 @@ object GameEnvironmentStore {
         )
         write(File(LinuxRuntime.rootDir(context), GUEST_FILE), json.toString())
     }
+
+    /** The published copy only: PROTON_LOG=1 for every game, also over a game's own PROTON_LOG; the stored settings stay. */
+    internal fun withProtonLog(config: GameEnvironment.Config): GameEnvironment.Config = config.copy(
+        shared = config.shared + (PROTON_LOG to "1"),
+        games = config.games.mapValues { (_, entries) -> if (PROTON_LOG in entries) entries + (PROTON_LOG to "1") else entries },
+    )
+
+    private const val PROTON_LOG = "PROTON_LOG"
 
     private fun write(file: File, text: String) {
         check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())

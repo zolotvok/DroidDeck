@@ -26,7 +26,8 @@ object SessionPaths {
     @Synchronized
     fun beginOrCurrent(context: Context, label: String? = null): File {
         dir?.let { if (it.isDirectory) return it }
-        val parent = if (SessionPrefs.logsEnabled(context)) SessionFiles.logDirectory(context)
+        val keep = SessionPrefs.logsEnabled(context) || SessionPrefs.nextLaunchLog(context)
+        val parent = if (keep) SessionFiles.logDirectory(context)
             else File(context.cacheDir, "session-logs")
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val last = parent.listFiles()?.mapNotNull { f ->
@@ -38,7 +39,7 @@ object SessionPaths {
         while (made.exists()) made = File(parent, "$day-${"%02d".format(Locale.US, ++number)}-$what")
         if (!made.isDirectory && !made.mkdirs()) Log.e(TAG, "could not create $made")
         dir = made
-        Log.i(TAG, "session logs: $made" + if (SessionPrefs.logsEnabled(context)) "" else " (logs off: discarded at the end)")
+        Log.i(TAG, "session logs: $made" + if (keep) "" else " (logs off: discarded at the end)")
         return made
     }
 
