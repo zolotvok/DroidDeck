@@ -8,8 +8,9 @@ class GameEnvironmentTest {
         val values = GameEnvironment.defaults("")
         assertEquals("false", values["MESA_SHADER_CACHE_DISABLE"])
         assertEquals("1", values["DROIDDECK_ANTICHEAT_OFFLINE"])
-        assertEquals("12_2", values["VKD3D_FEATURE_LEVEL"])
-        assertEquals("6_9", values["VKD3D_SHADER_MODEL"])
+        assertEquals("12_1", values["VKD3D_FEATURE_LEVEL"])
+        assertEquals("nodxr", values["VKD3D_CONFIG"])
+        assertEquals("6_6", values["VKD3D_SHADER_MODEL"])
     }
 
     @Test fun forceSsbsIsADefaultAGameCanTurnOff() {
@@ -42,7 +43,7 @@ class GameEnvironmentTest {
         assertTrue(game.containsKey("VKD3D_SHADER_MODEL"))
         assertNull(game["VKD3D_SHADER_MODEL"])
         val restored = GameEnvironment.effective(config.withEntries("42", emptyMap()), "", "42")
-        assertEquals("6_9", restored["VKD3D_SHADER_MODEL"])
+        assertEquals("6_6", restored["VKD3D_SHADER_MODEL"])
     }
 
     @Test fun dotnetRuntimeFitsAndroidAddressSpaceForEveryGame() {
