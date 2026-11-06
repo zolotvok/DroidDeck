@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
@@ -2499,6 +2500,9 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
 
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // `adb shell input keyevent` comes from the virtual keyboard (-1): not the user's
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD)
+            com.droiddeck.launcher.session.InputStamps.user()
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE -> {
                 val steamVolume =
@@ -2628,6 +2632,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (pipUi) return true
         notePress(event)
+        if (realGenericInput(event)) com.droiddeck.launcher.session.InputStamps.user()
         if (drawerOpen && PadBridge.isControllerMotionEvent(event)) {
             if (!drawerControllerActive) focusDrawer()
             drawerControllerActive = true
@@ -2675,6 +2680,8 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (pipUi) return true
         notePress(event)
+        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)
+            com.droiddeck.launcher.session.InputStamps.user()
         if (event.actionMasked == MotionEvent.ACTION_DOWN && event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
             drawerControllerActive = false
             gestureTouchStreamGate.reset()
@@ -3807,6 +3814,15 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     private fun desktopTextInput() =
         SessionState.mode == SessionService.MODE_DESKTOP && SessionState.running && !pipUi
+
+    /** A pad's d-pad hat or a stick pushed well past drift, or a mouse button: the user's own input. */
+    private fun realGenericInput(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) return true
+        if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.actionMasked != MotionEvent.ACTION_MOVE) return false
+        fun far(axis: Int, limit: Float) = kotlin.math.abs(event.getAxisValue(axis)) > limit
+        return far(MotionEvent.AXIS_HAT_X, 0.5f) || far(MotionEvent.AXIS_HAT_Y, 0.5f) || far(MotionEvent.AXIS_X, 0.7f) ||
+            far(MotionEvent.AXIS_Y, 0.7f) || far(MotionEvent.AXIS_Z, 0.7f) || far(MotionEvent.AXIS_RZ, 0.7f)
+    }
 
     private fun notePress(event: MotionEvent) {
         val touch = event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)

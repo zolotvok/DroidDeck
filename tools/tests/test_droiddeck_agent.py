@@ -1055,8 +1055,11 @@ class FocusGuardTest(unittest.TestCase):
         self.events = []
         self.menu = [None]
         self.browser_pids = [{500}]
+        self.user = [None]
+        self.windows = [[]]
         self.guard = agent.FocusGuard(clock=lambda: self.now[0], proc=self.proc, menu_press=lambda: self.menu[0],
-                                      events=self.events, browsers=lambda: set(self.browser_pids[0]))
+                                      events=self.events, browsers=lambda: set(self.browser_pids[0]),
+                                      user_input=lambda: self.user[0], agent_windows=lambda: list(self.windows[0]))
         self.fake_proc(9451, 1, "reaper", cmdline=["reaper", "SteamLaunch", "AppId=%d" % self.APP, "--", "sh"])
         self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1", "ENABLE_MALI_WSI": "1"})
         self.env = patch.dict(os.environ, {"DISPLAY": ":0"})
@@ -1086,7 +1089,8 @@ class FocusGuardTest(unittest.TestCase):
                 "displays": {":0": [{"window": self.STEAM_WIN, "map": "viewable", "appId": 769, "pid": steam_pid}],
                              ":1": wins}}
 
-    def playing(self, seconds=60):
+    def playing(self, seconds=agent.FocusGuard.LAUNCH_SPAN + 60):
+        # past the launch phase: the reload rules alone
         self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
         self.now[0] += seconds
         self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
@@ -1153,11 +1157,40 @@ class FocusGuardTest(unittest.TestCase):
 
     def test_steam_menu_over_the_game_is_left_alone(self):
         # Guide/QAM: Steam goes before the game but keeps it in its base layer.
+        # A real menu comes with the user's Guide/QAM stamp; even right after a reload it is left alone.
         self.playing()
         self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.menu[0] = (self.now[0] + 2.5, "guide")  # Steam comes to the front at +3
+        self.now[0] += 1
         for _ in range(10):
             self.now[0] += 2
             self.assertEqual([], self.guard.plan(self.snap(769, [413091, 769, self.APP])))
+        self.assertIn("after a user guide press; left alone", "\n".join(self.lines()))
+
+    def test_a_second_steal_after_a_reload_with_the_game_in_the_base_layer_is_the_reload(self):
+        # wd2-uncap-1535: web helper OOM kill, try 1 put WD2 back, 2 s later Steam in front again, WD2 behind it
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertEqual(1, self.restores_within(self.dropped())[1])
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))  # back in front
+        self.now[0] += 2
+        hit = self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=15)
+        self.assertIsNotNone(hit)
+        self.assertEqual(2, hit[1])
+        self.assertNotIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_fresh_reload_evidence_covers_a_steal_with_the_game_in_the_base_layer(self):
+        self.playing()
+        self.events.append((self.now[0] - 30, "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
+
+    def test_old_reload_evidence_leaves_steams_menu_alone(self):
+        self.playing()
+        self.events.append((self.now[0] - agent.FocusGuard.RELOAD_SPAN - 30, "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
         self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
 
     def test_a_guide_press_before_steam_took_the_front_is_the_user(self):
@@ -1197,6 +1230,127 @@ class FocusGuardTest(unittest.TestCase):
         self.browser_pids[0] = {501}
         guard.sample_browsers(self.now[0] + agent.FocusGuard.BROWSER_EVERY)
         return guard.seen
+
+    # ---- launch phase (w3-uncap L1, 11-05 16:02:41-45: in front 4 s, then Steam in front, no press, no reload) ----
+
+    def launched(self, seconds=4):
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+        self.now[0] += seconds
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+
+    def restores_within(self, snap, seconds=10):
+        """Plans every second; the first restore's (time after the steal, attempt) or None."""
+        start = self.now[0]
+        while self.now[0] - start <= seconds:
+            restore = [a for a in self.guard.plan(snap) if a[0] == "restore"]
+            if restore:
+                return self.now[0] - start, restore[0][7]
+            self.now[0] += 1
+        return None
+
+    def test_launch_steam_in_front_without_user_input_puts_the_game_back(self):
+        self.launched()
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.dropped()))  # [413091, 769]: no reload evidence at all
+        self.now[0] += 1
+        hit = self.restores_within(self.snap(769, [413091, 769, self.APP]))  # then Steam before the game
+        self.assertIsNotNone(hit)
+        self.assertLessEqual(hit[0], agent.FocusGuard.BACKOFF[0])
+        self.assertEqual(1, hit[1])
+        text = "\n".join(self.lines())
+        self.assertIn("launch phase: Steam took the front", text)
+        self.assertNotIn("Steam's menu over the game", text)
+        self.assertNotIn("(a quit?)", text)
+
+    def test_launch_steam_in_front_right_away_is_not_short(self):
+        self.launched(seconds=1)  # under HOLD_MIN
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.dropped()))
+
+    def test_launch_a_user_guide_press_is_the_user(self):
+        self.launched()
+        self.menu[0] = (self.now[0] + 0.5, "guide")
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+        self.assertIn("after a user guide press; left alone", "\n".join(self.lines()))
+
+    def test_launch_an_earlier_user_press_turns_the_launch_rule_off(self):
+        self.launched(seconds=30)
+        self.menu[0] = (self.now[0] - 20, "qam")  # opened and closed the QAM while the game was in front
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+
+    def test_agent_qam_opens_the_tools_menu_left_alone_and_not_the_users(self):
+        # rc2fix-retest-1105 F1b: droiddeckctl QAM at ~180 s; libfakeinput stamped it (98630.0, window 98630.0-98630.0);
+        # Steam's overlay [413091, app, 769] then held the front against 3 tries for 46 s.
+        self.launched()
+        t = self.now[0] + 0.3
+        self.windows[0] = [(t, t)]
+        self.menu[0] = (t, "qam")
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, self.APP, 769], focusable=[self.APP]), seconds=20))
+        text = "\n".join(self.lines())
+        self.assertIn("qam press at %.1f is agent input (window %.1f-%.1f); not the user's" % (t, t, t), text)
+        self.assertIn("after our tools' qam press (agent input); left to the tool", text)
+        self.assertNotIn("after a user", text)
+        # the tool closes its menu; a later steal in the launch phase is still a steal, not the user's choice
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.now[0] += 30
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.dropped()))
+
+    def test_agent_guide_press_after_the_launch_is_no_user_press_either(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.windows[0] = [(self.now[0], self.now[0] + 0.2)]
+        self.menu[0] = (self.now[0] + 0.1, "guide")
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.dropped(), seconds=20))  # the tool's menu
+        self.now[0] += 60
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.now[0] += 5
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.dropped()))  # a later reload is not excused by the old press
+
+    def test_real_input_on_steam_after_it_took_the_front_is_the_user(self):
+        self.launched()
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.dropped()))
+        self.user[0] = self.now[0] + 0.5  # a tap on Steam's UI
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.dropped(), seconds=20))
+        self.assertIn("the user's own input on its UI; left alone", "\n".join(self.lines()))
+
+    def test_real_input_on_the_game_before_steam_took_the_front_does_not_count(self):
+        self.launched()
+        self.user[0] = self.now[0] - 0.5  # a tap on the game
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.dropped()))
+
+    def test_launch_rule_ends_after_the_launch_span(self):
+        self.launched(seconds=agent.FocusGuard.LAUNCH_SPAN + 5)
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+        self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_launch_rule_obeys_the_off_switch(self):
+        with patch.dict(os.environ, {"BL_FOCUS_GUARD": "0"}):
+            self.launched()
+            self.now[0] += 1
+            self.assertIsNone(self.restores_within(self.dropped(), seconds=20))
+
+    def test_input_stamp_files(self):
+        root = Path(self.temp.name) / "pad"
+        root.mkdir()
+        (root / "user").write_text("93206974\n")
+        (root / "agent").write_text("1000 1500\n2000 2100\n")
+        self.assertEqual(93206.974, agent.read_stamp(root / "user"))
+        self.assertEqual([(1.0, 1.5), (2.0, 2.1)], agent.read_agent_windows(root / "agent"))
+        self.assertIsNone(agent.read_stamp(root / "missing"))
+        self.assertEqual([], agent.read_agent_windows(root / "missing"))
 
     def test_only_games_on_the_bridge_unless_asked(self):
         self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={})

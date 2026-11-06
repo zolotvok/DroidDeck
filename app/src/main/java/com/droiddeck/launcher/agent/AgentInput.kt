@@ -14,6 +14,12 @@ object AgentInput {
         if (!SessionState.running || !SessionState.firstFrameSeen) {
             throw AgentException("SESSION_NOT_READY", "Input needs a running session that has drawn its first frame")
         }
+        // the focus guard must not take these for the user's input (session/InputStamps)
+        return com.droiddeck.launcher.session.InputStamps.agent { inject(request) }
+            .put("ok", true).put("command", "input").put("type", request.optString("type"))
+    }
+
+    private fun inject(request: JSONObject): JSONObject {
         return when (val type = request.optString("type")) {
             "key" -> key(request)
             "text" -> text(request)
@@ -23,7 +29,7 @@ object AgentInput {
             "stick" -> stick(request)
             "trigger" -> trigger(request)
             else -> throw AgentException("INVALID_INPUT", "Unknown input type '$type'")
-        }.put("ok", true).put("command", "input").put("type", request.optString("type"))
+        }
     }
 
     private fun key(request: JSONObject): JSONObject {
