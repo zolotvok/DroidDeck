@@ -299,5 +299,141 @@ class SessionMaliDefaultsTest(unittest.TestCase):
         self.assertEqual(set(self.session("libvulkan_freedreno.so").values()), {"unset"})
 
 
+MANIFEST = OVERLAY / "usr/share/droiddeck-mali/env-defaults.json"
+CASES = json.loads((Path(__file__).resolve().parent / "data/env-defaults-cases.json").read_text())
+
+
+class EnvDefaultsManifestTest(unittest.TestCase):
+    """The env defaults manifest (online updater): validation, newest-wins, user keys win, pending never applies."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "home"
+        MALI["_ACTIVE"].clear()
+        self.addCleanup(MALI["_ACTIVE"].clear)
+
+    def write(self, path, manifest):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest) if not isinstance(manifest, str) else manifest)
+        return path
+
+    def online(self, manifest):
+        return self.write(self.home / ".config/droiddeck/mali-env-defaults.json", manifest)
+
+    def bundled(self, manifest):
+        return str(self.write(self.root / "share/env-defaults.json", manifest))
+
+    def er(self, version, level):
+        return {"schema": "droiddeck-mali-env-defaults/1", "version": version, "games": {
+            "steam:1245620": {"title": "Elden Ring", "env": {"VKD3D_FEATURE_LEVEL": level}, "evidence": "t"}}}
+
+    def er_recipe(self, bundled, config=None):
+        env = dict(BRIDGE, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata/1245620"))
+        return MALI["recipe"](["/proton/proton", "waitforexitandrun", "/g/eldenring.exe"], env, config, "1245620",
+                              home=str(self.home), bundled=bundled)
+
+    def test_the_shipped_manifest_is_valid_and_keeps_every_built_in_recipe(self):
+        version, recipes = MALI["load_manifest"](MANIFEST)
+        self.assertRegex(version, r"^2026\.11\.06\.[0-9]+$")
+        self.assertEqual(set(recipes), set(MALI["RECIPES"]))
+        for key, built_in in MALI["RECIPES"].items():
+            extra = {"VKD3D_CONFIG": "nodxr", "FEX_EXTENDEDVOLATILEMETADATA": "witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,"
+                     "1e447ec,1e447ef,1e447ff,1e44814,1e44831,1e44852,1e44871,1e44878"} if key == "steam:292030" else {}
+            self.assertEqual(recipes[key].env, dict(built_in.env, **extra), key)
+            self.assertEqual(recipes[key].wpad, built_in.wpad, key)
+        raw = json.loads(MANIFEST.read_text())
+        for key, game in raw["games"].items():
+            self.assertTrue(game["evidence"], key)
+            for pending in game.get("pending", []):
+                self.assertTrue(pending["why"], key)
+        witcher = raw["games"]["steam:292030"]["pending"]
+        self.assertIn("3f7cf69cb5dc47af204835750cf55486", witcher[0]["requires"])
+        self.assertEqual(witcher[0]["env"], {"MALI_COMPAT_FB_MASK": "0x0d6"})
+
+    def test_shared_cases_refused_and_accepted(self):
+        for case in CASES["invalid"]:
+            with self.assertRaises(ValueError, msg=case["why"]):
+                MALI["parse_manifest"](json.dumps(case["manifest"]).encode())
+        for case in CASES["valid"]:
+            MALI["parse_manifest"](json.dumps(case["manifest"]).encode())
+
+    def test_newest_valid_manifest_wins_else_built_in(self):
+        bundled = self.bundled(self.er("2026.11.06.1", "12_1"))
+        self.online(self.er("2026.11.07.1", "12_0"))
+        values, notes, _ = self.er_recipe(bundled)
+        self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_0")
+        self.assertIn("env defaults 2026.11.07.1 (downloaded)", notes[0])
+        MALI["_ACTIVE"].clear()
+        self.online(self.er("2026.11.05.9", "12_0"))
+        values, notes, _ = self.er_recipe(bundled)
+        self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_1")
+        self.assertIn("(bundled)", notes[0])
+        MALI["_ACTIVE"].clear()
+        values, notes, _ = self.er_recipe(str(self.root / "missing.json"))
+        self.assertIn("env defaults 2026.11.05.9 (downloaded)", notes[0])
+        MALI["_ACTIVE"].clear()
+        (self.home / ".config/droiddeck/mali-env-defaults.json").unlink()
+        values, notes, _ = self.er_recipe(str(self.root / "missing.json"))
+        self.assertIn("env defaults built-in", notes[0])
+        self.assertEqual(values["MALI_COMPAT_BUDGET_MB"], "2048")
+
+    def test_a_broken_download_is_ignored_with_a_log_line(self):
+        bundled = self.bundled(self.er("2026.11.06.1", "12_1"))
+        bad = self.er("2026.11.09.1", "12_0")
+        bad["games"]["steam:1245620"]["env"]["LD_PRELOAD"] = "/root/evil.so"
+        self.online(bad)
+        values, notes, _ = self.er_recipe(bundled)
+        self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_1")
+        self.assertNotIn("LD_PRELOAD", values)
+        self.assertTrue(any("downloaded env defaults" in n and "ignored" in n for n in notes))
+        MALI["_ACTIVE"].clear()
+        self.online("{not json")
+        values, notes, _ = self.er_recipe(bundled)
+        self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_1")
+
+    def test_user_keys_win_over_the_defaults(self):
+        bundled = self.bundled(self.er("2026.11.06.1", "12_1"))
+        mine = {"version": 1, "userShared": ["VKD3D_FEATURE_LEVEL"], "shared": {"VKD3D_FEATURE_LEVEL": "12_2"}, "games": {}}
+        values, notes, _ = self.er_recipe(bundled, mine)
+        self.assertNotIn("VKD3D_FEATURE_LEVEL", values)
+        self.assertTrue(any("your own VKD3D_FEATURE_LEVEL kept" in n for n in notes))
+        # the app's own shared defaults (not in userShared) do not count as the user's: the recipe still applies
+        values, _, _ = self.er_recipe(bundled, {"version": 1, "shared": {"VKD3D_FEATURE_LEVEL": "12_2"}, "games": {}})
+        self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_1")
+        env = dict(BRIDGE, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata/1245620"))
+        config = dict(mine, shared=dict(GameEnvironment_defaults(), VKD3D_FEATURE_LEVEL="12_2"))
+        values, _, _ = self.er_recipe(bundled, config)
+        out = GAME_ENV["apply_config"](env, config, "1245620", MALI["merge"]({}, values))
+        self.assertEqual(out["VKD3D_FEATURE_LEVEL"], "12_2")
+
+    def test_a_per_game_opt_out_stays(self):
+        bundled = self.bundled({"schema": "droiddeck-mali-env-defaults/1", "version": "2026.11.06.1", "games": {
+            "steam:1245620": {"title": "Elden Ring", "env": {"BL_FEX_ARM64EC_PATCH": "1", "VKD3D_FEATURE_LEVEL": "12_1"},
+                              "evidence": "t"}}})
+        config = {"version": 1, "shared": {}, "games": {"1245620": {"BL_FEX_ARM64EC_PATCH": "0"}}}
+        values, _, _ = self.er_recipe(bundled, config)
+        self.assertNotIn("BL_FEX_ARM64EC_PATCH", values)
+        env = dict(BRIDGE, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata/1245620"))
+        out = GAME_ENV["apply_config"](env, config, "1245620", MALI["merge"]({}, values))
+        self.assertEqual(out["BL_FEX_ARM64EC_PATCH"], "0")
+        self.assertTrue(MALI["switch_off"]("BL_FEX_ARM64EC_PATCH", out))
+
+    def test_pending_entries_never_apply(self):
+        values, notes, found = MALI["recipe"](["/proton/proton", "waitforexitandrun", "/g/witcher3.exe"],
+                                              dict(BRIDGE, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata/292030")),
+                                              None, "292030", home=str(self.home), bundled=str(MANIFEST))
+        self.assertEqual(found.title, "The Witcher 3")
+        self.assertNotIn("MALI_COMPAT_FB_MASK", values)
+        self.assertNotIn("DXVK_MALI_LAZY_STORAGE", values)
+        self.assertEqual(values["VKD3D_CONFIG"], "nodxr")
+        self.assertTrue(values["FEX_EXTENDEDVOLATILEMETADATA"].startswith("witcher3.exe;1e447c0-1e4487e;"))
+
+
+def GameEnvironment_defaults():
+    return {"VKD3D_SHADER_MODEL": "6_9"}
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1997,6 +1997,8 @@ class FrontEndActivity : ComponentActivity() {
                     onReset = { drivers.resetBlobferry() },
                     onConfirm = { yes -> drivers.confirmBlobferry(yes) },
                     onOffer = { yes -> drivers.acceptBlobferryOffer(yes) },
+                    onPanvkRollback = { drivers.rollbackPanvk() },
+                    onEnvRollback = { drivers.rollbackEnvDefaults() },
                 ),
             ),
             protons = com.droiddeck.launcher.ui.ProtonsState(

@@ -422,6 +422,66 @@ def stop_for_switch(adb: str, serial: str, force_stop: bool, timeout: float) -> 
     return True
 
 
+PANVK_ZIP = re.compile(r"panvk-kbase-[A-Za-z0-9._+-]{1,48}\.zip")
+ENV_DEFAULTS_JSON = re.compile(r"[A-Za-z0-9._+-]{1,96}\.json")
+MALI_DEFAULTS = Path(__file__).resolve().parent / "linuxfs/overlay/usr/local/bin/droiddeck-mali-defaults"
+
+
+def check_env_defaults(path: Path) -> dict:
+    """Offline check of an env defaults manifest with the guest's own rules (droiddeck-mali-defaults.parse_manifest)."""
+    import runpy
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise ControlError(str(exc), "FILE_IO") from exc
+    try:
+        version, recipes = runpy.run_path(str(MALI_DEFAULTS))["parse_manifest"](data)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ControlError(f"{path.name} is refused: {exc}", "BAD_MANIFEST") from exc
+    raw = json.loads(data)
+    return {"version": version, "games": sorted(recipes), "count": len(recipes),
+            "pending": sum(len(game.get("pending", [])) for game in raw["games"].values()),
+            "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def component(args: argparse.Namespace, adb: str, serial: str, method: str, op: str, pattern: re.Pattern,
+              hint: str, needs_stop: bool) -> dict:
+    """PanVK / env defaults ops, as blobferry: push to the agent inbox, the device verifies before it switches."""
+    if op == "status":
+        return checked(provider_call(adb, serial, method, request={"op": "status"}), method.upper() + "_FAILED")
+    access = require_commands(adb, serial)
+    request: dict = {"op": op}
+    local: dict = {}
+    if op == "install":
+        source = Path(args.file).expanduser()
+        if not source.is_file():
+            raise ControlError(f"No such file: {source}", "FILE_IO")
+        if not pattern.fullmatch(source.name):
+            raise ControlError(f"The file must be {hint}", "INVALID_NAME")
+        if method == "envdefaults":
+            local["manifest"] = check_env_defaults(source)
+        actual = file_sha256(source)
+        wanted, origin = expected_sha256(source, args.sha256)
+        if wanted is not None and wanted != actual:
+            raise ControlError(f"sha256 {actual} does not match the expected {wanted} ({origin})", "BAD_CHECKSUM")
+        request.update(name=source.name, sha256=actual)
+        local.update(file=str(source), sha256=actual, sha256Checked=origin or "local only")
+    stopped = stop_for_switch(adb, serial, args.force_stop, args.timeout) if needs_stop else False
+    if op == "install":
+        inbox = access["inbox"]
+        run_adb(adb, serial, "shell", "mkdir", "-p", inbox)
+        pushed = run_adb(adb, serial, "push", str(source), f"{inbox}/{source.name}", timeout=300)
+        if pushed.returncode != 0:
+            raise ControlError(pushed.stderr.decode(errors="replace").strip() or "adb push failed", "PUSH_FAILED")
+    result = checked(provider_call(adb, serial, method, request=request, timeout=180), method.upper() + "_FAILED")
+    result.update(local)
+    result["stoppedSession"] = stopped
+    if needs_stop and getattr(args, "restart", False):
+        started = start_session(adb, serial, {"mode": "steam"})
+        result["restarted"] = started["session"].get("id")
+    return result
+
+
 def blobferry(args: argparse.Namespace, adb: str, serial: str) -> dict:
     """Blobferry package ops; the device verifies the zip (structure, MD5SUMS, SOURCE.txt, AArch64) before switching."""
     op = args.blobferry_op
@@ -477,9 +537,92 @@ def safe_extract(archive: Path, destination: Path) -> list[str]:
     return names
 
 
+PRIVACY_RULES = [
+    # (kind, pattern): real identifiers; a report must have none of these
+    ("steam-id", re.compile(r"(?<![0-9])76561[0-9]{12}(?![0-9])")),
+    ("auth-password", re.compile(r"(?i)AUTH_PASSWORD=(?!<)[0-9A-Za-z]")),
+    ("email", re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9-])")),
+    ("user@host", re.compile(r"(?<![A-Za-z0-9_.@-])([a-z_][a-z0-9_-]{0,31})@(<[a-zA-Z0-9: -]{1,40}>|[A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]+)*)"
+                             r"(?=:[~/]|\s+[~/]\S*\s*[$#%>](?:\s|$)|\s+[^\s\]]+\]\s*[$#%]|\])")),
+    ("ssh-target", re.compile(r"(?i)\b(?:ssh|scp|sftp|rsync|mosh)\b[^@\r\n]{0,120}?\s([A-Za-z0-9_][A-Za-z0-9_.-]{0,31})@(<[a-zA-Z0-9: -]{1,40}>|[A-Za-z0-9][A-Za-z0-9.-]*)")),
+    ("serial", re.compile(r"(?i)(?:ro\.(?:boot\.)?serialno\]?\s*[:=]\s*\[?|\bserial(?:no|_number)?\b\s*[:=]\s*\[?)(?!<)[A-Za-z0-9]{6,}")),
+]
+GUEST_PROMPTS = ({"root", "steamuser", "steam", "deck", "user"}, {"localhost", "droiddeck", "steamdeck"})
+BENIGN_AT = [
+    ("display-mode", re.compile(r"[0-9]+x[0-9]+@[0-9]|[0-9] x [0-9]+ @ [0-9]")),
+    ("address", re.compile(r"@ ?0x[0-9a-fA-F]+")),
+    ("socket", re.compile(r"(?:TCP|UDP)@[0-9.:\[\]a-fA-F]+")),
+    ("js-name", re.compile(r"[\"'\s(]@[A-Za-z_]")),
+    ("symbol-version", re.compile(r"[A-Za-z0-9_]@@?[A-Z][A-Z0-9_.]*")),
+    ("separator", re.compile(r"\s@\s")),
+    ("guest-prompt", re.compile(r"(?i)\b(?:root|steamuser|steam|deck|user)@(?:localhost|droiddeck|steamdeck)\b")),
+]
+ANDROID_PACKAGE = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+")
+
+
+def privacy_check(directory: Path, forbid: list[str], packages: set[str]) -> dict:
+    """Counts real personal identifiers in an exported report (never prints them, only kind, file and line). The
+    benign '@' hits (display modes, addresses, loopback sockets, JS names, our ' @ ' separators) are counted apart."""
+    root = directory.expanduser().resolve()
+    if not root.is_dir():
+        raise ControlError(f"{root} is not a directory", "FILE_IO")
+    literals = [f for f in forbid if len(f) >= 3]
+    tails = {p[-15:] for p in packages if len(p) > 15 and "." in p[-15:]}
+    apps = packages | tails
+    real: dict[str, int] = {}
+    benign: dict[str, int] = {}
+    where = []
+    files = 0
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".zip"):
+        files += 1
+        rel = str(path.relative_to(root))
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                found = []
+                for kind, rule in PRIVACY_RULES:
+                    for m in rule.finditer(line):
+                        if kind == "user@host" and m.group(1).lower() in GUEST_PROMPTS[0] and m.group(2).lower() in GUEST_PROMPTS[1]:
+                            continue
+                        if kind in ("user@host", "ssh-target") and m.group(1).startswith("<redacted"):
+                            continue
+                        found.append(kind)
+                for literal in literals:
+                    if literal.lower() in line.lower():
+                        found.append("forbidden")
+                if apps and "." in line:
+                    for m in ANDROID_PACKAGE.finditer(line):
+                        token = m.group(0)
+                        parts = token.split(".")
+                        if any(".".join(parts[:n]) in apps for n in range(len(parts), 1, -1)) or token in apps:
+                            found.append("other-app")
+                for kind in found:
+                    real[kind] = real.get(kind, 0) + 1
+                    if len(where) < 50:
+                        where.append({"file": rel, "line": number, "kind": kind})
+                if "@" in line:
+                    kinds = [kind for kind, rule in BENIGN_AT if rule.search(line)]
+                    key = kinds[0] if kinds else ("identifier" if found else "other")
+                    benign[key] = benign.get(key, 0) + line.count("@")
+    total = sum(real.values())
+    return {"op": "check", "directory": str(root), "files": files, "real": total, "realByKind": real,
+            "realWhere": where, "atSigns": benign, "pass": total == 0, "packagesChecked": len(packages)}
+
+
+def device_packages(adb: str, serial: str) -> set[str]:
+    """The phone's installed packages but ours, kept in memory only (never written or printed)."""
+    listed = run_adb(adb, serial, "shell", "pm", "list", "packages", timeout=60)
+    if listed.returncode != 0:
+        raise ControlError("pm list packages failed", "ADB_FAILED")
+    names = {line.partition(":")[2].strip() for line in listed.stdout.decode(errors="replace").splitlines() if line.startswith("package:")}
+    return {n for n in names if "." in n and not n.startswith("com.droiddeck.") and n != PACKAGE}
+
+
 def report(args: argparse.Namespace, adb: str, serial: str) -> dict:
     """Problem report: summary (redacted, no debugging tools), export <dir> and next-launch-log (debugging tools)."""
     op = args.report_op
+    if op == "check":
+        result = privacy_check(Path(args.directory), args.forbid or [], device_packages(adb, serial) if args.packages_from_device else set())
+        return dict(result, ok=True, command="report")
     if op == "summary":
         return checked(provider_call(adb, serial, "report", request={"op": "summary"}, timeout=120), "REPORT_FAILED")
     if op == "export" and not 1 <= args.max_mb <= 200:
@@ -790,6 +933,14 @@ def execute(args: argparse.Namespace, adb: str, serial: str) -> dict:
     if command == "blobferry":
         return add_serial(blobferry(args, adb, serial), serial)
 
+    if command == "panvk":
+        return add_serial(component(args, adb, serial, "panvk", args.panvk_op, PANVK_ZIP,
+                                    "a panvk-kbase-<version>.zip (tools/make-panvk-component.py)", True), serial)
+
+    if command == "env-defaults":
+        return add_serial(component(args, adb, serial, "envdefaults", args.env_defaults_op, ENV_DEFAULTS_JSON,
+                                    "an env defaults manifest .json", False), serial)
+
     if command == "report":
         return add_serial(report(args, adb, serial), serial)
 
@@ -1009,6 +1160,36 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
         sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
 
+    pvk = commands.add_parser("panvk", help="PanVK (Mali session driver) in the PanVK_Kbase slot: status, install, rollback")
+    pvk_ops = pvk.add_subparsers(dest="panvk_op", required=True)
+    pvk_ops.add_parser("status", help="installed PanVK: source, version, commit, .so md5, previous")
+    pvk_switches = [
+        pvk_ops.add_parser("install", help="install a panvk-kbase-<V>.zip (debugging tools; the old .so is kept)"),
+        pvk_ops.add_parser("rollback", help="swap the installed PanVK and the previous one (debugging tools)"),
+    ]
+    pvk_switches[0].add_argument("file", help="the component zip, e.g. ../bridge/build/release/panvk/panvk-kbase-v26.3.1-234-237.zip")
+    pvk_switches[0].add_argument("--sha256", help="expected sha256 (default: <zip>.sha256 next to the zip, when it exists)")
+    for sub in pvk_switches:
+        sub.add_argument("--force-stop", action="store_true", help="stop a running session first")
+        sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
+        sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
+
+    envd = commands.add_parser("env-defaults", help="per-game env defaults for Mali bridge games: status, check, install, rollback, reset")
+    envd_ops = envd.add_subparsers(dest="env_defaults_op", required=True)
+    envd_ops.add_parser("status", help="the manifest in force: source, version, games, installed/bundled versions")
+    envd_check = envd_ops.add_parser("check", help="check a manifest offline with the guest's rules (no device)")
+    envd_check.add_argument("file")
+    envd_switches = [
+        envd_ops.add_parser("install", help="install a manifest (debugging tools; applies at the next game start)"),
+        envd_ops.add_parser("rollback", help="swap the installed manifest and the previous one (debugging tools)"),
+        envd_ops.add_parser("reset", help="back to the manifest the APK bundles (debugging tools)"),
+    ]
+    envd_switches[0].add_argument("file", help="e.g. tools/linuxfs/overlay/usr/share/droiddeck-mali/env-defaults.json")
+    envd_switches[0].add_argument("--sha256", help="expected sha256 (default: <file>.sha256 next to it, when it exists)")
+    for sub in envd_switches:
+        sub.add_argument("--force-stop", action="store_true", help=argparse.SUPPRESS)
+        sub.add_argument("--timeout", type=float, default=120, help=argparse.SUPPRESS)
+
     rep = commands.add_parser("report", help="problem report: export the redacted report zip, show its summary, one-shot PROTON_LOG")
     rep_ops = rep.add_subparsers(dest="report_op", required=True)
     rep_ops.add_parser("summary", help="print the report summary (the GitHub issue block), redacted")
@@ -1020,6 +1201,13 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--raw", action="store_true", help="no redaction (debuggable builds only, for our own phone)")
     export.add_argument("--no-zip", action="store_true", help="delete the pulled zip after unpacking")
     export.add_argument("--timeout", type=float, default=300, help="seconds for building and pulling the report")
+    check = rep_ops.add_parser("check", help="privacy check of an exported report DIR: counts real identifiers only "
+                                "(Steam ids, AUTH_PASSWORD, emails, user@host prompts, ssh targets, serials, --forbid values, "
+                                "other apps' package names); prints kinds, files and lines, never the values")
+    check.add_argument("directory", help="the directory `report export` wrote")
+    check.add_argument("--forbid", action="append", help="a value that must not appear (e.g. the adb serial); repeatable")
+    check.add_argument("--packages-from-device", action="store_true",
+                       help="also count the phone's other apps' package names (read with adb, kept in memory only)")
     nll = rep_ops.add_parser("next-launch-log", help="one-shot PROTON_LOG=1 for the next game launch (debugging tools)")
     nll.add_argument("state", choices=["on", "off"])
 
@@ -1112,6 +1300,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not PACKAGE_NAME.fullmatch(PACKAGE):
             raise ControlError(f"DROIDDECK_PACKAGE is not an Android package name: {PACKAGE!r}", "INVALID_REQUEST")
+        if args.command == "report" and args.report_op == "check" and not args.packages_from_device:
+            result = privacy_check(Path(args.directory), args.forbid or [], set())
+            print(json.dumps(dict(result, ok=True, command="report"), indent=2, sort_keys=True))
+            return 0
+        if args.command == "env-defaults" and args.env_defaults_op == "check":
+            result = check_env_defaults(Path(args.file).expanduser())
+            print(json.dumps(dict(result, ok=True, command="env-defaults"), indent=2, sort_keys=True))
+            return 0
         if args.command == "proot-profile" and args.profile_op == "report":
             if args.limit < 1:
                 raise ControlError("--limit must be positive", "INVALID_ARGUMENTS")

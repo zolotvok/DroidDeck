@@ -14,6 +14,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import com.droiddeck.launcher.gpu.AutoDriverTrial
 import com.droiddeck.launcher.gpu.BlobferryPackage
 import com.droiddeck.launcher.gpu.BlobferryReleases
+import com.droiddeck.launcher.gpu.ComponentReleases
+import com.droiddeck.launcher.gpu.PanvkPackage
+import com.droiddeck.launcher.gpu.UpdateSources
+import com.droiddeck.launcher.session.MaliEnvDefaults
 import com.droiddeck.launcher.gpu.AutoPicks
 import com.droiddeck.launcher.gpu.DriverBundle
 import com.droiddeck.launcher.gpu.DriverPairs
@@ -205,14 +209,30 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
     private var bfPending by mutableStateOf<Pair<BlobferryPackage.Prepared, String>?>(null)
     private var bfOffer by mutableStateOf<BlobferryReleases.Release?>(null)
     private var bfRefreshing = false
+    // PanVK and the env defaults ride on the same card, check and dialogs (gpu/PanvkPackage, session/MaliEnvDefaults)
+    private var pvStatus by mutableStateOf<PanvkPackage.Status?>(null)
+    private var pvPending by mutableStateOf<Pair<PanvkPackage.Prepared, String>?>(null)
+    private var pvOffer by mutableStateOf<BlobferryReleases.Release?>(null)
+    private var edStatus by mutableStateOf<MaliEnvDefaults.Status?>(null)
+    private var edPending by mutableStateOf<Pair<MaliEnvDefaults.Manifest, String>?>(null)
+    private var edOffer by mutableStateOf<BlobferryReleases.Release?>(null)
 
     fun refreshBlobferry() {
         if (!com.droiddeck.launcher.core.DeviceSupport.mali() || bfRefreshing) return
         bfRefreshing = true
         Thread({
             val status = runCatching { BlobferryPackage.status(activity) }.onFailure { Log.w(TAG, "Blobferry status", it) }.getOrNull()
-            ui.post { bfStatus = status; bfRefreshing = false }
+            val panvk = runCatching { PanvkPackage.status(activity) }.onFailure { Log.w(TAG, "PanVK status", it) }.getOrNull()
+            val env = runCatching { MaliEnvDefaults.status(activity) }.onFailure { Log.w(TAG, "env defaults status", it) }.getOrNull()
+            ui.post { bfStatus = status; pvStatus = panvk; edStatus = env; bfRefreshing = false }
         }, "blobferry-status").start()
+    }
+
+    private fun componentSource(source: String) = when (source) {
+        PanvkPackage.SOURCE_HAND -> activity.getString(R.string.panvk_src_hand)
+        "changed on disk" -> activity.getString(R.string.panvk_src_changed)
+        MaliEnvDefaults.SOURCE_BUILT_IN -> activity.getString(R.string.envdefaults_src_builtin)
+        else -> bfSource(source)
     }
 
     private fun bfSource(source: String) = activity.getString(when (source) {
@@ -234,7 +254,14 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         }
         val current = activity.getString(R.string.blobferry_version, s.version.ifEmpty { "?" }) + " (" + bfSource(s.source) + ")"
         return com.droiddeck.launcher.ui.BlobferryCardState(
-            version = s.version, source = bfSource(s.source), commit = s.commit, shimMd5 = s.shimMd5, zipMd5 = s.zipMd5,
+            version = s.version, source = bfSource(s.source), commit = s.commit,
+            commitText = if (s.source == BlobferryPackage.SOURCE_DEV && s.commit.isEmpty()) activity.getString(R.string.blobferry_dev_no_commit)
+                else s.commitLabel,
+            devNote = s.devFiles?.takeIf { s.source == BlobferryPackage.SOURCE_DEV && it.isNotEmpty() }?.let { files ->
+                activity.getString(R.string.blobferry_dev_files, files.joinToString { it.substringAfterLast('/') },
+                    s.bundledVersion.orEmpty(), s.baseCommit.take(7).ifEmpty { "?" })
+            },
+            shimMd5 = s.shimMd5, zipMd5 = s.zipMd5,
             testBuild = s.dirty, changed = s.changed,
             rollback = s.previous?.let {
                 if (it == "bundled") activity.getString(R.string.blobferry_rollback_bundled) else activity.getString(R.string.blobferry_rollback, it)
@@ -247,11 +274,51 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
                     activity.getString(R.string.blobferry_confirm_text, p.commit, p.zipMd5, current) +
                         if (p.dirty) "\n\n" + activity.getString(R.string.blobferry_confirm_dirty) else "",
                 )
+            } ?: pvPending?.first?.let { p ->
+                com.droiddeck.launcher.ui.BlobferryConfirm(
+                    activity.getString(R.string.panvk_confirm_title, p.version),
+                    activity.getString(R.string.panvk_confirm_text, p.driverVersion, p.commit.ifEmpty { "?" }, p.zipSha256,
+                        pvStatus?.let { it.version.ifEmpty { "?" } + " (" + componentSource(it.source) + ")" } ?: "?"),
+                )
+            } ?: edPending?.first?.let { m ->
+                com.droiddeck.launcher.ui.BlobferryConfirm(
+                    activity.getString(R.string.envdefaults_confirm_title, m.version),
+                    activity.getString(R.string.envdefaults_confirm_text, m.games.size, m.pending, m.sha256, edStatus?.label ?: "?"),
+                )
             },
             offer = bfOffer?.let { r ->
                 activity.getString(R.string.blobferry_offer_text, r.version, s.version.ifEmpty { "?" },
                     activity.getString(R.string.common_size_mb, r.size / 1_048_576.0))
+            } ?: pvOffer?.let { r ->
+                activity.getString(R.string.panvk_offer_text, r.version, pvStatus?.version?.ifEmpty { null } ?: "?",
+                    activity.getString(R.string.common_size_mb, r.size / 1_048_576.0))
+            } ?: edOffer?.let { r -> activity.getString(R.string.envdefaults_offer_text, r.version, edStatus?.version?.ifEmpty { null } ?: "?") },
+            offerTitle = when {
+                bfOffer != null -> null
+                pvOffer != null -> activity.getString(R.string.panvk_offer_title)
+                edOffer != null -> activity.getString(R.string.envdefaults_offer_title)
+                else -> null
             },
+            panvkLine = pvStatus?.let { p ->
+                if (!p.installed) activity.getString(R.string.panvk_none)
+                else activity.getString(R.string.panvk_line, p.version.ifEmpty { "?" }, componentSource(p.source), p.soMd5.take(8))
+            },
+            panvkNote = pvStatus?.let { p ->
+                when {
+                    p.source == "changed on disk" -> activity.getString(R.string.panvk_changed_note)
+                    p.bundledVersion != null && p.installed && p.version != p.bundledVersion -> activity.getString(R.string.panvk_bundled_note, p.bundledVersion)
+                    else -> null
+                }
+            },
+            panvkRollback = pvStatus?.previous?.let { activity.getString(R.string.panvk_rollback, it) },
+            envLine = edStatus?.let { e ->
+                if (e.source == MaliEnvDefaults.SOURCE_BUILT_IN) activity.getString(R.string.envdefaults_builtin_line)
+                else activity.getString(R.string.envdefaults_line, e.version, componentSource(e.source), e.games)
+            },
+            envNote = edStatus?.let { e ->
+                e.problem ?: if (e.bundledNewer) activity.getString(R.string.envdefaults_bundled_newer, e.bundledVersion.orEmpty()) else null
+            },
+            envRollback = edStatus?.previous?.let { activity.getString(R.string.envdefaults_rollback, it) },
         )
     }
 
@@ -281,6 +348,20 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
     }
 
     fun confirmBlobferry(yes: Boolean) {
+        if (bfPending == null) {
+            pvPending?.let { (prepared, source) ->
+                pvPending = null
+                if (!yes) Thread({ PanvkPackage.discard(prepared) }, "panvk-discard").start()
+                else switchBlobferry { activity.getString(R.string.panvk_installed, PanvkPackage.install(activity, prepared, source).version) }
+                return
+            }
+            edPending?.let { (manifest, source) ->
+                edPending = null
+                if (yes) switchBlobferry { activity.getString(R.string.envdefaults_installed, MaliEnvDefaults.install(activity, manifest, source).version) }
+                return
+            }
+            return
+        }
         val (prepared, source) = bfPending ?: return
         bfPending = null
         if (!yes) {
@@ -296,6 +377,14 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
 
     fun resetBlobferry() = switchBlobferry {
         activity.getString(R.string.blobferry_reset_done, BlobferryPackage.reset(activity).version)
+    }
+
+    fun rollbackPanvk() = switchBlobferry {
+        activity.getString(R.string.panvk_rolled_back, PanvkPackage.rollback(activity).version.ifEmpty { "?" })
+    }
+
+    fun rollbackEnvDefaults() = switchBlobferry {
+        activity.getString(R.string.envdefaults_rolled_back, MaliEnvDefaults.rollback(activity).label)
     }
 
     private fun switchBlobferry(op: () -> String) {
@@ -317,23 +406,61 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         bfBusy = activity.getString(R.string.blobferry_checking)
         Thread({
             val result = runCatching { BlobferryReleases.check(activity) }
+            val panvk = runCatching { ComponentReleases.check(activity, UpdateSources.PANVK) }
+            val env = runCatching { ComponentReleases.check(activity, UpdateSources.ENV_DEFAULTS) }
             ui.post {
                 bfBusy = null
+                val notes = ArrayList<String>()
                 result.onSuccess { r ->
                     when {
-                        r == null -> bfNote = activity.getString(R.string.blobferry_no_release)
-                        r.version == bfStatus?.version -> bfNote = activity.getString(R.string.blobferry_up_to_date, r.version)
-                        else -> { bfNote = ""; bfOffer = r }
+                        r == null -> notes += activity.getString(R.string.blobferry_no_release)
+                        r.version == bfStatus?.version -> notes += activity.getString(R.string.blobferry_up_to_date, r.version)
+                        else -> bfOffer = r
                     }
                 }.onFailure {
                     Log.w(TAG, "Blobferry release check", it)
-                    bfNote = activity.getString(R.string.blobferry_check_failed, it.message ?: it.javaClass.simpleName)
+                    notes += activity.getString(R.string.blobferry_check_failed, it.message ?: it.javaClass.simpleName)
                 }
+                panvk.onSuccess { r ->
+                    when {
+                        r == null -> notes += activity.getString(R.string.panvk_no_release)
+                        r.version == pvStatus?.version -> notes += activity.getString(R.string.panvk_up_to_date, r.version)
+                        else -> pvOffer = r
+                    }
+                }.onFailure { notes += activity.getString(R.string.panvk_check_failed, it.message ?: it.javaClass.simpleName) }
+                env.onSuccess { r ->
+                    val have = edStatus?.version.orEmpty()
+                    when {
+                        r == null -> notes += activity.getString(R.string.envdefaults_no_release)
+                        have.isNotEmpty() && MaliEnvDefaults.compare(r.version, have) <= 0 -> notes += activity.getString(R.string.envdefaults_up_to_date, have)
+                        else -> edOffer = r
+                    }
+                }.onFailure { notes += activity.getString(R.string.envdefaults_check_failed, it.message ?: it.javaClass.simpleName) }
+                bfNote = notes.joinToString("\n")
             }
         }, "blobferry-check").start()
     }
 
     fun acceptBlobferryOffer(yes: Boolean) {
+        if (bfOffer == null) {
+            pvOffer?.let { release ->
+                pvOffer = null
+                if (yes) downloadComponent(UpdateSources.PANVK, release) { file, sha ->
+                    val prepared = file.inputStream().use { PanvkPackage.prepare(activity, it, sha) }
+                    ui.post { pvPending = prepared to BlobferryPackage.SOURCE_DOWNLOAD }
+                }
+                return
+            }
+            edOffer?.let { release ->
+                edOffer = null
+                if (yes) downloadComponent(UpdateSources.ENV_DEFAULTS, release) { file, sha ->
+                    val manifest = file.inputStream().use { MaliEnvDefaults.prepare(it, sha) }
+                    ui.post { edPending = manifest to BlobferryPackage.SOURCE_DOWNLOAD }
+                }
+                return
+            }
+            return
+        }
         val release = bfOffer ?: return
         bfOffer = null
         if (!yes || bfBusy != null) return
@@ -354,6 +481,28 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
                 result.onSuccess { bfPending = it to BlobferryPackage.SOURCE_DOWNLOAD }.onFailure { bfToast(bfProblem(it)) }
             }
         }, "blobferry-download").start()
+    }
+
+    /** PanVK / env defaults: download (sha256 required, the channel's own repo only), verify, then the confirm dialog. */
+    private fun downloadComponent(channel: ComponentReleases.Channel, release: BlobferryReleases.Release, verify: (java.io.File, String) -> Unit) {
+        if (bfBusy != null) return
+        bfBusy = activity.getString(R.string.blobferry_downloading, 0)
+        Thread({
+            val result = runCatching {
+                val (file, sha) = ComponentReleases.download(activity, channel, release) { pct ->
+                    if (pct >= 0) ui.post { if (bfBusy != null) bfBusy = activity.getString(R.string.blobferry_downloading, pct) }
+                }
+                try {
+                    verify(file, sha)
+                } finally {
+                    file.delete()
+                }
+            }
+            ui.post {
+                bfBusy = null
+                result.onFailure { bfToast(bfProblem(it)) }
+            }
+        }, "component-download").start()
     }
 
     fun summary(): String {

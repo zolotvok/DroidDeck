@@ -544,6 +544,69 @@ class BlobferryCtlTest(FakeAdbTest):
         self.assertEqual("BAD_ARCH", out["error"]["code"])
 
 
+class ComponentCtlTest(FakeAdbTest):
+    """panvk and env-defaults ride on the blobferry inbox path."""
+    INBOX = "/sdcard/Android/data/x/files/agent-inbox"
+    MANIFEST = Path(__file__).resolve().parents[1] / "linuxfs/overlay/usr/share/droiddeck-mali/env-defaults.json"
+
+    def provider(self, session="IDLE", **extra):
+        answers = {
+            "access": {"ok": True, "commands": True, "inbox": self.INBOX},
+            "state": state(session),
+            "panvk": {"ok": True, "command": "panvk", "source": "adb", "version": "v26.3.1-234-237"},
+            "envdefaults": {"ok": True, "command": "envdefaults", "source": "adb", "version": "2026.11.06.1"},
+            "stop": {"ok": True, "command": "stop"},
+        }
+        answers.update(extra)
+        self.configure(answers)
+
+    def test_panvk_install_pushes_and_needs_a_stopped_session(self):
+        self.provider()
+        zip_path = self.dir / "panvk-kbase-v26.3.1-234-237.zip"
+        zip_path.write_bytes(b"PK panvk")
+        code, out = self.run_ctl("panvk", "install", str(zip_path))
+        self.assertEqual(0, code, out)
+        sha = hashlib.sha256(b"PK panvk").hexdigest()
+        self.assertEqual([{"op": "install", "name": zip_path.name, "sha256": sha}], [c["request"] for c in self.calls("panvk")])
+        self.provider(session="READY")
+        code, out = self.run_ctl("panvk", "rollback")
+        self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
+
+    def test_panvk_rejects_other_names_and_status_needs_no_tools(self):
+        self.provider()
+        other = self.dir / "PanVK-Kbase-glibc.zip"
+        other.write_bytes(b"x")
+        code, out = self.run_ctl("panvk", "install", str(other))
+        self.assertEqual("INVALID_NAME", out["error"]["code"])
+        before = len(self.calls("access"))
+        code, out = self.run_ctl("panvk", "status")
+        self.assertEqual(0, code)
+        self.assertEqual(before, len(self.calls("access")))
+
+    def test_env_defaults_install_checks_the_manifest_first_and_ignores_the_session(self):
+        self.provider(session="READY")
+        code, out = self.run_ctl("env-defaults", "install", str(self.MANIFEST))
+        self.assertEqual(0, code, out)
+        self.assertRegex(out["manifest"]["version"], r"^2026\.11\.06\.[0-9]+$")
+        self.assertEqual([], self.calls("stop"))
+        self.assertEqual("install", self.calls("envdefaults")[0]["request"]["op"])
+        bad = self.dir / "bad.json"
+        bad.write_text(json.dumps({"schema": "droiddeck-mali-env-defaults/1", "version": "2026.11.06.2", "games": {
+            "steam:1": {"title": "x", "env": {"LD_PRELOAD": "/x.so"}, "evidence": "t"}}}))
+        code, out = self.run_ctl("env-defaults", "install", str(bad))
+        self.assertEqual("BAD_MANIFEST", out["error"]["code"])
+        self.assertEqual(1, len(self.calls("envdefaults")))
+
+    def test_env_defaults_check_runs_offline(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = ctl.main(["env-defaults", "check", str(self.MANIFEST)])
+        result = json.loads(out.getvalue())
+        self.assertEqual(0, code)
+        self.assertEqual(11, result["count"])
+        self.assertIn("steam:1245620", result["games"])
+
+
 class ReportCtlTest(FakeAdbTest):
     REMOTE = "/sdcard/Android/data/x/files/report-export/DroidDeck-report-20261105-1200.zip"
 
@@ -618,6 +681,56 @@ class ReportCtlTest(FakeAdbTest):
         code, out = self.run_ctl("report", "next-launch-log", "off")
         self.assertEqual(0, code)
         self.assertEqual([{"op": "next-launch-log", "on": False}], [c["request"] for c in self.calls("report")])
+
+
+class ReportPrivacyCheckTest(unittest.TestCase):
+    """rc2 smoke C2: 814 '@' hits in 9 files were all benign; only real identifiers may fail the check."""
+
+    def write(self, files):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        return root
+
+    def test_benign_at_signs_pass(self):
+        root = self.write({
+            "session/a/session.log": "wlserver: Updating mode for xwayland server #0: 1600x720@120\n",
+            "session/a/steam/systemdisplaymanager.txt": "OnOutputMode: 1600x720: 1600 x 720 @ 60 - 60\nmatches: 1600x720@60.0\n",
+            "session/a/steam/console_log.txt": "Details: /usr/bin/lsof -P -F upnR -i TCP@127.0.0.1:32843\n",
+            "proton/steam-1.log": "Vulkan: Found vkGetInstanceProcAddr in winevulkan.dll @ 0x6ffa030cc0\n",
+            "session/a/steam/cef_log.txt": '"Unknown convar: @bSearchSuggestionNameMatchScoring", source: x\n',
+            "summary.md": "| Blobferry | 1.0.0-rc1 @ a28a42d (adb) |\nroot@localhost:~# ls\nSerial: <redacted:serial>\n",
+            "DroidDeck-report.zip": "zip bytes with me@example.com",
+        })
+        result = ctl.privacy_check(root, [], set())
+        self.assertTrue(result["pass"], result)
+        self.assertEqual(0, result["real"])
+        self.assertEqual(6, result["files"])
+        self.assertEqual({"display-mode", "socket", "address", "js-name", "separator", "guest-prompt"}, set(result["atSigns"]))
+
+    def test_real_identifiers_fail_without_printing_them(self):
+        root = self.write({
+            "logcat.txt": "lmkd: Kill 'com.whatsapp' (1)\nlibc: pid 2 (oid.apps.photos)\n",
+            "session/a/session.log": ("mail jane.doe@gmail.com\nzolotvok@fedora:~/x$ make\n[jo@box dir]$ ls\n"
+                                      "ssh -p 22 jdoe@10.0.0.2\nssh me2@<lan-address> ls\n<redacted:user>@<redacted:host>:~$ ok\nsteamid 76561198000000001\n-AUTH_PASSWORD=abc\n"
+                                      "[ro.serialno]: [10AFA5133Z0028H]\nadb 10AFA5133Z0028H\n"),
+        })
+        result = ctl.privacy_check(root, ["10AFA5133Z0028H"], {"com.whatsapp", "com.google.android.apps.photos"})
+        self.assertFalse(result["pass"])
+        self.assertEqual({"email": 1, "user@host": 2, "ssh-target": 2, "steam-id": 1, "auth-password": 1, "serial": 1,
+                          "forbidden": 2, "other-app": 2}, result["realByKind"])
+        text = json.dumps(result)
+        for value in ("jane.doe", "zolotvok", "jdoe", "me2", "76561198000000001", "10AFA5133Z0028H", "whatsapp"):
+            self.assertNotIn(value, text)
+
+    def test_cli_runs_without_a_device(self):
+        root = self.write({"summary.md": "| x | 1600x720@60 |\n"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch.object(ctl, "resolve_serial", side_effect=AssertionError("no adb")):
+            self.assertEqual(0, ctl.main(["report", "check", str(root)]))
+        result = json.loads(out.getvalue())
+        self.assertTrue(result["ok"] and result["pass"])
 
 
 class ScenarioTest(FakeAdbTest):

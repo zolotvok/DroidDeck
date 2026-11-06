@@ -96,6 +96,8 @@ class AgentBridgeProvider : ContentProvider() {
         }
         "prefs" -> prefs(context, request)
         "blobferry" -> blobferry(context, request)
+        "panvk" -> panvk(context, request)
+        "envdefaults" -> envDefaults(context, request)
         "report" -> report(context, request)
         "glasses" -> glasses(context, request)
         "access" -> JSONObject().put("ok", true).put("commands", AgentAccess.commandsAllowed(context))
@@ -317,6 +319,72 @@ class AgentBridgeProvider : ContentProvider() {
             if (op != "status") out.put("appliesAt", "next session start")
             extra.keys().forEach { out.put(it, extra.get(it)) }
             out
+        } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
+            error(e.code, e.message ?: e.code)
+        }
+    }
+
+    /** A file droiddeckctl pushed into the agent inbox (simple name, no link); the caller deletes it. */
+    private fun inboxFile(context: Context, request: JSONObject): File {
+        val name = request.optString("name")
+        if (!Regex("[A-Za-z0-9._+-]{1,96}").matches(name) || name in setOf(".", "..")) {
+            throw AgentException("INVALID_NAME", "The file name must be a simple filename")
+        }
+        val source = File(AgentEnv.inbox(context), name)
+        if (java.nio.file.Files.isSymbolicLink(source.toPath()) || !source.isFile) {
+            throw AgentException("NO_SUCH_FILE", "Push the file to ${source.path} first")
+        }
+        return source
+    }
+
+    private fun openInbox(file: File) = java.nio.file.Files.newInputStream(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+
+    /** PanVK component ops (gpu/PanvkPackage), as blobferry: status always, install/rollback behind Debugging tools. */
+    private fun panvk(context: Context, request: JSONObject): JSONObject {
+        val pv = com.droiddeck.launcher.gpu.PanvkPackage
+        val op = request.optString("op", "status")
+        if (op != "status") AgentAccess.requireCommands(context)
+        return try {
+            val status = when (op) {
+                "status" -> pv.status(context)
+                "install" -> {
+                    val source = inboxFile(context, request)
+                    try {
+                        pv.install(context, pv.prepare(context, openInbox(source), request.optString("sha256").ifEmpty { null }), com.droiddeck.launcher.gpu.BlobferryPackage.SOURCE_ADB)
+                    } finally {
+                        source.delete()
+                    }
+                }
+                "rollback" -> pv.rollback(context)
+                else -> throw AgentException("INVALID_REQUEST", "Unknown panvk op '$op'")
+            }
+            status.json().put("ok", true).put("command", "panvk").put("op", op).apply { if (op != "status") put("appliesAt", "next session start") }
+        } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
+            error(e.code, e.message ?: e.code)
+        }
+    }
+
+    /** Env defaults ops (session/MaliEnvDefaults): status always, install/rollback/reset behind Debugging tools. */
+    private fun envDefaults(context: Context, request: JSONObject): JSONObject {
+        val ed = com.droiddeck.launcher.session.MaliEnvDefaults
+        val op = request.optString("op", "status")
+        if (op != "status") AgentAccess.requireCommands(context)
+        return try {
+            val status = when (op) {
+                "status" -> ed.status(context)
+                "install" -> {
+                    val source = inboxFile(context, request)
+                    try {
+                        ed.install(context, ed.prepare(openInbox(source), request.optString("sha256").ifEmpty { null }), com.droiddeck.launcher.gpu.BlobferryPackage.SOURCE_ADB)
+                    } finally {
+                        source.delete()
+                    }
+                }
+                "rollback" -> ed.rollback(context)
+                "reset" -> ed.reset(context)
+                else -> throw AgentException("INVALID_REQUEST", "Unknown envdefaults op '$op'")
+            }
+            status.json().put("ok", true).put("command", "envdefaults").put("op", op).apply { if (op != "status") put("appliesAt", "next game start") }
         } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
             error(e.code, e.message ?: e.code)
         }

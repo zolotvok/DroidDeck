@@ -332,6 +332,42 @@ class BlobferryPackageTest {
         assertFalse(File(layout.slot, ".dev").exists())
     }
 
+    @Test fun aHandDeployedTreeNamesItsFilesAndHasNoCommit() {
+        // rc2 smoke B1: compat de6e975d hand-deployed with .dev over the bundled 1.0.0-rc1 (a28a42d)
+        val bundledFiles = BlobferryPackage.BUNDLED_FILES.map { it.second }.associateWith { "bundled-${it.substringAfterLast('/')}".toByteArray() }
+        bundledFiles.forEach { (rel, bytes) -> live(rel).apply { parentFile!!.mkdirs() }.writeBytes(bytes) }
+        host.bundledPackage = BlobferryPackage.Bundled("1.0.0-rc1", "a28a42d6" + "0".repeat(32), "d1fd242b", bundledFiles.mapValues { md5(it.value) })
+        live("usr/lib/mali_bridge/.dev").writeText("")
+        val same = BlobferryPackage.status(layout, host)
+        assertEquals("dev", same.source)
+        assertEquals(emptyList<String>(), same.devFiles)
+        assertEquals("a28a42d6" + "0".repeat(32), same.commit)  // byte for byte the bundled build
+        assertTrue(same.commitLabel, same.commitLabel.startsWith("a28a42d (dev marker"))
+        live("usr/lib/mali_bridge/libVkLayer_droiddeck_mali_compat.so").writeBytes("hand".toByteArray())
+        val s = BlobferryPackage.status(layout, host)
+        assertEquals("", s.commit)
+        assertEquals(BlobferryPackage.DEV_NO_COMMIT, s.commitLabel)
+        assertEquals(listOf("usr/lib/mali_bridge/libVkLayer_droiddeck_mali_compat.so"), s.devFiles)
+        assertEquals("a28a42d6" + "0".repeat(32), s.baseCommit)
+        assertEquals(md5("hand".toByteArray()), s.files["usr/lib/mali_bridge/libVkLayer_droiddeck_mali_compat.so"])
+        val json = s.json()
+        assertEquals("dev build (no commit)", json.getString("commitLabel"))
+        assertEquals(1, json.getJSONArray("devFiles").length())
+        assertEquals(emptyList<String>(), s.changed)
+        // without BUNDLE.json nothing can be compared
+        host.bundledPackage = BlobferryPackage.Bundled("1.0.0-rc1")
+        assertNull(BlobferryPackage.status(layout, host).devFiles)
+        assertEquals(BlobferryPackage.DEV_NO_COMMIT, BlobferryPackage.status(layout, host).commitLabel)
+    }
+
+    @Test fun bundledAndImportedLabelsAreTheShortCommit() {
+        host.bundledPackage = BlobferryPackage.Bundled("1.0.0-rc1", "a28a42d6" + "0".repeat(32))
+        assertEquals("a28a42d", BlobferryPackage.status(layout, host).commitLabel)
+        val s = BlobferryPackage.install(layout, host, prepare(zip("1.0.0", files("1.0.0"))), "adb")
+        assertEquals("aaaaaaa", s.commitLabel)
+        assertNull(s.devFiles)
+    }
+
     @Test fun recoverFinishesAnInterruptedSwitch() {
         BlobferryPackage.install(layout, host, prepare(zip("1.0.0", files("1.0.0"))), "file")
         // a crash in the middle: journal written, one live file still from something else

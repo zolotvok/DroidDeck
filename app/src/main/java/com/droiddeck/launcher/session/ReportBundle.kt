@@ -348,7 +348,7 @@ object ReportBundle {
             gpu = gpu?.name ?: vk["device"].orEmpty(),
             vendorDriver = listOfNotNull(vk["driver_name"], vk["driver_info"] ?: vk["driver_version"]).joinToString(" "),
             blobferryVersion = bf?.version.orEmpty(),
-            blobferryCommit = bf?.commit.orEmpty() + if (bf?.dirty == true) "-dirty" else "",
+            blobferryCommit = bf?.let { b -> b.commit.takeIf { it.isNotEmpty() }?.let { it + if (b.dirty) "-dirty" else "" } }.orEmpty(),
             blobferrySource = bf?.source ?: "none",
             blobferryShimMd5 = bf?.shimMd5.orEmpty(),
             fexDllMd5 = File(root, FEX_DLL).takeIf { it.isFile }?.let { md5(it) }.orEmpty(),
@@ -370,7 +370,29 @@ object ReportBundle {
             },
             lastExit = lastExit ?: "?",
             vulkanError = vulkanError,
-        )
+            blobferryDevFiles = bf?.devFiles.orEmpty(),
+            blobferryBaseCommit = bf?.baseCommit.orEmpty(),
+            panvk = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) "" else runCatching {
+                com.droiddeck.launcher.gpu.PanvkPackage.status(context).let { p ->
+                    if (!p.installed) "not installed" else "${p.version.ifEmpty { "?" }} (${p.source})" +
+                        (if (p.commit.isNotEmpty()) " @ ${p.commit.take(7)}" else "") + ", so md5 ${p.soMd5}"
+                }
+            }.getOrDefault("?"),
+            envDefaults = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) "" else
+                runCatching { MaliEnvDefaults.status(context).label }.getOrDefault("?"),
+        ).also { knownHashes(context, bf, it) }
+    }
+
+    /** The md5s of our own component files may stay in the report (ReportRedactor.allowHashes). */
+    private fun knownHashes(context: Context, bf: com.droiddeck.launcher.gpu.BlobferryPackage.Status?, info: ReportSummary.Info) {
+        val hashes = ArrayList<String>()
+        bf?.let { hashes += it.files.values; hashes += it.shimMd5; hashes += it.zipMd5 }
+        runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.bundled(context) }.getOrNull()?.let { hashes += it.files.values; hashes += it.zipMd5 }
+        runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.liveFiles(com.droiddeck.launcher.gpu.BlobferryPackage.layout(context)) }
+            .getOrNull()?.let { hashes += it.values }
+        hashes += info.fexDllMd5
+        if (info.panvk.isNotEmpty()) runCatching { hashes += com.droiddeck.launcher.gpu.PanvkPackage.status(context).soMd5 }
+        ReportRedactor.allowHashes(hashes.filter { it.isNotEmpty() })
     }
 
     private fun tailLines(f: File, bytes: Long): Sequence<String> {
@@ -392,6 +414,9 @@ object ReportBundle {
         runCatching { android.provider.Settings.Secure.getString(context.contentResolver, "bluetooth_name") }.getOrNull()?.let { names += it }
         runCatching { SessionPrefs.guestHostname(context) }.getOrNull()?.let { names += it }
         ReportRedactor.learn(names.filter { it != Build.MODEL && it != Build.DEVICE })
+        // the user's rule: no names or ids of non-DroidDeck apps (logcat's lmkd/libc/DEBUG lines name other processes)
+        runCatching { context.packageManager.getInstalledPackages(0).map { it.packageName } }.getOrNull()
+            ?.let { ReportRedactor.learnApps(it, context.packageName) }
     }
 
     // ---- build ----

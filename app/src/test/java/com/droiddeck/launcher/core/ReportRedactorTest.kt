@@ -8,7 +8,72 @@ import org.junit.Test
 import java.io.StringWriter
 
 class ReportRedactorTest {
-    @After fun forget() = ReportRedactor.learn(emptyList())
+    @After fun forget() {
+        ReportRedactor.learn(emptyList())
+        ReportRedactor.allowHashes(emptyList())
+        ReportRedactor.learnApps(emptyList(), "com.droiddeck.launcher")
+    }
+
+    @Test fun knownComponentHashesStayOtherHexRunsGo() {
+        val shim = "caf6c3c0fe8d4317bfaa1a852f049bfd"
+        val fex = "a2448b03c0ffee00112233445566778a"
+        val zipSha = "d1fd242b" + "0".repeat(56)
+        ReportRedactor.allowHashes(listOf(shim, fex.uppercase(), zipSha))
+        assertEquals("| Blobferry | 1.0.0-rc1 @ a28a42d (adb), shim md5 $shim |",
+            ReportRedactor.redact("| Blobferry | 1.0.0-rc1 @ a28a42d (adb), shim md5 $shim |"))
+        assertEquals("| FEX DLL md5 | $fex |", ReportRedactor.redact("| FEX DLL md5 | $fex |"))
+        assertEquals("$shim  usr/lib/mali_bridge/libvulkan_mali_bridge.so, $fex x", ReportRedactor.redact("$shim  usr/lib/mali_bridge/libvulkan_mali_bridge.so, $fex x"))
+        assertEquals("sha256 $zipSha", ReportRedactor.redact("sha256 $zipSha"))
+        // an unknown 32-hex run is still a possible Web API key
+        val key = "0123456789abcdef0123456789abcdef"
+        clean("steam webapi $key", key)
+        // a known hash in a secret slot is still a secret
+        clean("access_token=$shim", shim)
+        clean("\"password\": \"$fex\"", fex)
+    }
+
+    @Test fun manyKnownHashesOnOneLine() {
+        val hashes = (0 until 30).map { i -> "%032x".format(i + 1L shl 60 or 0x5a5aL) }
+        ReportRedactor.allowHashes(hashes)
+        val line = hashes.joinToString(" ")
+        assertEquals(line, ReportRedactor.redact(line))
+    }
+
+    @Test fun shellPromptsAndSshTargetsLoseUserAndHost() {
+        clean("zolotvok@fedora:~/Droid-Deck_Mali_Support$ ls", "zolotvok", "fedora")
+        clean("[zolotvok@fedora bridge]$ make", "zolotvok", "fedora")
+        clean("jane@laptop ~ % ls", "jane", "laptop")
+        clean("ran: ssh -p 2222 jdoe@192.168.1.20 uptime", "jdoe")
+        clean("scp build.zip jdoe@buildbox.example.org:/tmp/", "jdoe", "buildbox")
+        // the guest's own prompt says nothing about the user
+        assertEquals("root@localhost:~# ls", ReportRedactor.redact("root@localhost:~# ls"))
+        assertEquals("root@DroidDeck:/# id", ReportRedactor.redact("root@DroidDeck:/# id"))
+    }
+
+    @Test fun benignAtSignsSurvive() {
+        for (line in listOf(
+            "Updating mode for xwayland server #0: 1600x720@120",
+            "info:  Vulkan: Found vkGetInstanceProcAddr in winevulkan.dll @ 0x6ffa030cc0",
+            "Details: /usr/bin/lsof -P -F upnR -i TCP@127.0.0.1:32843",
+            "\"Unknown convar: @bSearchSuggestionNameMatchScoring\", source: https://steamloopback.host/library.js (1)",
+            "OnOutputMode: 1600x720: 1600 x 720 @ 60 - 60",
+            "trying to find modeid that matches: 1600x720@60.0",
+            "| DroidDeck | 0.6.9-mali.1-rc2 (19) (com.droiddeck.launcher), release, debuggable @ aa74271cfa |",
+            "memcpy@GLIBC_2.17 and _ZN3foo3barEv@@Base",
+        )) assertEquals(line, ReportRedactor.redact(line))
+    }
+
+    @Test fun otherAppsArePackageNamesRemoved() {
+        ReportRedactor.learnApps(listOf("com.whatsapp", "com.google.android.apps.photos", "com.droiddeck.launcher",
+            "com.droiddeck.launcher.mali", "android"), "com.droiddeck.launcher")
+        clean("lmkd: Kill 'com.whatsapp' (12345), uid 10234, oom_score_adj 900", "whatsapp")
+        clean("libc: Fatal signal 11 in tid 77 (RenderThread), pid 70 (com.google.android.apps.photos:sync)", "photos")
+        clean("lmkd: Kill 'oid.apps.photos' (1), uid 1", "apps.photos")  // the kernel keeps the last 15 characters
+        clean("ActivityManager: Start proc com.whatsapp/.Main for activity", "whatsapp")
+        val ours = "ActivityManager: Start proc 123:com.droiddeck.launcher/u0a361 for top-activity {com.droiddeck.launcher/.MainActivity}"
+        assertEquals(ours, ReportRedactor.redact(ours))
+        assertEquals("loaded libVkLayer_droiddeck_mali_compat.so and org.freedesktop.DBus", ReportRedactor.redact("loaded libVkLayer_droiddeck_mali_compat.so and org.freedesktop.DBus"))
+    }
 
     private fun clean(line: String, vararg secrets: String): String {
         val out = ReportRedactor.redact(line)

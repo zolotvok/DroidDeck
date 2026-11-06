@@ -42,6 +42,8 @@ object BlobferryPackage {
     const val SOURCE_FILE = "file"
     const val SOURCE_DOWNLOAD = "download"
     const val SOURCE_ADB = "adb"
+    const val SOURCE_DEV = "dev"
+    const val DEV_NO_COMMIT = "dev build (no commit)"
     const val MAX_ZIP_BYTES = 64L shl 20
     const val MAX_ENTRIES = 512
     const val MAX_UNPACKED_BYTES = 256L shl 20
@@ -106,11 +108,29 @@ object BlobferryPackage {
         val source: String, val version: String, val commit: String, val dirty: Boolean, val zipMd5: String, val shimMd5: String,
         val previous: String?, val bundledVersion: String?, val devMarker: Boolean, val userMarker: Boolean,
         val changed: List<String>, val canSwitch: Boolean, val files: Map<String, String>,
+        /** Hand-deployed (.dev) only: the managed files that differ from the bundled package (null = unknown, no BUNDLE.json). */
+        val devFiles: List<String>? = null,
+        /** Hand-deployed (.dev) only: the bundled package's commit, which the files outside [devFiles] come from. */
+        val baseCommit: String = "",
     ) {
+        /**
+         * The commit as people read it: the short commit (+ "-dirty"), "dev build (no commit)" for a hand-deployed build whose
+         * files are not all the bundled package's, "none" without Blobferry. Never empty, so no one reads "" as "unknown".
+         */
+        val commitLabel: String get() = when {
+            commit.isNotEmpty() -> commit.take(7) + (if (dirty) "-dirty" else "") +
+                if (source == SOURCE_DEV) " (dev marker; files = bundled package)" else ""
+            source == SOURCE_DEV -> DEV_NO_COMMIT
+            source == "none" -> "none"
+            else -> "?"
+        }
+
         fun json(): JSONObject = JSONObject().put("source", source).put("version", version).put("commit", commit).put("dirty", dirty)
+            .put("commitLabel", commitLabel)
             .put("zipMd5", zipMd5).put("shimMd5", shimMd5).put("hasPrevious", previous != null).put("previous", previous ?: JSONObject.NULL)
             .put("bundledVersion", bundledVersion ?: JSONObject.NULL).put("devMarker", devMarker).put("userMarker", userMarker)
             .put("changed", JSONArray(changed)).put("canSwitch", canSwitch).put("files", JSONObject(files as Map<*, *>))
+            .put("devFiles", devFiles?.let { JSONArray(it) } ?: JSONObject.NULL).put("baseCommit", baseCommit)
     }
 
     // ---- context entry points (UI, agent provider, SessionFiles) ----
@@ -543,10 +563,19 @@ object BlobferryPackage {
         val shim = File(layout.rootfs, SHIM).takeIf { it.isFile }?.let { md5(it) }.orEmpty()
         val (source, expected) = when {
             meta != null -> meta.optString("source", SOURCE_FILE) to meta.optJSONObject("files").toMap()
-            dev -> "dev" to emptyMap()
+            dev -> SOURCE_DEV to emptyMap()
             bundled != null -> "bundled" to bundled.files
             else -> "none" to emptyMap()
         }
+        // A hand-deployed tree has no package record: compare it with the bundled package file by file. No file differs = it
+        // is the bundled build (its commit applies); otherwise there is no commit for it, and devFiles names what differs.
+        val devFiles = if (source == SOURCE_DEV && bundled != null && bundled.files.isNotEmpty()) {
+            bundled.files.filter { (rel, md5) -> File(layout.rootfs, rel).let { !it.isFile || md5(it) != md5 } }.keys.sorted() +
+                listOfNotNull(bundled.files[SHIM]?.let { md5 ->
+                    File(layout.slot, LinuxVulkanDriverManager.BRIDGE_LIB_NAME).takeIf { it.isFile && md5(it) != md5 }?.let { "slot/${it.name}" }
+                })
+        } else null
+        val devCommit = if (devFiles != null && devFiles.isEmpty()) bundled!!.commit else ""
         val changed = expected.filter { (rel, md5) -> File(layout.rootfs, rel).let { !it.isFile || md5(it) != md5 } }.keys.toList() +
             // the Runtime driver page's slot runs the games' shim: it must be the package's too
             listOfNotNull(expected[SHIM]?.takeIf { meta != null }?.let { md5 ->
@@ -555,12 +584,21 @@ object BlobferryPackage {
         return Status(
             source = source,
             version = meta?.optString("version") ?: if (source == "bundled") bundled!!.version else liveVersion,
-            commit = meta?.optString("commit") ?: if (source == "bundled") bundled!!.commit else "",
+            commit = meta?.optString("commit") ?: if (source == "bundled") bundled!!.commit else devCommit,
             dirty = meta?.optBoolean("dirty") ?: false,
             zipMd5 = meta?.optString("zipMd5") ?: if (source == "bundled") bundled!!.zipMd5 else "",
             shimMd5 = shim, previous = previous, bundledVersion = bundled?.version, devMarker = dev, userMarker = user,
-            changed = changed, canSwitch = !host.sessionRunning, files = expected,
+            changed = changed, canSwitch = !host.sessionRunning,
+            // a hand-deployed tree shows what is on disk (the details dialog, the report's known hashes)
+            files = if (source == SOURCE_DEV) liveFiles(layout) else expected,
+            devFiles = devFiles, baseCommit = if (source == SOURCE_DEV) bundled?.commit.orEmpty() else "",
         )
+    }
+
+    /** md5 of every managed rootfs file that exists (the bundled list's targets plus what the active package applied). */
+    fun liveFiles(layout: Layout): Map<String, String> {
+        val rels = (BUNDLED_FILES.map { it.second } + applied(layout)).toSortedSet()
+        return rels.mapNotNull { rel -> File(layout.rootfs, rel).takeIf { it.isFile }?.let { rel to md5(it) } }.toMap()
     }
 
     // ---- helpers ----

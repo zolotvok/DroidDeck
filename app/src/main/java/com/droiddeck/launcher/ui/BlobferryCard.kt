@@ -42,6 +42,8 @@ class BlobferryCardState(
     val version: String,
     val source: String,
     val commit: String,
+    /** What the card shows for the commit: short commit, or "dev build (no commit)" for a hand-deployed build. */
+    val commitText: String,
     val shimMd5: String,
     val zipMd5: String,
     val testBuild: Boolean,
@@ -56,6 +58,18 @@ class BlobferryCardState(
     val files: Map<String, String>,
     val confirm: BlobferryConfirm? = null,
     val offer: String? = null,
+    /** Hand-deployed build: the line naming the files that are not the bundled package's (null = not a dev build). */
+    val devNote: String? = null,
+    /** Offer dialog title for a PanVK / env defaults offer (null = the Blobferry title). */
+    val offerTitle: String? = null,
+    /** PanVK (the session driver): "PanVK <v> · <source> · md5 <8>", an amber note, the roll back label. */
+    val panvkLine: String? = null,
+    val panvkNote: String? = null,
+    val panvkRollback: String? = null,
+    /** Env defaults: "Env defaults <v> · <source> · N games", an amber note, the roll back label. */
+    val envLine: String? = null,
+    val envNote: String? = null,
+    val envRollback: String? = null,
 )
 
 class BlobferryConfirm(val title: String, val text: String)
@@ -67,6 +81,8 @@ class BlobferryActions(
     val onReset: () -> Unit = {},
     val onConfirm: (Boolean) -> Unit = {},
     val onOffer: (Boolean) -> Unit = {},
+    val onPanvkRollback: () -> Unit = {},
+    val onEnvRollback: () -> Unit = {},
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -89,16 +105,21 @@ internal fun BlobferryCard(state: BlobferryCardState, actions: BlobferryActions)
             stringResource(R.string.blobferry_version, state.version.ifEmpty { "?" }) + "  ·  " + state.source,
             fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
         )
-        if (state.commit.isNotEmpty() || state.shimMd5.isNotEmpty()) FocusText(
-            stringResource(R.string.blobferry_ids, state.commit.take(7).ifEmpty { "?" }, state.shimMd5.take(8).ifEmpty { "?" },
-                state.zipMd5.take(8).ifEmpty { "?" }),
+        if (state.commitText.isNotEmpty() || state.shimMd5.isNotEmpty()) FocusText(
+            stringResource(R.string.blobferry_ids, state.commitText.ifEmpty { "?" }, state.shimMd5.take(8).ifEmpty { "?" },
+                state.zipMd5.take(8).ifEmpty { "-" }),
             colors.onSurfaceVariant,
         ) { details = true }
+        state.devNote?.let { Text(it, fontSize = 12.5.sp, color = AttentionAmber) }
         if (state.testBuild) Text(stringResource(R.string.blobferry_test_build), fontSize = 12.5.sp, color = AttentionAmber)
         if (state.changed.isNotEmpty()) Text(
             stringResource(R.string.blobferry_changed, state.changed.joinToString { it.substringAfterLast('/') }),
             fontSize = 12.5.sp, color = AttentionAmber,
         )
+        state.panvkLine?.let { Text(it, fontSize = 13.sp, color = colors.onBackground, modifier = Modifier.testTag("panvk-line")) }
+        state.panvkNote?.let { Text(it, fontSize = 12.5.sp, color = AttentionAmber) }
+        state.envLine?.let { Text(it, fontSize = 13.sp, color = colors.onBackground, modifier = Modifier.testTag("envdefaults-line")) }
+        state.envNote?.let { Text(it, fontSize = 12.5.sp, color = AttentionAmber) }
         val note = state.busy ?: if (!state.canSwitch) stringResource(R.string.blobferry_stop_session) else state.note
         if (note.isNotEmpty()) Text(note, fontSize = 12.5.sp, color = if (!state.canSwitch) AttentionAmber else colors.onSurfaceVariant)
         if (state.busy != null) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -112,6 +133,13 @@ internal fun BlobferryCard(state: BlobferryCardState, actions: BlobferryActions)
             }
             if (state.canReset) SecondaryButton(stringResource(R.string.blobferry_reset), enabled = idle, compact = true,
                 modifier = Modifier.testTag("blobferry-reset")) { resetAsk = true }
+            state.panvkRollback?.let {
+                SecondaryButton(it, enabled = idle, compact = true, modifier = Modifier.testTag("panvk-rollback"), onClick = actions.onPanvkRollback)
+            }
+            // env defaults are read at each game start, so a running session does not block them
+            state.envRollback?.let {
+                SecondaryButton(it, enabled = state.busy == null, compact = true, modifier = Modifier.testTag("envdefaults-rollback"), onClick = actions.onEnvRollback)
+            }
         }
     }
     if (details) AlertDialog(
@@ -119,7 +147,8 @@ internal fun BlobferryCard(state: BlobferryCardState, actions: BlobferryActions)
         title = { Text(stringResource(R.string.blobferry_details_title)) },
         text = {
             Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("commit ${state.commit.ifEmpty { "?" }}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text("commit ${state.commit.ifEmpty { state.commitText }}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                state.devNote?.let { Text(it, fontSize = 12.sp) }
                 if (state.zipMd5.isNotEmpty()) Text("package md5 ${state.zipMd5}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 Text("shim md5 ${state.shimMd5.ifEmpty { "?" }}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 for ((path, md5) in state.files.toSortedMap()) Text("$md5  $path", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
@@ -152,7 +181,7 @@ internal fun BlobferryCard(state: BlobferryCardState, actions: BlobferryActions)
     state.offer?.let { text ->
         AlertDialog(
             onDismissRequest = { actions.onOffer(false) },
-            title = { Text(stringResource(R.string.blobferry_offer_title)) },
+            title = { Text(state.offerTitle ?: stringResource(R.string.blobferry_offer_title)) },
             text = { Text(text, fontSize = 13.sp) },
             confirmButton = { FocusText(stringResource(R.string.blobferry_download), pal.signal, modifier = Modifier.testTag("blobferry-download")) { actions.onOffer(true) } },
             dismissButton = {
@@ -173,7 +202,8 @@ private fun DialogCancel(onClick: () -> Unit) {
 
 internal fun blobferryDetailsText(state: BlobferryCardState): String = buildString {
     append("Blobferry ").append(state.version).append(" (").append(state.source).append(")\n")
-    append("commit ").append(state.commit).append('\n')
+    append("commit ").append(state.commit.ifEmpty { state.commitText }).append('\n')
+    state.devNote?.let { append(it).append('\n') }
     if (state.zipMd5.isNotEmpty()) append("package md5 ").append(state.zipMd5).append('\n')
     append("shim md5 ").append(state.shimMd5).append('\n')
     for ((path, md5) in state.files.toSortedMap()) append(md5).append("  ").append(path).append('\n')

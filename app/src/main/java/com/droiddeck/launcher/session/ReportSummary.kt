@@ -74,7 +74,27 @@ object ReportSummary {
         val protonLog: String,
         val lastExit: String,
         val vulkanError: Boolean,
+        /** Hand-deployed (.dev) Blobferry: the files that are not the bundled package's (empty: all are, or not dev). */
+        val blobferryDevFiles: List<String> = emptyList(),
+        /** Hand-deployed (.dev) Blobferry: the bundled commit the other files come from. */
+        val blobferryBaseCommit: String = "",
+        /** PanVK (session driver on Mali): version (source), .so md5; empty = not a Mali report. */
+        val panvk: String = "",
+        /** The env defaults in force: version (source), games; empty = not a Mali report. */
+        val envDefaults: String = "",
     )
+
+    /** The Blobferry cell: version @ commit (source), or the dev build without a commit and what it changed. */
+    fun blobferryCell(info: Info): String {
+        val version = info.blobferryVersion.ifEmpty { "none" }
+        val shim = "shim md5 ${info.blobferryShimMd5.ifEmpty { "?" }}"
+        if (info.blobferrySource == "dev" && info.blobferryCommit.isEmpty()) {
+            val files = info.blobferryDevFiles.joinToString(", ") { it.substringAfterLast('/') }.ifEmpty { "unknown files" }
+            val base = info.blobferryBaseCommit.take(7).ifEmpty { "?" }
+            return "$version, dev build (no commit): hand-deployed $files; the rest is the bundled package @ $base, $shim"
+        }
+        return "$version @ ${info.blobferryCommit.take(7).ifEmpty { "?" }} (${info.blobferrySource}), $shim"
+    }
 
     private fun cell(text: String) = text.replace("|", "\\|").replace("\n", " ").ifEmpty { "?" }
 
@@ -86,8 +106,10 @@ object ReportSummary {
         fun row(k: String, v: String) = append("| ").append(k).append(" | ").append(cell(v)).append(" |\n")
         row("DroidDeck", "${info.appVersion} (${info.appId}), ${info.buildType}" + if (info.sourceCommit.isNotEmpty()) " @ ${info.sourceCommit.take(10)}" else "")
         row("Device", "${info.device}, Android ${info.android}, ${info.soc}, ${info.gpu}" + if (info.vendorDriver.isNotEmpty()) " + ${info.vendorDriver}" else "")
-        row("Blobferry", "${info.blobferryVersion.ifEmpty { "none" }} @ ${info.blobferryCommit.take(7).ifEmpty { "?" }} (${info.blobferrySource}), shim md5 ${info.blobferryShimMd5.ifEmpty { "?" }}")
+        row("Blobferry", blobferryCell(info))
         row("FEX DLL md5", info.fexDllMd5.ifEmpty { "not installed" })
+        if (info.panvk.isNotEmpty()) row("PanVK", info.panvk)
+        if (info.envDefaults.isNotEmpty()) row("Env defaults", info.envDefaults)
         row("Driver", "display ${info.displayDriver}, runtime ${info.runtimeDriver}, session ${info.sessionDriver}, games ${info.gameDriver}")
         row("Proton", info.proton)
         row("Game", info.game)

@@ -1,0 +1,450 @@
+{
+ "about": "Shared cases for droiddeck-mali-defaults parse_manifest (test_mali_defaults.py) and MaliEnvDefaults.parse (MaliEnvDefaultsTest.kt): both must refuse every 'invalid' manifest and accept every 'valid' one.",
+ "invalid": [
+  {
+   "why": "wrong schema",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/2",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "bad version",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "1.0",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "shortcut id as a Steam key",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     },
+     "steam:2274579123": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "bad key",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     },
+     "Epic:Angelonia": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "LD_PRELOAD",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "LD_PRELOAD": "/root/x.so"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "loader path",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "VK_ICD_FILENAMES": "/root/icd.json"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "not an allowed prefix",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "HOME": "/tmp"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "WINEDLLPATH",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "WINEDLLPATH": "/root/dlls"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "FEX rootfs",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "FEX_ROOTFS": "/root/fs"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "defaults switch",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "BL_MALI_GAME_DEFAULTS": "0"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "path outside the data folder",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "MALI_DEBUG_CONFIG": "/root/mali.config"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "windows path outside",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "VKD3D_SHADER_OVERRIDE": "Z:/root/control-override"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "dot-dot path",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "MALI_DEBUG_CONFIG": "/usr/share/droiddeck-mali/../../../root/x"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "newline in a value",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "DXVK_CONFIG": "a\nb"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "non-string value",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "MALI_COMPAT_BUDGET_MB": 2048
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "lower-case name",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "mali_compat_x": "1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "unknown prefix action",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "prefix": [
+       "rm-rf"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "why": "no evidence",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      }
+     }
+    }
+   }
+  },
+  {
+   "why": "no title",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "denied key in a pending entry",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "pending": [
+       {
+        "env": {
+         "LD_PRELOAD": "/x.so"
+        },
+        "why": "x"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "why": "too long value",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "DXVK_CONFIG": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  }
+ ],
+ "valid": [
+  {
+   "why": "minimal",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "paths inside the data folder",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "MALI_DEBUG_CONFIG": "/usr/share/droiddeck-mali/x.config",
+       "VKD3D_SHADER_OVERRIDE": "Z:/usr/share/droiddeck-mali/vkd3d-override/control",
+       "VKD3D_SHADER_CACHE_PATH": "0"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "store key, prefix action, pending with a requires",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test"
+     },
+     "epic:Angelonia": {
+      "title": "WD2",
+      "env": {
+       "PROTON_NO_NTSYNC": "1",
+       "WINEDLLOVERRIDES": "d3dcompiler_43=n,b"
+      },
+      "prefix": [
+       "wpad-off"
+      ],
+      "evidence": "t",
+      "pending": [
+       {
+        "env": {
+         "FEX_DISKCACHE": "0"
+        },
+        "why": "w",
+        "requires": "r"
+       }
+      ]
+     }
+    }
+   }
+  }
+ ]
+}

@@ -248,7 +248,8 @@ json.dump(bundle, open(f"{linuxfs}/{b}/BUNDLE.json", "w"), indent=2, sort_keys=T
 PY
     # Ubuntu's gamescope WSI manifest lacks the X11 surface extensions the bridge ICD needs (SessionFiles maliFiles),
     # and the files the per-game Mali defaults point at (droiddeck-mali-defaults)
-    for name in VkLayer_FROG_gamescope_wsi.aarch64.json vkd3d-override/control/bf125ef61cc75d97.spv mali-debug-wd2.config; do
+    for name in VkLayer_FROG_gamescope_wsi.aarch64.json vkd3d-override/control/bf125ef61cc75d97.spv mali-debug-wd2.config \
+        env-defaults.json; do
         install -D -m644 "${repo_root}/tools/linuxfs/overlay/usr/share/droiddeck-mali/${name}" \
             "${linuxfs_dir}/usr/share/droiddeck-mali/${name}"
     done
@@ -256,6 +257,43 @@ PY
     [[ -n "${blobferry_unpack:-}" ]] && rm -rf "${blobferry_unpack}"
 else
     echo "No Blobferry package found (DROIDDECK_BLOBFERRY); the APK has no bundled Mali system driver" >&2
+fi
+
+# PanVK for Mali (session driver): DROIDDECK_PANVK = a panvk-kbase-<V>.zip from tools/make-panvk-component.py, by
+# default the release-1 build of a ../bridge checkout (PanVK 10a845b, .so md5 bda2be8e), accepted only with its pinned
+# sha256. The app installs it into the PanVK_Kbase driver slot only on a phone without any PanVK
+# (gpu/PanvkPackage.ensureBundled); an existing slot is updated by "Check for updates" or droiddeckctl panvk install.
+# DROIDDECK_PANVK=none builds without it; a release build refuses to go without one.
+panvk_default="${repo_root}/../bridge/build/release/panvk/panvk-kbase-v26.3.1-234-237.zip"
+panvk_default_sha256=a8a3e8b00b4aa5ab9b13b81362b5eb5bdedcc3edb81b56a547f5e8044bc6cf79
+panvk=${DROIDDECK_PANVK:-${panvk_default}}
+panvk_out="${repo_root}/app/src/main/assets/panvk"
+rm -rf "${panvk_out}"
+if [[ "${panvk}" != none && -f "${panvk}" ]]; then
+    if [[ -z "${DROIDDECK_PANVK:-}" ]] && \
+        [[ "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${panvk}")" != "${panvk_default_sha256}" ]]; then
+        echo "${panvk} is not the release-1 PanVK component (sha256 ${panvk_default_sha256})" >&2
+        exit 1
+    fi
+    DROIDDECK_PANVK=${panvk}
+    mkdir -p "${panvk_out}"
+    install -m644 "${DROIDDECK_PANVK}" "${panvk_out}/panvk-kbase.zip"
+    python3 - "${DROIDDECK_PANVK}" "${panvk_out}/BUNDLE.json" <<'PY'
+import hashlib, json, re, sys, zipfile
+zip_path, out = sys.argv[1:3]
+tops = {name.split("/", 1)[0] for name in zipfile.ZipFile(zip_path).namelist()}
+match = re.fullmatch(r"panvk-kbase-([A-Za-z0-9._+-]{1,48})", tops.pop() if len(tops) == 1 else "")
+if not match:
+    sys.exit(f"{zip_path}: not a panvk-kbase-<V>.zip (one panvk-kbase-<V>/ folder)")
+json.dump({"version": match.group(1), "sha256": hashlib.sha256(open(zip_path, "rb").read()).hexdigest()},
+          open(out, "w"), indent=2, sort_keys=True)
+PY
+    echo "Bundled PanVK $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${panvk_out}/BUNDLE.json") from ${DROIDDECK_PANVK}"
+elif [[ "${build_variant}" == release && "${panvk}" != none ]]; then
+    echo "No PanVK package at ${panvk} (DROIDDECK_PANVK); a release APK must bundle PanVK (DROIDDECK_PANVK=none to override)" >&2
+    exit 1
+else
+    echo "No PanVK package (DROIDDECK_PANVK=${panvk}); the APK bundles no PanVK" >&2
 fi
 
 # The patched FEX arm64ec DLL (tools/linuxfs/fex-arm64ec/NOTICE): DROIDDECK_FEX_ARM64EC, by default the build of a

@@ -14,6 +14,7 @@ object ReportRedactor {
     private const val TOKEN = "<redacted:token>"
     private const val ACCOUNT = "<redacted:account>"
     private const val ID = "<redacted:id>"
+    private const val APP = "<redacted:app>"
 
     private val LAUNCH_ARG = Regex(
         "(?i)(-(?:auth_password|auth_login|auth_token|epicusername|epicuserid|epicovt|epicsandboxid_token|" +
@@ -49,6 +50,20 @@ object ReportRedactor {
     private val APP_DATA = Regex("/data/(?:user(?:_de)?/\\d+|data)/[A-Za-z0-9._]+")
     private val STORAGE = Regex("/storage/emulated/\\d+|/sdcard(?=/|\\b)|/storage/self/primary")
     private val CARD = Regex("(/(?:storage|mnt/media_rw)/)[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
+    // a shell prompt or an ssh/scp target: user@host:~/dir, [user@host dir]$, user@host ~ %, ssh -p 22 user@host
+    private val PROMPT = Regex(
+        "(?<![A-Za-z0-9_.@-])([a-z_][a-z0-9_-]{0,31})@(<[a-z:A-Z0-9 -]{1,40}>|[A-Za-z][A-Za-z0-9-]{0,62}(?:\\.[A-Za-z0-9-]+)*)" +
+            "(?=:[~/]|\\s+[~/]\\S*\\s*[\\$#%>](?:\\s|$)|\\s+[^\\s\\]]+\\]\\s*[\\$#%]|\\])"
+    )
+    private val SSH_TARGET = Regex(
+        "(?i)(\\b(?:ssh|scp|sftp|rsync|mosh)\\b[^@\\r\\n]{0,120}?\\s)([A-Za-z0-9_][A-Za-z0-9_.-]{0,31})@(<[a-z:A-Z0-9 -]{1,40}>|[A-Za-z0-9][A-Za-z0-9.-]*)"
+    )
+    private val GUEST_USERS = setOf("root", "steamuser", "steam", "deck", "user")
+    private val GUEST_HOSTS = setOf("localhost", "droiddeck", "steamdeck")
+    // a hex run that may be a known file hash (md5 32, sha1 40, sha256 64, sha512 128)
+    private val HEX_RUN = Regex("(?<![0-9A-Za-z])[0-9a-fA-F]{32,128}(?![0-9A-Za-z])")
+    private val KEEP = Regex("BFKNOWNHASH([A-Y]+)Q")
+    private val ANDROID_PACKAGE = Regex("(?<![A-Za-z0-9_.])[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+")
     private val WIN_USER = Regex("(?i)([A-Z]:\\\\+users\\\\+|drive_c/users/)(?!steamuser\\b|public\\b|default\\b|all users\\b)([^\\\\/\\s\"'<>]+)")
 
     @Volatile
@@ -61,11 +76,68 @@ object ReportRedactor {
             .map { Regex("(?i)(?<![A-Za-z0-9_])" + Regex.escape(it) + "(?![A-Za-z0-9_])") }
     }
 
+    @Volatile
+    private var known: Set<String> = emptySet()
+
+    /**
+     * md5/sha hashes of the app's own component files (Blobferry's managed files, the shim, the FEX DLL): kept as they
+     * are, where LogRedactor would take any lone 32-hex run for a Steam Web API key. Only an exact known hash passes,
+     * and only that heuristic is skipped: a key=value secret rule still redacts it.
+     */
+    fun allowHashes(hashes: Collection<String>) {
+        known = hashes.map { it.trim().lowercase() }.filter { it.length in setOf(32, 40, 64, 128) && it.all { c -> c in '0'..'9' || c in 'a'..'f' } }.toSet()
+    }
+
+    @Volatile
+    private var apps: Set<String> = emptySet()
+
+    /**
+     * The package names of the phone's other apps (the user's rule: no names or ids of non-DroidDeck apps in a report).
+     * Kernel process names keep only the last 15 characters, so those tails are listed too.
+     */
+    fun learnApps(packages: Collection<String>, own: String) {
+        val names = packages.map { it.trim() }.filter { it.contains('.') && it != own && !it.startsWith("com.droiddeck.") }
+        apps = (names + names.filter { it.length > 15 }.map { it.takeLast(15) }.filter { it.contains('.') }).toHashSet()
+    }
+
+    private fun redactApps(line: String): String {
+        val set = apps
+        if (set.isEmpty() || '.' !in line) return line
+        return ANDROID_PACKAGE.replace(line) { m ->
+            val token = m.value
+            var cut = token.length
+            var hit = false
+            while (cut > 0) {
+                if (token.substring(0, cut) in set) { hit = true; break }
+                cut = token.lastIndexOf('.', cut - 1).takeIf { it > 0 } ?: break
+            }
+            if (hit) APP else token
+        }
+    }
+
+    private fun protect(line: String, kept: MutableList<String>): String {
+        val set = known
+        if (set.isEmpty() || line.length < 32) return line
+        return HEX_RUN.replace(line) { m ->
+            if (m.value.lowercase() in set) { kept += m.value; "BFKNOWNHASH" + letters(kept.size - 1) + "Q" } else m.value
+        }
+    }
+
+    private fun letters(n: Int): String {
+        var i = n
+        val b = StringBuilder()
+        do { b.append('A' + i % 25); i /= 25 } while (i > 0)  // 'A'..'Y': 'Q' ends the mark only after a letter run
+        return b.toString()
+    }
+
+    private fun unletters(s: String): Int = s.foldRight(0) { c, acc -> acc * 25 + (c - 'A') }
+
     private val COMMON = setOf("steam", "steamuser", "root", "user", "android", "phone", "unknown", "localhost", "droiddeck", "public", "default")
 
     fun redact(line: String): String {
         if (line.isEmpty()) return line
-        var out = LogRedactor.redactForShare(line)
+        val kept = ArrayList<String>(0)
+        var out = LogRedactor.redactForShare(protect(line, kept))
         if (out.startsWith("<redaction failed") || out == LogRedactor.OVERSIZED_LINE) return out
         return try {
             out = LAUNCH_ARG.replace(out) { it.groupValues[1] + TOKEN }
@@ -86,10 +158,22 @@ object ReportRedactor {
             out = CARD.replace(out) { it.groupValues[1] + "<card>" }
             out = STORAGE.replace(out, "<storage>")
             out = WIN_USER.replace(out) { it.groupValues[1] + "<redacted:user>" }
+            if ('@' in out) {
+                out = SSH_TARGET.replace(out) { it.groupValues[1] + userAt(it.groupValues[2], it.groupValues[3]) }
+                out = PROMPT.replace(out) { userAt(it.groupValues[1], it.groupValues[2]) }
+            }
+            out = redactApps(out)
+            if (kept.isNotEmpty()) out = KEEP.replace(out) { m -> kept.getOrNull(unletters(m.groupValues[1])) ?: m.value }
             out
         } catch (t: Throwable) {
             "<redaction failed; line withheld>"
         }
+    }
+
+    private fun userAt(user: String, host: String): String {
+        val u = if (user.lowercase() in GUEST_USERS || user.startsWith("<redacted")) user else "<redacted:user>"
+        val h = if (host.lowercase() in GUEST_HOSTS || host.startsWith("<redacted")) host else "<redacted:host>"
+        return "$u@$h"
     }
 
     /** How many redaction marks [after] carries that [before] did not (the manifest's hit count). */

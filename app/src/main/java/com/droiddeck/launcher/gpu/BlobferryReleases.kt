@@ -37,22 +37,26 @@ object BlobferryReleases {
     }
 
     /** The package asset of a GitHub "release" JSON, null for a draft or a release without one. */
-    fun parse(json: JSONObject, checkedAt: Long = System.currentTimeMillis()): Release? {
+    fun parse(json: JSONObject, checkedAt: Long = System.currentTimeMillis()): Release? = parseAsset(json, ASSET, checkedAt)
+
+    /** The first asset whose name matches [asset] (group 1 = its version) and its `.sha256` sidecar; shared with
+     *  ComponentReleases (PanVK, env defaults). */
+    internal fun parseAsset(json: JSONObject, asset: Regex, checkedAt: Long): Release? {
         if (json.optBoolean("draft")) return null
         val assets = json.optJSONArray("assets") ?: return null
         val list = (0 until assets.length()).map { assets.getJSONObject(it) }
-        val zip = list.firstOrNull { ASSET.matches(it.optString("name")) } ?: return null
+        val zip = list.firstOrNull { asset.matches(it.optString("name")) } ?: return null
         val name = zip.getString("name")
         val sidecar = list.firstOrNull { it.optString("name") == "$name.sha256" }
         return Release(
-            tag = json.optString("tag_name"), version = ASSET.matchEntire(name)!!.groupValues[1], asset = name,
+            tag = json.optString("tag_name"), version = asset.matchEntire(name)!!.groupValues[1], asset = name,
             url = zip.getString("browser_download_url"), size = zip.optLong("size"),
             digestSha256 = Hashes.githubSha256(zip.optString("digest")), sha256Url = sidecar?.optString("browser_download_url")?.ifEmpty { null },
             checkedAt = checkedAt,
         )
     }
 
-    private fun fromJson(j: JSONObject) = Release(
+    internal fun fromJson(j: JSONObject) = Release(
         j.getString("tag"), j.getString("version"), j.getString("asset"), j.getString("url"), j.optLong("size"),
         j.optString("digest").ifEmpty { null }, j.optString("sha256Url").ifEmpty { null }, j.optLong("checkedAt"),
     )
@@ -102,7 +106,7 @@ object BlobferryReleases {
     }
 
     /** GET with the app's GitHub mirrors (as TurnipReleases); null on 404. */
-    private fun get(url: String): String? {
+    internal fun get(url: String): String? {
         var last: IOException? = null
         for (source in DownloadSource.candidates(url)) {
             val c = URL(source).openConnection() as HttpURLConnection

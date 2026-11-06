@@ -1,0 +1,211 @@
+{
+  "schema": "droiddeck-mali-env-defaults/1",
+  "version": "2026.11.06.3",
+  "date": "2026-11-06",
+  "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env applies; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off.",
+  "games": {
+    "epic:Angelonia": {
+      "title": "Watch Dogs 2",
+      "env": {
+        "PROTON_NO_NTSYNC": "1",
+        "BL_SYNC": "0",
+        "FEX_SILENTLOG": "1",
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs,MainThread",
+        "MALI_COMPAT_BUDGET_MB": "2048",
+        "MALI_COMPAT_WLS_CLAMP": "e0ff8b4d,46aad60b,653351e8,ae9a9376,92ae90c3,25785cbd",
+        "MALI_DEBUG_CONFIG": "/usr/share/droiddeck-mali/mali-debug-wd2.config"
+      },
+      "prefix": [
+        "wpad-off"
+      ],
+      "evidence": "measured: plan wd2-fexpatch-0808 \u00a7 K (the 12-key $E2_S set minus debug keys; pid->first frame 2:58->1:18, launch->menu 6:04->3:31) and B9-1 (WPAD user.reg block: the menu-freeze zombie came back when it was dropped), docs/games/watch_dogs_2.md; release-1-readiness.md \u00a7 2.5. The pc_0 graphics profile used in the 11-05 runs is a game setting, not an env, so it is not in this manifest.",
+      "pending": [
+        {
+          "env": {
+            "FEX_DISKCACHE": "0"
+          },
+          "why": "candidate fix for the Connect loader-lock stalls (watch_dogs_2.md \u00a7 (4), plan request wd2-diskcache-2130); not run yet"
+        },
+        {
+          "env": {
+            "DXVK_CONFIG": "dxgi.maxDeviceMemory = 2048"
+          },
+          "why": "memory lever (watch_dogs_2.md \u00a7 memory 1105 lever 1); wd2-mem-2000 L1 died before a measurement"
+        }
+      ]
+    },
+    "epic:Jasper": {
+      "title": "Watch Dogs",
+      "env": {
+        "PROTON_NO_NTSYNC": "1",
+        "BL_SYNC": "0",
+        "FEX_SILENTLOG": "1",
+        "MALI_COMPAT_WLS_CLAMP": "all",
+        "MALI_WSI_ASYNC_PRESENT": "1"
+      },
+      "evidence": "phone env (EA entry 3529167647) minus debug keys: WLS_CLAMP=all needed to reach gameplay (A3), MALI_WSI_ASYNC_PRESENT=1 (user: much better); Ubisoft sync keys as WD2; docs/games/watch_dogs.md, release-1-readiness.md \u00a7 App (defaults port).",
+      "pending": [
+        {
+          "env": {
+            "FEX_DISKCACHE": "0"
+          },
+          "why": "same Connect as WD2; only if wd2-diskcache-2130 confirms"
+        }
+      ]
+    },
+    "epic:Calluna": {
+      "title": "Control",
+      "env": {
+        "MALI_WSI_ASYNC_PRESENT": "1",
+        "VKD3D_CONFIG": "nodxr",
+        "MALI_COMPAT_SPV_FIX": "1",
+        "VKD3D_SHADER_OVERRIDE": "Z:/usr/share/droiddeck-mali/vkd3d-override/control",
+        "VKD3D_SHADER_CACHE_PATH": "0",
+        "FEX_DISKCACHE": "0",
+        "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
+        "PROTON_NO_ESYNC": "1",
+        "PROTON_NO_FSYNC": "1",
+        "PROTON_NO_NTSYNC": "1",
+        "WINEESYNC": "0",
+        "WINEFSYNC": "0"
+      },
+      "note": "tested on the game's Low preset (renderer.ini); the app does not change game settings",
+      "evidence": "measured: async present kept at a matched clock (control.md \u00a7 (2), both windows thermal 1-2); the 11-01 recipe (nodxr, SPV_FIX + the shipped stub bf125ef61cc75d97.spv md5 52319b3d, NO_SUSPEND_RESUME, sync off, FEX_DISKCACHE=0); tested on the game's Low preset (bridge/build/control-low/renderer-low.ini). The shadow-flicker fix (MALI_COMPAT_FB_MASK=0x0d6, control-flicker-1106: CLEAN vs norm290 59.1) needs no key here: compat layer 56b8403720430c05b3d4402a21f8dc16 and later have it built in (MALI_COMPAT_PASS_ORDER, default on); phone proof = plan passorder-1106.",
+      "pending": [
+        {
+          "env": {
+            "FEX_VECTORTSOENABLED": "1",
+            "FEX_MEMCPYSETTSOENABLED": "1",
+            "FEX_HALFBARRIERTSOENABLED": "1"
+          },
+          "why": "strict TSO: control-0505 = HOLD (0 freezes over 534 + 542 s armed soaks, both ended at a route failure); not decided"
+        }
+      ]
+    },
+    "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+        "VKD3D_FEATURE_LEVEL": "12_1",
+        "MALI_COMPAT_BUDGET_MB": "2048",
+        "DXVK_CONFIG": "dxgi.maxDeviceMemory = 2048"
+      },
+      "note": "feature level 12_1 (12_2 advertises ray tracing pipelines the driver does not have), 2 GB GPU budget",
+      "evidence": "measured: eldenring-default-2041 (11-04 22:06-22:22, environ proven): title, continue, 3 min autoplay rc 0 with FL 12_1 + BUDGET 2048 + DXVK 2048; elden_ring.md l.34 (12_2 advertises DXR pipelines Mali lacks) and l.122 (2048 recommended).",
+      "pending": [
+        {
+          "env": {
+            "MALI_WSI_ASYNC_PRESENT": "1",
+            "DXVK_CONFIG": "dxgi.syncInterval = 0"
+          },
+          "why": "on the phone's ER entry since the 11-05 11:38 user/Gemini run (elden_ring.md l.164), never measured as a default"
+        }
+      ]
+    },
+    "steam:292030": {
+      "title": "The Witcher 3",
+      "env": {
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs,MainThread",
+        "MALI_COMPAT_NOATT_AREA": "4096x4096",
+        "MALI_COMPAT_XFB_VS": "1",
+        "DXVK_CONFIG": "d3d11.maxTessFactor = 1; d3d11.samplerAnisotropy = 1; d3d11.invariantPosition = True; d3d11.relaxedBarriers = True; dxvk.numCompilerThreads = 4",
+        "VKD3D_CONFIG": "nodxr",
+        "FEX_EXTENDEDVOLATILEMETADATA": "witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,1e447ec,1e447ef,1e447ff,1e44814,1e44831,1e44852,1e44871,1e44878"
+      },
+      "evidence": "DX11 keys: the 11-01 pack + threads dxvk-cs,MainThread + its DXVK_CONFIG (defaults.md \u00a7 2, witcher3.md). VKD3D_CONFIG=nodxr (DX12 build only; vkd3d ignores it under DX11): on the phone's 292030 entry in every DX12 run since the 11-05 12:46 switch (witcher3.md l.383; w3-uncap, w3-towncpu, witcher-fbnarrow), not A/B-tested alone. FEX_EXTENDEDVOLATILEMETADATA (the town loop ranges of witcher3.exe, so FEX keeps TSO-off code there): witcher-tsofix-1106 L2 (11-06 11:45-12:00), RenderThread 88.3 -> 58.0 Mcyc/frame (-34 %), STAND 33.1 fps uncapped, 0 major flashes; witcher3.md l.768-777. Env only, works with the shipped FEX DLL a2448b03. The DX12 terrain-flash fix (MALI_COMPAT_FB_MASK=0x0d6, pending below) needs no per-game key with compat layer 56b8403720430c05b3d4402a21f8dc16 and later have it built in (MALI_COMPAT_PASS_ORDER, default on; off = MALI_COMPAT_PASS_ORDER=0); phone proof = plan passorder-1106 (witcher3.md \u00a7 pass-order 1106).",
+      "pending": [
+        {
+          "env": {
+            "MALI_COMPAT_FB_MASK": "0x0d6"
+          },
+          "requires": "compat layer md5 3f7cf69cb5dc47af204835750cf55486 (de6e975d ignores the key). Superseded: compat 56b8403720430c05b3d4402a21f8dc16 and later apply the same mask by default (MALI_COMPAT_PASS_ORDER built-in, off = MALI_COMPAT_PASS_ORDER=0), so with that layer no key is needed",
+          "why": "flash workaround: witcher-fbnarrow 11-05, 0 major flashes in 600 s (P 0.012), cost +3.4 GPU-busy points / -0.5 % fps at the 30 cap (witcher3.md \u00a7 3 fbnarrow result). Covered by the built-in once 56b84037 ships (phone proof: plan passorder-1106); then drop this entry (and test_mali_defaults.py's check of it)"
+        },
+        {
+          "env": {
+            "DXVK_MALI_LAZY_STORAGE": "1"
+          },
+          "requires": "our DXVK pair e183e685/04436e4a in bin/x64 (not shipped)",
+          "why": "-1.0 ms GPU/frame, LAZY KEPT in w3-30 (witcher3.md l.347); DX11 only"
+        }
+      ]
+    },
+    "steam:1151640": {
+      "title": "Horizon Zero Dawn",
+      "env": {
+        "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
+        "MALI_COMPAT_PIPELINE_CACHE": "2",
+        "MALI_COMPAT_FORCE_COHERENT": "1"
+      },
+      "evidence": "phone env (1151640) = defaults.md \u00a7 2 minus debug keys; horizon_zero_dawn.md (pipeline cache 2, FORCE_COHERENT, NO_SUSPEND_RESUME)."
+    },
+    "steam:203160": {
+      "title": "Tomb Raider (2013)",
+      "env": {
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs",
+        "MALI_COMPAT_NOATT_AREA": "4096x4096",
+        "MALI_COMPAT_XFB_VS": "1"
+      },
+      "evidence": "docs/release/defaults.md \u00a7 2 (the 11-01 table); tomb_raider_2013.md (tr-sab-1240 60.5 fps on the default set)."
+    },
+    "steam:22330": {
+      "title": "Oblivion",
+      "env": {
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs",
+        "MALI_COMPAT_NOATT_AREA": "4096x4096",
+        "MALI_COMPAT_XFB_VS": "1"
+      },
+      "evidence": "docs/release/defaults.md \u00a7 2 (the 11-01 table); oblivion.md."
+    },
+    "epic:ed93b18355a84230938c705121c63661": {
+      "title": "The Long Dark",
+      "env": {
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs",
+        "MALI_COMPAT_NOATT_AREA": "4096x4096",
+        "MALI_COMPAT_XFB_VS": "1",
+        "DXVK_CONFIG": "dxgi.deferSurfaceCreation = True"
+      },
+      "evidence": "P1 (pack + dxgi.deferSurfaceCreation), the_long_dark.md + release-1-readiness.md \u00a7 2.5; the game's Ultra settings are never changed (user rule 11-05).",
+      "pending": [
+        {
+          "env": {
+            "MALI_WSI_ASYNC_PRESENT": "1",
+            "MALI_COMPAT_RT_COMPRESS": "1",
+            "DXVK_CONFIG": "dxgi.syncInterval = 0; d3d11.relaxedBarriers = True"
+          },
+          "why": "PACK at Ultra: tld-ultra-0950 U1 30.07 fps vs 30.0 (+0.2 %, no gain); the frame-limit-off part needs app code (the_long_dark.md \u00a7 (3))"
+        }
+      ]
+    },
+    "epic:Lyrebird": {
+      "title": "Hob",
+      "env": {
+        "MALI_COMPAT_ASYNC_PSO": "50",
+        "MALI_COMPAT_PIPELINE_CACHE": "1",
+        "MALI_COMPAT_PIPELINE_CACHE_THREADS": "dxvk-cs",
+        "MALI_COMPAT_NOATT_AREA": "4096x4096",
+        "MALI_COMPAT_XFB_VS": "1",
+        "FEX_STRICTINPROCESSSPLITLOCKS": "1",
+        "WINE_CPU_TOPOLOGY": "4:4,5,6,7",
+        "WINEDLLOVERRIDES": "d3dcompiler_43=n,b"
+      },
+      "evidence": "phone env (3244186073): pack + FEX_STRICTINPROCESSSPLITLOCKS=1 (HB11 loads past the split-lock hang), WINE_CPU_TOPOLOGY=4:4,5,6,7 (B3-2), d3dcompiler_43=n,b; hob.md."
+    },
+    "epic:Duckbill": {
+      "title": "Yooka-Laylee and the Impossible Lair",
+      "env": {
+        "MALI_COMPAT_XFB_VS": "1"
+      },
+      "evidence": "verified: XFB_VS only (Y8, 80-90 fps), defaults.md \u00a7 2; the pack never ran on Yooka, so it is left out."
+    }
+  }
+}

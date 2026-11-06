@@ -72,6 +72,12 @@ object SessionFiles {
         WinComponents.publish(context)
         runCatching { com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).ensureBundledBridge() }
             .onFailure { Log.w(TAG, "bundled Mali system driver not installed", it) }
+        if (com.droiddeck.launcher.core.DeviceSupport.mali()) {
+            // PanVK: a switch a crash interrupted is finished, and a phone without any PanVK gets the bundled one
+            runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureBundled(context) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
+            // env defaults: the installed manifest to the guest while it is newer than the bundled one
+            MaliEnvDefaults.publish(context)
+        }
         val files = arrayOf(
             "usr/local/bin/droiddeck-game-env" to "usr/local/bin/droiddeck-game-env",
             "usr/local/bin/droiddeck-wincomponents" to "usr/local/bin/droiddeck-wincomponents",
@@ -216,7 +222,8 @@ object SessionFiles {
         else listOf("usr/share/droiddeck-mali/VkLayer_FROG_gamescope_wsi.aarch64.json" to
             "usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.aarch64.json") +
             // Files the per-game Mali defaults point at (droiddeck-mali-defaults).
-            listOf("usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv", "usr/share/droiddeck-mali/mali-debug-wd2.config")
+            listOf("usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv", "usr/share/droiddeck-mali/mali-debug-wd2.config",
+                "usr/share/droiddeck-mali/env-defaults.json")
                 .map { it to it }
         // The patched FEX arm64ec DLL with its MIT notice; droiddeck-mali-defaults puts it into ARM64 Protons at game start.
         val fexArm64ec = listOf("libarm64ecfex.dll", "LICENSE", "NOTICE").map {

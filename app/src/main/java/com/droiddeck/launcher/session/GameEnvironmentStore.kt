@@ -138,6 +138,9 @@ object GameEnvironmentStore {
             )
         }
         if (gameDxvk.length() > 0) json.put(DXVK_CONFIG_GAMES, gameDxvk)
+        // The names the user set in the shared settings (the shared block above also holds the app's built-in defaults):
+        // droiddeck-mali-defaults leaves them out of a game's env defaults, so the user's value always wins.
+        if (config.shared.isNotEmpty()) json.put(USER_SHARED, org.json.JSONArray(config.shared.keys.sorted()))
         json.put(
             GAME_DEBUG_LOGS,
             gameDebugLogsOverride ?: (SessionPrefs.logsEnabled(context) &&
@@ -153,6 +156,7 @@ object GameEnvironmentStore {
     )
 
     private const val PROTON_LOG = "PROTON_LOG"
+    const val USER_SHARED = "userShared"
 
     private fun write(file: File, text: String) {
         check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())
