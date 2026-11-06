@@ -339,18 +339,39 @@ class EnvDefaultsManifestTest(unittest.TestCase):
         self.assertRegex(version, r"^2026\.11\.06\.[0-9]+$")
         self.assertEqual(set(recipes), set(MALI["RECIPES"]))
         for key, built_in in MALI["RECIPES"].items():
-            extra = {"VKD3D_CONFIG": "nodxr", "FEX_EXTENDEDVOLATILEMETADATA": "witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,"
-                     "1e447ec,1e447ef,1e447ff,1e44814,1e44831,1e44852,1e44871,1e44878"} if key == "steam:292030" else {}
-            self.assertEqual(recipes[key].env, dict(built_in.env, **extra), key)
+            self.assertEqual(recipes[key].env, built_in.env, key)
             self.assertEqual(recipes[key].wpad, built_in.wpad, key)
+            self.assertEqual(recipes[key].note, built_in.note, key)
         raw = json.loads(MANIFEST.read_text())
+        self.assertEqual(raw.get("status"), "release")
         for key, game in raw["games"].items():
             self.assertTrue(game["evidence"], key)
             for pending in game.get("pending", []):
                 self.assertTrue(pending["why"], key)
-        witcher = raw["games"]["steam:292030"]["pending"]
-        self.assertIn("3f7cf69cb5dc47af204835750cf55486", witcher[0]["requires"])
-        self.assertEqual(witcher[0]["env"], {"MALI_COMPAT_FB_MASK": "0x0d6"})
+        # the flash/flicker winner is in force (the built-in PASS_ORDER was reverted), not pending
+        for key in ("steam:292030", "epic:Calluna"):
+            self.assertEqual(recipes[key].env["MALI_COMPAT_FB_MASK"], "0x0d6", key)
+            self.assertFalse(any("MALI_COMPAT_FB_MASK" in p["env"] for p in raw["games"][key].get("pending", [])), key)
+
+    def test_no_dxr_forcing_and_the_vendor_spoof_only_for_doom_eternal(self):
+        """1106: 12_2 claimed DXR 1.1 / mesh shaders the driver lacks; MALI_COMPAT_VENDOR_ID=10de makes the GPU an
+        "RTX 2080". Neither may reach a game that does not need it."""
+        _, recipes = MALI["load_manifest"](MANIFEST)
+        raw = json.loads(MANIFEST.read_text())
+        for source in (recipes, MALI["RECIPES"]):
+            for key, recipe in source.items():
+                with self.subTest(key=key):
+                    self.assertNotEqual(recipe.env.get("VKD3D_FEATURE_LEVEL"), "12_2")
+                    self.assertNotIn("dxr", recipe.env.get("VKD3D_CONFIG", "").replace("nodxr", ""))
+                    self.assertFalse([n for n in recipe.env if "NVAPI" in n or n.startswith("MALI_COMPAT_DEVICE_")])
+                    self.assertNotIn("nvapi", recipe.env.get("WINEDLLOVERRIDES", "").lower())
+                    if key != "steam:782330":
+                        self.assertNotIn("MALI_COMPAT_VENDOR_ID", recipe.env)
+            self.assertEqual(source["steam:782330"].env, {"MALI_COMPAT_VENDOR_ID": "10de"})
+        for game in raw["games"].values():
+            for pending in game.get("pending", []):
+                self.assertNotIn("MALI_COMPAT_VENDOR_ID", pending["env"])
+                self.assertNotEqual(pending["env"].get("VKD3D_FEATURE_LEVEL"), "12_2")
 
     def test_shared_cases_refused_and_accepted(self):
         for case in CASES["invalid"]:
@@ -425,14 +446,65 @@ class EnvDefaultsManifestTest(unittest.TestCase):
                                               dict(BRIDGE, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata/292030")),
                                               None, "292030", home=str(self.home), bundled=str(MANIFEST))
         self.assertEqual(found.title, "The Witcher 3")
-        self.assertNotIn("MALI_COMPAT_FB_MASK", values)
+        self.assertEqual(values["MALI_COMPAT_FB_MASK"], "0x0d6")
         self.assertNotIn("DXVK_MALI_LAZY_STORAGE", values)
         self.assertEqual(values["VKD3D_CONFIG"], "nodxr")
         self.assertTrue(values["FEX_EXTENDEDVOLATILEMETADATA"].startswith("witcher3.exe;1e447c0-1e4487e;"))
 
 
 def GameEnvironment_defaults():
-    return {"VKD3D_SHADER_MODEL": "6_9"}
+    """GameEnvironment.defaults' D3D12 part (GameEnvironment.kt), as the app publishes it in the shared block."""
+    return {"MESA_SHADER_CACHE_DISABLE": "false", "DROIDDECK_ANTICHEAT_OFFLINE": "1", "VKD3D_FEATURE_LEVEL": "12_1",
+            "VKD3D_SHADER_MODEL": "6_6"}
+
+
+class EffectiveEnvTest(unittest.TestCase):
+    """The whole merge for a launch on the bridge: session env < bridge (game_driver) < shared (the app's defaults and
+    the user's shared keys) < engine fixes + Mali defaults (minus the user's keys) < the game's own entries."""
+
+    def launch(self, compat, exe, config):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            prefix = home / "compatdata" / compat
+            (prefix / "pfx").mkdir(parents=True)
+            (prefix / "pfx/user.reg").write_text("WINE REGISTRY Version 2\n")
+            icd = home / "mali_bridge_icd.json"
+            icd.write_text("{}")
+            path = home / ".config/droiddeck/game-environment.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(config))
+            probe = home / "proton"
+            probe.write_text("#!" + sys.executable + "\nimport json, os\nprint(json.dumps(dict(os.environ)))\n")
+            probe.chmod(0o755)
+            game = home / exe
+            game.parent.mkdir(parents=True, exist_ok=True)
+            game.write_bytes(b"")
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("WINE", "PROTON", "DROIDDECK", "BL_", "STEAM", "MALI", "FEX", "VK", "DXVK"))}
+            env.update(HOME=tmp, STEAM_COMPAT_DATA_PATH=str(prefix), BL_VK_GAME_DRIVER=str(icd))
+            result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun", str(game)],
+                                    env=env, text=True, capture_output=True, check=True)
+            return json.loads(result.stdout)
+
+    def test_a_normal_dx12_game_gets_12_1_no_dxr_no_spoof_and_keeps_the_bridge_flags(self):
+        game = self.launch("2050650", "Game/game.exe", {"version": 1, "shared": GameEnvironment_defaults(), "games": {}})
+        self.assertEqual(game["VKD3D_FEATURE_LEVEL"], "12_1")
+        self.assertEqual(game["VKD3D_SHADER_MODEL"], "6_6")
+        self.assertEqual(game["VKD3D_CONFIG"], "no_upload_hvv")
+        self.assertNotIn("MALI_COMPAT_VENDOR_ID", game)
+        self.assertFalse([n for n in game if "NVAPI" in n])
+
+    def test_doom_eternal_alone_gets_the_nvidia_vendor_id_and_the_user_can_remove_it(self):
+        config = {"version": 1, "shared": GameEnvironment_defaults(), "games": {}}
+        self.assertEqual(self.launch("782330", "DOOMEternal/idTechLauncher.exe", config)["MALI_COMPAT_VENDOR_ID"], "10de")
+        config["games"] = {"782330": {"MALI_COMPAT_VENDOR_ID": None}}
+        self.assertNotIn("MALI_COMPAT_VENDOR_ID", self.launch("782330", "DOOMEternal/idTechLauncher.exe", config))
+
+    def test_the_users_shared_feature_level_wins(self):
+        config = {"version": 1, "userShared": ["VKD3D_FEATURE_LEVEL"],
+                  "shared": dict(GameEnvironment_defaults(), VKD3D_FEATURE_LEVEL="12_2"), "games": {}}
+        self.assertEqual(self.launch("1245620", "ELDEN RING/Game/eldenring.exe", config)["VKD3D_FEATURE_LEVEL"], "12_2")
+        config = dict(config, userShared=[])
+        self.assertEqual(self.launch("1245620", "ELDEN RING/Game/eldenring.exe", config)["VKD3D_FEATURE_LEVEL"], "12_1")
 
 
 if __name__ == "__main__":

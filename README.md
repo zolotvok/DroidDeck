@@ -71,9 +71,14 @@ On a Mali device, the Linux runtime (Steam, Proton, games) uses PanVK-kbase, an 
 - Settings: **Performance › Mali system driver** (descriptor buffers, pipeline libraries, Wine logs, FPS log, GPU timing log).
 - Bridge games so far:
   - Oblivion (about 90 FPS);
-  - The Witcher 3 classic (DX11) and current (DX12, about 19 FPS in the open world);
+  - The Witcher 3 classic (DX11) and current (DX12): about 33 FPS uncapped standing in the White Orchard village at night (2026-11-06, thermal 1-3; needs a compat layer and FEX build that are not released yet, about 19 FPS in the open world before that);
   - Tomb Raider (2013);
-  - Horizon Zero Dawn.
+  - Horizon Zero Dawn;
+  - Control (Low preset, about 28 FPS in the security booth at thermal 2-3, 2026-11-06; the shadow-flicker fix `MALI_COMPAT_FB_MASK=0x0d6` needs a compat layer that is not released yet);
+  - Resident Evil Village (about 30 FPS at the game's 30-FPS cap, 2026-11-06; shadow flicker and parts of the scene popping in and out are open);
+  - Elden Ring (about 11-14 FPS, bound by the game's main thread, 2026-11-05/06).
+
+  The full table with dates, settings and thermal status: [Blobferry's status](https://github.com/zolotvok/blobferry#status). DOOM Eternal starts but does not get past its loading screen yet.
 
   Release notes: [docs/releases/0.4.0-mali.1.md](docs/releases/0.4.0-mali.1.md).
 

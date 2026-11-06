@@ -30,6 +30,9 @@ DXVK_PACK = {
     "MALI_COMPAT_NOATT_AREA": "4096x4096",
     "MALI_COMPAT_XFB_VS": "1",
 }
+# The pass-boundary barrier classes that stop the Witcher 3 DX12 terrain flashes and the Control shadow flicker
+# (witcher-fbnarrow 11-05, control-flicker-1106); compat layers without MALI_COMPAT_FB_MASK ignore it.
+FB_MASK = "0x0d6"
 # Ubisoft Connect stalled at the game start with the user-space ntsync (17 % -> 57 %); esync again, Connect quiet.
 UBISOFT_SYNC = {"PROTON_NO_NTSYNC": "1", "BL_SYNC": "0", "FEX_SILENTLOG": "1"}
 
@@ -71,6 +74,7 @@ RECIPES = {
         "PROTON_NO_NTSYNC": "1",
         "WINEESYNC": "0",
         "WINEFSYNC": "0",
+        "MALI_COMPAT_FB_MASK": FB_MASK,
     }, note="tested on the game's Low preset (renderer.ini); the app does not change game settings"),
     "steam:1245620": Recipe("Elden Ring", {
         "VKD3D_FEATURE_LEVEL": "12_1",
@@ -82,6 +86,10 @@ RECIPES = {
         MALI_COMPAT_PIPELINE_CACHE_THREADS="dxvk-cs,MainThread",
         DXVK_CONFIG="d3d11.maxTessFactor = 1; d3d11.samplerAnisotropy = 1; d3d11.invariantPosition = True; "
                     "d3d11.relaxedBarriers = True; dxvk.numCompilerThreads = 4",
+        VKD3D_CONFIG="nodxr",
+        FEX_EXTENDEDVOLATILEMETADATA="witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,1e447ec,1e447ef,1e447ff,1e44814,1e44831,"
+                                     "1e44852,1e44871,1e44878",
+        MALI_COMPAT_FB_MASK=FB_MASK,
     )),
     "steam:1151640": Recipe("Horizon Zero Dawn", {
         "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
@@ -99,6 +107,10 @@ RECIPES = {
         WINEDLLOVERRIDES="d3dcompiler_43=n,b",
     )),
     "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1"}),
+    # The only GPU vendor spoof: DOOM Eternal's launcher accepts NVIDIA/AMD/Intel only (doom_eternal.md). Never global.
+    "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de"},
+                           note="reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts "
+                                "NVIDIA/AMD/Intel GPUs only"),
 }
 
 APPENDED = ("DXVK_CONFIG", "WINEDLLOVERRIDES")

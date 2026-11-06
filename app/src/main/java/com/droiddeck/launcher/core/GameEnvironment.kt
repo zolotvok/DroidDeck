@@ -34,11 +34,16 @@ object GameEnvironment {
     fun validValue(value: String) = '\u0000' !in value && value.length <= 8192
     fun validScope(scope: String) = scope.isEmpty() || (Regex("[1-9][0-9]*").matches(scope) && scope.toLongOrNull()?.let { it in 1..4294967295L } == true)
 
+    // D3D12 defaults for every game: feature level 12_1 and shader model 6_6 (the Mali driver's own SM). 12_2 made
+    // vkd3d-proton claim DXR 1.1, mesh shaders and sampler feedback, which the driver does not have (Elden Ring
+    // crashed on it). 12_1 raises no ray tracing tier, and without VK_KHR_ray_tracing_pipeline vkd3d-proton reports
+    // none, so no VKD3D_CONFIG here: a shared VKD3D_CONFIG would replace the bridge's no_upload_hvv
+    // (droiddeck-game-env). No GPU vendor spoof and no nvapi either; those stay per game.
+    // [app, Claude Opus 5.5] 2026-11-06
     fun defaults(preset: String, forceSsbs: Boolean = false): Map<String, String?> = linkedMapOf<String, String?>(
         "MESA_SHADER_CACHE_DISABLE" to "false",
         "DROIDDECK_ANTICHEAT_OFFLINE" to "1",
         "VKD3D_FEATURE_LEVEL" to "12_1",
-        "VKD3D_CONFIG" to "nodxr",
         "VKD3D_SHADER_MODEL" to "6_6",
         "DOTNET_GCRegionRange" to "800000000",
         "DOTNET_EnableWriteXorExecute" to "0",

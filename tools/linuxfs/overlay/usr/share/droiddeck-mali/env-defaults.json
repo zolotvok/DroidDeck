@@ -1,8 +1,8 @@
 {
   "schema": "droiddeck-mali-env-defaults/1",
-  "version": "2026.11.06.3",
+  "version": "2026.11.06.4",
   "date": "2026-11-06",
-  "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env applies; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off.",
+  "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env applies; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off. Every game's global D3D12 defaults come from the app (GameEnvironment.defaults: VKD3D_FEATURE_LEVEL=12_1, VKD3D_SHADER_MODEL=6_6, no VKD3D_CONFIG, no GPU vendor spoof, no nvapi); an entry here only adds what that game needs to start or a measured winner (docs/agents/env-defaults-1106.md).",
   "games": {
     "epic:Angelonia": {
       "title": "Watch Dogs 2",
@@ -69,10 +69,11 @@
         "PROTON_NO_FSYNC": "1",
         "PROTON_NO_NTSYNC": "1",
         "WINEESYNC": "0",
-        "WINEFSYNC": "0"
+        "WINEFSYNC": "0",
+        "MALI_COMPAT_FB_MASK": "0x0d6"
       },
       "note": "tested on the game's Low preset (renderer.ini); the app does not change game settings",
-      "evidence": "measured: async present kept at a matched clock (control.md \u00a7 (2), both windows thermal 1-2); the 11-01 recipe (nodxr, SPV_FIX + the shipped stub bf125ef61cc75d97.spv md5 52319b3d, NO_SUSPEND_RESUME, sync off, FEX_DISKCACHE=0); tested on the game's Low preset (bridge/build/control-low/renderer-low.ini). The shadow-flicker fix (MALI_COMPAT_FB_MASK=0x0d6, control-flicker-1106: CLEAN vs norm290 59.1) needs no key here: compat layer 56b8403720430c05b3d4402a21f8dc16 and later have it built in (MALI_COMPAT_PASS_ORDER, default on); phone proof = plan passorder-1106.",
+      "evidence": "measured: async present kept at a matched clock (control.md \u00a7 (2), both windows thermal 1-2); the 11-01 recipe (nodxr, SPV_FIX + the shipped stub bf125ef61cc75d97.spv md5 52319b3d, NO_SUSPEND_RESUME, sync off, FEX_DISKCACHE=0); tested on the game's Low preset (bridge/build/control-low/renderer-low.ini). MALI_COMPAT_FB_MASK=0x0d6 (the shadow-flicker fix): control-flicker-1106 L1 arm B CLEAN (0 flips, norm290 0.0) vs fbm 0x000 FLICKER (norm290 59.1), kept on the phone's Control entry (HANDOFF 11-06 12:40/12:42). Needs compat layer 3f7cf69cb5dc47af204835750cf55486 or later with FB_MASK; layers without it ignore the key. The built-in MALI_COMPAT_PASS_ORDER (56b84037) was reverted on bridge main (c1de5b2) after passorder-1106 L1, so the key stays.",
       "pending": [
         {
           "env": {
@@ -113,17 +114,11 @@
         "MALI_COMPAT_XFB_VS": "1",
         "DXVK_CONFIG": "d3d11.maxTessFactor = 1; d3d11.samplerAnisotropy = 1; d3d11.invariantPosition = True; d3d11.relaxedBarriers = True; dxvk.numCompilerThreads = 4",
         "VKD3D_CONFIG": "nodxr",
-        "FEX_EXTENDEDVOLATILEMETADATA": "witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,1e447ec,1e447ef,1e447ff,1e44814,1e44831,1e44852,1e44871,1e44878"
+        "FEX_EXTENDEDVOLATILEMETADATA": "witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,1e447ec,1e447ef,1e447ff,1e44814,1e44831,1e44852,1e44871,1e44878",
+        "MALI_COMPAT_FB_MASK": "0x0d6"
       },
-      "evidence": "DX11 keys: the 11-01 pack + threads dxvk-cs,MainThread + its DXVK_CONFIG (defaults.md \u00a7 2, witcher3.md). VKD3D_CONFIG=nodxr (DX12 build only; vkd3d ignores it under DX11): on the phone's 292030 entry in every DX12 run since the 11-05 12:46 switch (witcher3.md l.383; w3-uncap, w3-towncpu, witcher-fbnarrow), not A/B-tested alone. FEX_EXTENDEDVOLATILEMETADATA (the town loop ranges of witcher3.exe, so FEX keeps TSO-off code there): witcher-tsofix-1106 L2 (11-06 11:45-12:00), RenderThread 88.3 -> 58.0 Mcyc/frame (-34 %), STAND 33.1 fps uncapped, 0 major flashes; witcher3.md l.768-777. Env only, works with the shipped FEX DLL a2448b03. The DX12 terrain-flash fix (MALI_COMPAT_FB_MASK=0x0d6, pending below) needs no per-game key with compat layer 56b8403720430c05b3d4402a21f8dc16 and later have it built in (MALI_COMPAT_PASS_ORDER, default on; off = MALI_COMPAT_PASS_ORDER=0); phone proof = plan passorder-1106 (witcher3.md \u00a7 pass-order 1106).",
+      "evidence": "DX11 keys: the 11-01 pack + threads dxvk-cs,MainThread + its DXVK_CONFIG (defaults.md \u00a7 2, witcher3.md). VKD3D_CONFIG=nodxr (DX12 build only; vkd3d ignores it under DX11): on the phone's 292030 entry in every DX12 run since the 11-05 12:46 switch (witcher3.md l.383; w3-uncap, w3-towncpu, witcher-fbnarrow), not A/B-tested alone. FEX_EXTENDEDVOLATILEMETADATA (the town loop ranges of witcher3.exe, so FEX keeps TSO-off code there): witcher-tsofix-1106 L2 (11-06 11:45-12:00), RenderThread 88.3 -> 58.0 Mcyc/frame (-34 %), STAND 33.1 fps uncapped, 0 major flashes; witcher3.md l.768-777. Env only, works with the shipped FEX DLL a2448b03. MALI_COMPAT_FB_MASK=0x0d6 (the DX12 terrain-flash fix): witcher-fbnarrow 11-05, 0 major flashes in 600 s (P 0.012), cost -0.5 % fps / +3.4 GPU-busy points at the 30 cap; kept on the phone's 292030 entry (winner rule, HANDOFF 11-06 11:32). Needs compat layer 3f7cf69cb5dc47af204835750cf55486 or later with FB_MASK (de6e975d ignores it). Open: passorder-1106 L1 saw 4 major flashes in the first daylight clip with the same 0x0d6 mask built in (HANDOFF 11-06 13:50); the built-in was reverted (bridge c1de5b2), so the key stays until the daylight case is understood.",
       "pending": [
-        {
-          "env": {
-            "MALI_COMPAT_FB_MASK": "0x0d6"
-          },
-          "requires": "compat layer md5 3f7cf69cb5dc47af204835750cf55486 (de6e975d ignores the key). Superseded: compat 56b8403720430c05b3d4402a21f8dc16 and later apply the same mask by default (MALI_COMPAT_PASS_ORDER built-in, off = MALI_COMPAT_PASS_ORDER=0), so with that layer no key is needed",
-          "why": "flash workaround: witcher-fbnarrow 11-05, 0 major flashes in 600 s (P 0.012), cost +3.4 GPU-busy points / -0.5 % fps at the 30 cap (witcher3.md \u00a7 3 fbnarrow result). Covered by the built-in once 56b84037 ships (phone proof: plan passorder-1106); then drop this entry (and test_mali_defaults.py's check of it)"
-        },
         {
           "env": {
             "DXVK_MALI_LAZY_STORAGE": "1"
@@ -206,6 +201,15 @@
         "MALI_COMPAT_XFB_VS": "1"
       },
       "evidence": "verified: XFB_VS only (Y8, 80-90 fps), defaults.md \u00a7 2; the pack never ran on Yooka, so it is left out."
+    },
+    "steam:782330": {
+      "title": "DOOM Eternal",
+      "env": {
+        "MALI_COMPAT_VENDOR_ID": "10de"
+      },
+      "note": "reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts NVIDIA/AMD/Intel GPUs only",
+      "evidence": "needed to start: idTechLauncher.exe stops with RGL_VALIDATION_ERROR_VENDOR_NOT_RECOGNIZED: 4 on Arm's 0x13b5; with MALI_COMPAT_VENDOR_ID=10de ipcAddonLog.txt logs ValidateDriver 'Nvidia' and DOOMEternalx64vk.exe starts (doom_eternal.md l.8, \u00a7 1 l.35-47); on the phone's 782330 entry in every Doom run since 11-06 16:22 (adb-device-changes.txt). The RTX 2080 device id/name is the compat layer's default for 10de when MALI_COMPAT_DEVICE_ID/NAME are unset (mali_compat_layer.c apply_properties_overrides). The game does not reach gameplay yet (dv1106 D1: exits on the loading screen); MALI_COMPAT_BUDGET_MB, FEX_STRICTINPROCESSSPLITLOCKS and MALI_WSI_FPS from the phone entry are not measured needs and are left out."
     }
-  }
+  },
+  "status": "release"
 }

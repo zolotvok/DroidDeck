@@ -9,8 +9,11 @@ class GameEnvironmentTest {
         assertEquals("false", values["MESA_SHADER_CACHE_DISABLE"])
         assertEquals("1", values["DROIDDECK_ANTICHEAT_OFFLINE"])
         assertEquals("12_1", values["VKD3D_FEATURE_LEVEL"])
-        assertEquals("nodxr", values["VKD3D_CONFIG"])
         assertEquals("6_6", values["VKD3D_SHADER_MODEL"])
+        // no shared VKD3D_CONFIG (it would replace the bridge's no_upload_hvv), no vendor spoof, no nvapi
+        assertFalse(values.containsKey("VKD3D_CONFIG"))
+        assertTrue(values.keys.none { it.startsWith("MALI_COMPAT_") || "NVAPI" in it })
+        assertTrue(GameEnvironment.defaults("COMPATIBILITY", forceSsbs = true).keys.none { it == "VKD3D_CONFIG" || "NVAPI" in it })
     }
 
     @Test fun forceSsbsIsADefaultAGameCanTurnOff() {

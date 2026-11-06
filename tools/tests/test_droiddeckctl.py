@@ -603,8 +603,9 @@ class ComponentCtlTest(FakeAdbTest):
             code = ctl.main(["env-defaults", "check", str(self.MANIFEST)])
         result = json.loads(out.getvalue())
         self.assertEqual(0, code)
-        self.assertEqual(11, result["count"])
+        self.assertEqual(12, result["count"])
         self.assertIn("steam:1245620", result["games"])
+        self.assertIn("steam:782330", result["games"])
 
 
 class ReportCtlTest(FakeAdbTest):

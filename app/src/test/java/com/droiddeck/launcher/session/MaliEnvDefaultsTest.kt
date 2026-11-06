@@ -46,13 +46,22 @@ class MaliEnvDefaultsTest {
 
     @Test fun theShippedManifestIsValid() {
         val m = MaliEnvDefaults.parse(shipped.readBytes())
-        assertEquals(11, m.games.size)
-        assertTrue(m.version.startsWith("2026.11.06."))
+        assertEquals(12, m.games.size)
+        assertEquals("2026.11.06.4", m.version)
+        assertEquals("release", JSONObject(String(shipped.readBytes())).getString("status"))
         assertEquals("12_1", m.games.getValue("steam:1245620").env["VKD3D_FEATURE_LEVEL"])
         assertEquals("2048", m.games.getValue("steam:1245620").env["MALI_COMPAT_BUDGET_MB"])
-        // the Witcher fb mask waits for its layer: a pending entry, not in env
-        assertFalse("MALI_COMPAT_FB_MASK" in m.games.getValue("steam:292030").env)
+        // the flash/flicker winner is in force (the built-in PASS_ORDER was reverted on bridge main)
+        assertEquals("0x0d6", m.games.getValue("steam:292030").env["MALI_COMPAT_FB_MASK"])
+        assertEquals("0x0d6", m.games.getValue("epic:Calluna").env["MALI_COMPAT_FB_MASK"])
         assertTrue(m.games.getValue("steam:292030").pending >= 1)
+        // no DXR forcing anywhere, and the NVIDIA vendor id only for DOOM Eternal (its launcher's whitelist)
+        assertEquals(mapOf("MALI_COMPAT_VENDOR_ID" to "10de"), m.games.getValue("steam:782330").env)
+        for ((key, game) in m.games) {
+            assertFalse(key, game.env["VKD3D_FEATURE_LEVEL"] == "12_2")
+            assertTrue(key, game.env.keys.none { "NVAPI" in it || it.startsWith("MALI_COMPAT_DEVICE_") })
+            if (key != "steam:782330") assertFalse(key, "MALI_COMPAT_VENDOR_ID" in game.env)
+        }
         assertTrue(m.games.keys.none { it.startsWith("steam:") && it.removePrefix("steam:").toLong() >= (1L shl 31) })
     }
 

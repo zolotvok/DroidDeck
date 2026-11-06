@@ -180,7 +180,7 @@ class GameEnvironmentStoreTest {
         val published = GameEnvironmentStore.decode(JSONObject(guest.readText()))
         assertEquals("false", published.shared["MESA_SHADER_CACHE_DISABLE"])
         assertEquals("12_1", published.shared["VKD3D_FEATURE_LEVEL"])
-        assertEquals("nodxr", published.shared["VKD3D_CONFIG"])
+        assertFalse(published.shared.containsKey("VKD3D_CONFIG"))
         assertEquals("6_6", published.shared["VKD3D_SHADER_MODEL"])
         assertEquals(config.games, published.games)
         assertEquals(config.shared["LITERAL"], published.shared["LITERAL"])
