@@ -587,7 +587,7 @@ class ComponentCtlTest(FakeAdbTest):
         self.provider(session="READY")
         code, out = self.run_ctl("env-defaults", "install", str(self.MANIFEST))
         self.assertEqual(0, code, out)
-        self.assertRegex(out["manifest"]["version"], r"^2026\.11\.06\.[0-9]+$")
+        self.assertRegex(out["manifest"]["version"], r"^2026\.11\.07\.[0-9]+$")
         self.assertEqual([], self.calls("stop"))
         self.assertEqual("install", self.calls("envdefaults")[0]["request"]["op"])
         bad = self.dir / "bad.json"
@@ -603,7 +603,7 @@ class ComponentCtlTest(FakeAdbTest):
             code = ctl.main(["env-defaults", "check", str(self.MANIFEST)])
         result = json.loads(out.getvalue())
         self.assertEqual(0, code)
-        self.assertEqual(12, result["count"])
+        self.assertEqual(13, result["count"])
         self.assertIn("steam:1245620", result["games"])
         self.assertIn("steam:782330", result["games"])
 

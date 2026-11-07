@@ -111,6 +111,9 @@ RECIPES = {
     "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de"},
                            note="reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts "
                                 "NVIDIA/AMD/Intel GPUs only"),
+    # Vulkan ray queries: BL_RT_VULKAN=1 makes droiddeck-game-env / droiddeck-fex pad and scale the descriptor pools
+    # (quake2rtx.md WIN, docs/agents/rtx-switch-1107.md). A game's own BL_RT_VULKAN=0 turns it off.
+    "steam:1089130": Recipe("Quake II RTX", {"BL_RT_VULKAN": "1"}),
 }
 
 APPENDED = ("DXVK_CONFIG", "WINEDLLOVERRIDES")

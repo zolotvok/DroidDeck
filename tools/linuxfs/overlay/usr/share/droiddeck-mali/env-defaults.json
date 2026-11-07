@@ -1,7 +1,7 @@
 {
   "schema": "droiddeck-mali-env-defaults/1",
-  "version": "2026.11.06.4",
-  "date": "2026-11-06",
+  "version": "2026.11.07.1",
+  "date": "2026-11-07",
   "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env applies; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off. Every game's global D3D12 defaults come from the app (GameEnvironment.defaults: VKD3D_FEATURE_LEVEL=12_1, VKD3D_SHADER_MODEL=6_6, no VKD3D_CONFIG, no GPU vendor spoof, no nvapi); an entry here only adds what that game needs to start or a measured winner (docs/agents/env-defaults-1106.md).",
   "games": {
     "epic:Angelonia": {
@@ -209,6 +209,13 @@
       },
       "note": "reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts NVIDIA/AMD/Intel GPUs only",
       "evidence": "needed to start: idTechLauncher.exe stops with RGL_VALIDATION_ERROR_VENDOR_NOT_RECOGNIZED: 4 on Arm's 0x13b5; with MALI_COMPAT_VENDOR_ID=10de ipcAddonLog.txt logs ValidateDriver 'Nvidia' and DOOMEternalx64vk.exe starts (doom_eternal.md l.8, \u00a7 1 l.35-47); on the phone's 782330 entry in every Doom run since 11-06 16:22 (adb-device-changes.txt). The RTX 2080 device id/name is the compat layer's default for 10de when MALI_COMPAT_DEVICE_ID/NAME are unset (mali_compat_layer.c apply_properties_overrides). The game does not reach gameplay yet (dv1106 D1: exits on the loading screen); MALI_COMPAT_BUDGET_MB, FEX_STRICTINPROCESSSPLITLOCKS and MALI_WSI_FPS from the phone entry are not measured needs and are left out."
+    },
+    "steam:1089130": {
+      "title": "Quake II RTX",
+      "env": {
+        "BL_RT_VULKAN": "1"
+      },
+      "evidence": "measured: hardware ray queries render the world on the Mali with MALI_COMPAT_DESC_POOL_PAD=4 + MALI_COMPAT_DESC_POOL_SCALE=8 (the blob enforces pool counts); BL_RT_VULKAN=1 makes droiddeck-game-env / droiddeck-fex add both, a user's own keys win. docs/games/quake2rtx.md WIN, docs/agents/rtx-switch-1107.md."
     }
   },
   "status": "release"

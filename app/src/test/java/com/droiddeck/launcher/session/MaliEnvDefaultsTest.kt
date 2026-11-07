@@ -46,8 +46,8 @@ class MaliEnvDefaultsTest {
 
     @Test fun theShippedManifestIsValid() {
         val m = MaliEnvDefaults.parse(shipped.readBytes())
-        assertEquals(12, m.games.size)
-        assertEquals("2026.11.06.4", m.version)
+        assertEquals(13, m.games.size)
+        assertEquals("2026.11.07.1", m.version)
         assertEquals("release", JSONObject(String(shipped.readBytes())).getString("status"))
         assertEquals("12_1", m.games.getValue("steam:1245620").env["VKD3D_FEATURE_LEVEL"])
         assertEquals("2048", m.games.getValue("steam:1245620").env["MALI_COMPAT_BUDGET_MB"])
