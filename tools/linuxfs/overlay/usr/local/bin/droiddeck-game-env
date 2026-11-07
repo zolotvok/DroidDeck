@@ -472,7 +472,7 @@ def game_driver_choice(config, app_id):
     return choice if choice in ("bridge", "session") else None
 
 
-def game_driver(command, env, choice=None):
+def game_driver(command, env, choice=None, native=False):
     """BL_VK_GAME_DRIVER (set by the session when the Mali system driver, the bridge, is chosen): the game
     process draws with that Vulkan ICD while Steam, gamescope and the desktop stay on the session's driver.
     A game's DROIDDECK_GAME_DRIVER entry overrides the app's choice: "session" keeps the game on the session's
@@ -486,7 +486,7 @@ def game_driver(command, env, choice=None):
         icd = ""
     elif choice == "bridge":
         icd = icd or env.get("BL_VK_BRIDGE_ICD", "")
-    if not icd or len(command) < 2 or command[1] != "waitforexitandrun":
+    if not icd or (not native and (len(command) < 2 or command[1] != "waitforexitandrun")):
         return env
     if not os.access(icd, os.R_OK):
         print("droiddeck-game-env: game driver %s is not readable; using the session's" % icd, file=sys.stderr)
@@ -504,6 +504,11 @@ def game_driver(command, env, choice=None):
         DXVK_LOG_LEVEL="info",
     )
     res.pop("VK_INSTANCE_LAYERS", None)
+    if native:
+        # A native Linux game under droiddeck-fex (Quake II RTX): FEX's Vulkan thunk repacks only X11 surfaces, so SDL
+        # stays on X11 and the gamescope WSI layer makes the Wayland hop host-side (docs/games/quake2rtx.md). The
+        # Proton/DXVK keys below are inert for a native binary.
+        res.setdefault("SDL_VIDEODRIVER", "x11")
     # The Proton log stays on (vkd3d-proton, DXVK and the bridge layers write there), but Wine's exception and DLL
     # tracing only with the app's "debug logs" setting (Performance > Mali system driver): under FEX every unaligned
     # atomic is an exception, and +seh,+unwind wrote thousands of lines a second (HZD: CPU 10 FPS against GPU 26).
@@ -535,6 +540,31 @@ def game_driver(command, env, choice=None):
         own = res.get("DXVK_CONFIG", "").strip().rstrip(";").strip()
         gpl = "dxvk.enableGraphicsPipelineLibrary = False"
         res["DXVK_CONFIG"] = own + "; " + gpl if own else gpl
+    return res
+
+
+RT_VULKAN = "BL_RT_VULKAN"
+RT_DXR = "BL_DXR"
+# Ray queries on the Mali system driver: the blob enforces descriptor pool counts, so the compat layer pads and scales
+# the pools (Quake II RTX, docs/games/quake2rtx.md, WIN). The app's switch (Performance > Ray tracing) or a game's
+# entry sets BL_RT_VULKAN=1; a game's own MALI_COMPAT_DESC_POOL_* keys win.
+RT_VULKAN_ENV = {"MALI_COMPAT_DESC_POOL_PAD": "4", "MALI_COMPAT_DESC_POOL_SCALE": "8"}
+
+
+def ray_tracing(env):
+    """BL_RT_VULKAN=1: the descriptor-pool keys for Vulkan ray queries. BL_DXR=1: MALI_COMPAT_RT_PIPELINE=1 for the
+    Blobferry compat layer, which logs "not implemented in this build" until its emulated VK_KHR_ray_tracing_pipeline
+    lands (usr/share/blobferry/capabilities.json says which). A game's own values win. Never VKD3D_FEATURE_LEVEL or
+    VKD3D_CONFIG=dxr here: that crashes games (docs/agents/env-defaults-1106.md, docs/agents/rtx-switch-1107.md)."""
+    res = dict(env)
+    if env.get(RT_VULKAN) == "1":
+        for name, value in RT_VULKAN_ENV.items():
+            res.setdefault(name, value)
+        print("droiddeck-game-env: ray tracing (Vulkan ray query): descriptor pools padded/scaled", file=sys.stderr)
+    if env.get(RT_DXR) == "1":
+        res.setdefault("MALI_COMPAT_RT_PIPELINE", "1")
+        # TODO(dxr): when capabilities.json says "dxr": "supported", vkd3d-proton needs its DXR settings here
+        # (VKD3D_CONFIG += dxr, feature level 12_1 already the default). Do not set any before that.
     return res
 
 
@@ -1135,6 +1165,7 @@ def main():
             print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
         env.pop(GAME_DRIVER, None)
         if waiting:
+            env = ray_tracing(env)
             before_debug = env
             env = apply_game_debug_logs(env, config if isinstance(config, dict) else {}, debug_dir)
             if env is not before_debug:

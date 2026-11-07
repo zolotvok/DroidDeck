@@ -80,7 +80,24 @@ object BlobferryPackage {
     private val ELF_FILES = listOf(SHIM, COMPAT, WSI, HYBRIS, LINKER)
     private val JSON_FILES = REQUIRED.filter { it.endsWith(".json") }
     /** A package may only write here (no usr/local/bin, no etc/). */
-    private val ROOTFS_AREAS = listOf("$BRIDGE_DIR/", "usr/lib/hybris/", "$LAYERS/")
+    private val ROOTFS_AREAS = listOf("$BRIDGE_DIR/", "usr/lib/hybris/", "$LAYERS/", "usr/share/blobferry/")
+
+    /** What this Blobferry build can do (package.sh; optional, older packages lack it): "rt_pipeline" / "dxr" =
+     *  "supported" | "not_implemented". The ray-tracing switches show it (docs/agents/rtx-switch-1107.md). */
+    const val CAPABILITIES = "usr/share/blobferry/capabilities.json"
+
+    enum class Capability { SUPPORTED, NOT_IMPLEMENTED, UNKNOWN }
+
+    /** DX12 ray tracing in the installed package: "dxr", else "rt_pipeline", top level or under "capabilities". */
+    fun dxrCapability(rootfs: File): Capability {
+        val json = runCatching { JSONObject(File(rootfs, CAPABILITIES).readText()) }.getOrNull() ?: return Capability.UNKNOWN
+        val caps = json.optJSONObject("capabilities") ?: json
+        return when (caps.optString("dxr").ifEmpty { caps.optString("rt_pipeline") }) {
+            "supported" -> Capability.SUPPORTED
+            "not_implemented" -> Capability.NOT_IMPLEMENTED
+            else -> Capability.UNKNOWN
+        }
+    }
     private val TOP_FILES = listOf("MD5SUMS", "SOURCE.txt", "LICENSE", "NOTICE.md", "Mali_Bridge.zip")
     private val HYBRIS_LINK = Regex("""rootfs/usr/lib/hybris/libhybris-common\.so(\.[0-9]+)*""")
 

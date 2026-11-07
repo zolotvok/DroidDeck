@@ -224,6 +224,11 @@ if [[ -n "${blobferry}" ]]; then
     else
         echo "Warning: ${blobferry} has no licenses/vulkan-wsi-layer/; this debug APK lacks the WSI layer license" >&2
     fi
+    # capabilities.json (rt_pipeline/dxr: supported|not_implemented) for the app's ray-tracing switches; optional,
+    # older packages lack it and the app then says "unknown (update Blobferry)".
+    if [[ -f "${blobferry_rootfs}/usr/share/blobferry/capabilities.json" ]]; then
+        install -D -m644 "${blobferry_rootfs}/usr/share/blobferry/capabilities.json" "${linuxfs_dir}/usr/share/blobferry/capabilities.json"
+    fi
     basename "${blobferry_dir}" | sed 's/^blobferry-//' > "${linuxfs_dir}/usr/lib/mali_bridge/VERSION"
     # BUNDLE.json: commit and md5s of the bundled package for the app's Blobferry card (gpu/BlobferryPackage.bundled);
     # files = the rootfs targets SessionFiles stages, md5 of what the APK carries. Not staged into the rootfs.

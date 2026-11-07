@@ -420,4 +420,23 @@ class BlobferryPackageTest {
         assertEquals(emptyList<String>(), s.changed)
         for (rel in BlobferryPackage.REQUIRED) assertTrue(rel, live(rel).isFile)
     }
+
+    @Test
+    fun dxrCapabilityReadsThePackageFileAndIsUnknownWithoutIt() {
+        val root = Files.createTempDirectory("caps").toFile()
+        try {
+            assertEquals(BlobferryPackage.Capability.UNKNOWN, BlobferryPackage.dxrCapability(root))
+            val file = File(root, BlobferryPackage.CAPABILITIES).apply { parentFile!!.mkdirs() }
+            file.writeText("""{"rt_pipeline": "not_implemented", "dxr": "not_implemented"}""")
+            assertEquals(BlobferryPackage.Capability.NOT_IMPLEMENTED, BlobferryPackage.dxrCapability(root))
+            file.writeText("""{"capabilities": {"dxr": "supported"}}""")
+            assertEquals(BlobferryPackage.Capability.SUPPORTED, BlobferryPackage.dxrCapability(root))
+            file.writeText("""{"rt_pipeline": "supported"}""")
+            assertEquals(BlobferryPackage.Capability.SUPPORTED, BlobferryPackage.dxrCapability(root))
+            file.writeText("not json")
+            assertEquals(BlobferryPackage.Capability.UNKNOWN, BlobferryPackage.dxrCapability(root))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

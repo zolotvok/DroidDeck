@@ -214,7 +214,9 @@ object SessionFiles {
         // file (Blobferry's build-bridge.sh deploy) keeps hand-deployed test builds in place, a .user file a package the
         // user installed (gpu/BlobferryPackage).
         val bridge = if (!com.droiddeck.launcher.core.DeviceSupport.mali() || com.droiddeck.launcher.gpu.BlobferryPackage.handsOff(root)) emptyList()
-        else com.droiddeck.launcher.gpu.BlobferryPackage.BUNDLED_FILES
+        else com.droiddeck.launcher.gpu.BlobferryPackage.BUNDLED_FILES +
+            // optional: only packages with a capabilities file bundle it (the asset filter below drops a missing one)
+            listOf(com.droiddeck.launcher.gpu.BlobferryPackage.CAPABILITIES.let { it to it })
         // Mali: the bridge ICD (Android's driver) has no X11 surface, so Wine finds VK_KHR_xlib/xcb_surface only through the
         // gamescope WSI layer's manifest. Ubuntu's gamescope manifest does not list them (Arch's did): without them winevulkan
         // fails every DXVK/vkd3d vkCreateInstance (VK_KHR_win32_surface has no host surface) and the game quits at start.

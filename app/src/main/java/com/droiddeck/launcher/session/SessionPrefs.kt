@@ -706,6 +706,36 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("gamescopeRealtime", on).apply()
     }
 
+    /** Turns Steam's own Frame Limit off at every session start (droiddeck-steam-compat FRAME_LIMIT_JS). */
+    fun unlockFrameLimit(context: Context): Boolean = prefs(context).getBoolean("unlockFrameLimit", true)
+
+    fun setUnlockFrameLimit(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("unlockFrameLimit", on).apply()
+    }
+
+    fun unlockFrameLimitEnv(context: Context): String = "BL_UNLOCK_FRAME_LIMIT=" + (if (unlockFrameLimit(context)) "1" else "0")
+
+    /** Ray tracing for Vulkan games (ray queries, Quake II RTX): BL_RT_VULKAN=1 in the session, droiddeck-game-env and
+     *  droiddeck-fex then pad/scale the compat layer's descriptor pools (docs/agents/rtx-switch-1107.md). Off by default;
+     *  the env-defaults manifest turns it on per game, a game's own entry wins. */
+    fun rtVulkan(context: Context): Boolean = prefs(context).getBoolean("rtVulkan", false)
+
+    fun setRtVulkan(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("rtVulkan", on).apply()
+    }
+
+    /** DX12 ray tracing (DXR): planned. BL_DXR=1 only logs "not yet supported" in droiddeck-game-env today; it never
+     *  raises VKD3D_FEATURE_LEVEL or sets VKD3D_CONFIG=dxr (that crashes games, docs/agents/env-defaults-1106.md). */
+    fun rtDxr(context: Context): Boolean = prefs(context).getBoolean("rtDxr", false)
+
+    fun setRtDxr(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("rtDxr", on).apply()
+    }
+
+    /** Session env for the ray-tracing switches: only the ones that are on, so a game's entry or the manifest decides otherwise. */
+    fun rayTracingEnv(context: Context): List<String> =
+        listOfNotNull(if (rtVulkan(context)) "BL_RT_VULKAN=1" else null, if (rtDxr(context)) "BL_DXR=1" else null)
+
     fun ramCapMb(context: Context): Int = prefs(context).getInt("ramCapMb", 0).coerceAtLeast(0)
 
     fun setRamCapMb(context: Context, mb: Int) {

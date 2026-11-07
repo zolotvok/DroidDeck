@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import io
 import json
@@ -2231,6 +2232,19 @@ class LaunchChainOomTest(unittest.TestCase):
         self.assertEqual(done, ["25097 bash 900", "25095 pw-audio-namespace 900"])
         self.assertEqual(failed, ["25096 reaper 900 (Permission denied)"])
         self.assertIn("not set: 25096 reaper 900 (Permission denied)", log)
+
+
+class RayTracingTest(unittest.TestCase):
+    def test_vulkan_ray_query_pads_pools_user_keys_win_and_dxr_sets_nothing(self):
+        rt = MODULE["ray_tracing"]
+        self.assertEqual(rt({"A": "1"}), {"A": "1"})
+        on = rt({"BL_RT_VULKAN": "1", "MALI_COMPAT_DESC_POOL_PAD": "2"})
+        self.assertEqual((on["MALI_COMPAT_DESC_POOL_PAD"], on["MALI_COMPAT_DESC_POOL_SCALE"]), ("2", "8"))
+        self.assertNotIn("MALI_COMPAT_DESC_POOL_PAD", rt({"BL_RT_VULKAN": "0"}))
+        dxr = rt({"BL_DXR": "1"})
+        self.assertEqual(dxr, {"BL_DXR": "1", "MALI_COMPAT_RT_PIPELINE": "1"})
+        self.assertEqual(rt({"BL_DXR": "1", "MALI_COMPAT_RT_PIPELINE": "0"})["MALI_COMPAT_RT_PIPELINE"], "0")
+        self.assertNotIn("VKD3D_CONFIG", dxr)
 
 if __name__ == "__main__":
     unittest.main()

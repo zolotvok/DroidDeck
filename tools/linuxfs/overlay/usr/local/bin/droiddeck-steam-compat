@@ -260,36 +260,51 @@ FRAME_LIMIT_JS = r"""
 (() => {
   if (window.__droiddeckFrameLimit) return "present";
   const settings = window.settingsStore;
+  const EN = "gamescope_enable_app_target_framerate";
+  const enableFields = new Set();
   let service = null;
   try {
     // Steam's webpack does not expose its module cache; the gamescope service client is found by
     // the calls its module makes and loaded by id.
     let require;
     window.webpackChunksteamui.push([[Symbol("droiddeck-frame-limit")], {}, r => { require = r; }]);
+    // The enable flag's protobuf field is read from Steam's own field table instead of being guessed; it is only
+    // written when exactly one number is found.
+    const field = new RegExp("[\"']?\\b" + EN + "[\"']?\\s*:\\s*\\{\\s*n\\s*:\\s*(\\d+)", "g");
     for (const id of Object.keys(require.m || {})) {
       const source = String(require.m[id]);
-      if (!source.includes("SetBlurParams") || !source.includes("RegisterForNotifyStateChanged")) continue;
+      if (source.includes(EN)) for (const m of source.matchAll(field)) enableFields.add(Number(m[1]));
+      if (service || !source.includes("SetBlurParams") || !source.includes("RegisterForNotifyStateChanged")) continue;
       let exports;
       try { exports = require(id); } catch (e) { continue; }
       if (!exports || typeof exports !== "object") continue;
       service = Object.values(exports).find(value => value && typeof value.GetState === "function" &&
         typeof value.RegisterForNotifyStateChanged === "function" && typeof value.SetBlurParams === "function");
-      if (service) break;
     }
   } catch (e) {
     service = null;
   }
   if (!service || !settings?.clientSettings || typeof SteamClient.Settings?.SetSetting !== "function") return "unavailable";
-  const self = { timer: null, substitute: null };
-  const write = value => {
+  // With unlock on, Steam's frame limit is switched off whenever it is on (Steam turns it on again at session start).
+  // After three writes that do not stick it falls back to keeping an offered value, as with unlock off.
+  const self = { timer: null, substitute: null, unlock: __UNLOCK__, offTries: 0,
+    enableField: enableFields.size === 1 ? [...enableFields][0] : null };
+  const write = (value, field = 21002) => {
     const bytes = [];
-    for (let n of [21002 * 8, value]) {
+    for (let n of [field * 8, value]) {
       while (n > 127) { bytes.push((n & 127) | 128); n = Math.floor(n / 128); }
       bytes.push(n);
     }
     return SteamClient.Settings.SetSetting(btoa(String.fromCharCode(...bytes)));
   };
   self.check = async () => {
+    const limit = settings.clientSettings;
+    if (!limit[EN]) self.offTries = 0;
+    else if (self.unlock && self.enableField && self.offTries < 3) {
+      self.offTries++;
+      try { await write(0, self.enableField); } catch (e) { }
+      return;
+    }
     let rates;
     try {
       const reply = await service.GetState({});
@@ -325,6 +340,49 @@ FRAME_LIMIT_JS = r"""
   return "installed";
 })()
 """
+LIMITER_CHECK_SECONDS = 10
+LIMITER_HOLD_SECONDS = 20
+LIMITER_RETRY_SECONDS = 60
+
+
+def unlock_frame_limit():
+    return os.environ.get("BL_UNLOCK_FRAME_LIMIT", "1") != "0"
+
+
+def frame_limit_js(unlock):
+    return FRAME_LIMIT_JS.replace("__UNLOCK__", "true" if unlock else "false")
+
+
+def limiter_on(path=None):
+    path = path or os.environ.get("GAMESCOPE_LIMITER_FILE")
+    if not path:
+        return False
+    try:
+        with open(path, "rb") as source:
+            data = source.read(4)
+    except OSError:
+        return False
+    return len(data) == 4 and struct.unpack("<I", data)[0] != 0
+
+
+def game_running(proc="/proc"):
+    # Steam starts every game through `reaper SteamLaunch AppId=...`.
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return False
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, "cmdline"), "rb") as source:
+                if b"SteamLaunch" in source.read().split(b"\0"):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 FILE_BINDING = "droiddeckOpenFileDialog"
 FILE_JS = r"""
 (() => {
@@ -765,6 +823,9 @@ class Helper:
         self.controls_installed = False
         self.frame_limit_state = None
         self.frame_limit_retry = 0
+        self.limiter_next = 0
+        self.limiter_seen = None
+        self.limiter_retry = 0
 
     def sync_controls(self):
         try:
@@ -792,13 +853,43 @@ class Helper:
         if self.frame_limit_state in ("installed", "present") or time.monotonic() < self.frame_limit_retry:
             return
         try:
-            state = self.page.evaluate(FRAME_LIMIT_JS)
+            state = self.page.evaluate(frame_limit_js(unlock_frame_limit()))
         except RuntimeError as e:
             state = "failed (%s)" % e
         if state != self.frame_limit_state:
             say("frame limit sync: %s" % state)
         self.frame_limit_state = state
         self.frame_limit_retry = time.monotonic() + 10
+
+    def sync_limiter(self):
+        # Steam's limit off does not always reach gamescope for a game that started with it on: its limiter stays set.
+        # Once that has lasted LIMITER_HOLD_SECONDS while a game runs, gamescope's limit is cleared directly.
+        if not unlock_frame_limit() or self.frame_limit_state not in ("installed", "present"):
+            return
+        now = time.monotonic()
+        if now < self.limiter_next:
+            return
+        self.limiter_next = now + LIMITER_CHECK_SECONDS
+        if not limiter_on() or not game_running():
+            self.limiter_seen = None
+            return
+        if self.limiter_seen is None:
+            self.limiter_seen = now
+        if now - self.limiter_seen < LIMITER_HOLD_SECONDS or now < self.limiter_retry:
+            return
+        try:
+            off = self.page.evaluate("window.settingsStore?.clientSettings?.gamescope_enable_app_target_framerate === false")
+        except RuntimeError:
+            return
+        if off is not True:
+            return
+        self.limiter_retry = now + LIMITER_RETRY_SECONDS
+        try:
+            rc = subprocess.run(["gamescopectl", "debug_set_fps_limit", "0"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode
+        except (OSError, subprocess.SubprocessError) as e:
+            rc = e.__class__.__name__
+        say("frame limit: Steam's limit is off but gamescope still limits the game; gamescopectl debug_set_fps_limit 0: %s" % rc)
 
     def open_chooser(self, payload):
         try:
@@ -1052,6 +1143,7 @@ class Helper:
         while True:
             self.sync_controls()
             self.sync_frame_limit()
+            self.sync_limiter()
             sources = [self.page.ws] + ([watcher] if watcher.fileno() >= 0 else [])
             if self.chooser is not None:
                 sources.append(self.chooser[1].stdout)

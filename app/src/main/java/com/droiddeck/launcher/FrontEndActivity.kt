@@ -171,6 +171,9 @@ class FrontEndActivity : ComponentActivity() {
     private var syncFallback by mutableStateOf(true)
     private var fsyncFirst by mutableStateOf(false)
     private var gamescopeRealtime by mutableStateOf(false)
+    private var unlockFrameLimit by mutableStateOf(true)
+    private var rtVulkan by mutableStateOf(false)
+    private var rtDxr by mutableStateOf(false)
     private var ramCapMb by mutableStateOf(0)
     private var zramClient by mutableStateOf(true)
     private var vramCapMb by mutableStateOf(0)
@@ -2304,6 +2307,9 @@ class FrontEndActivity : ComponentActivity() {
             syncFallback = syncFallback,
             fsyncFirst = fsyncFirst,
             gamescopeRealtime = gamescopeRealtime,
+            unlockFrameLimit = unlockFrameLimit,
+            rtVulkan = rtVulkan, rtDxr = rtDxr,
+            dxrStatus = com.droiddeck.launcher.gpu.BlobferryPackage.dxrCapability(com.droiddeck.launcher.runtime.LinuxRuntime.rootDir(this)),
             gpuClockPin = gpuClockPin,
             performanceBoost = performanceBoost, boostCheck = boostCheck,
             ramCapMb = ramCapMb, vramCapMb = vramCapMb, zramClient = zramClient,
@@ -2325,6 +2331,9 @@ class FrontEndActivity : ComponentActivity() {
             onSyncFallback = { on -> SessionPrefs.setSyncFallback(this, on); syncFallback = on },
             onFsyncFirst = { on -> SessionPrefs.setFsyncFirst(this, on); fsyncFirst = on },
             onGamescopeRealtime = { on -> SessionPrefs.setGamescopeRealtime(this, on); gamescopeRealtime = on },
+            onUnlockFrameLimit = { on -> SessionPrefs.setUnlockFrameLimit(this, on); unlockFrameLimit = on },
+            onRtVulkan = { on -> SessionPrefs.setRtVulkan(this, on); rtVulkan = on },
+            onRtDxr = { on -> SessionPrefs.setRtDxr(this, on); rtDxr = on },
             onGpuClockPin = { on -> SessionPrefs.setGpuClockPin(this, on); gpuClockPin = on },
             onPerformanceBoost = { on -> SessionPrefs.setPerformanceBoost(this, on); performanceBoost = on },
             onBoostCheck = { on -> SessionPrefs.setBoostCheck(this, on); boostCheck = on },
@@ -2545,6 +2554,9 @@ class FrontEndActivity : ComponentActivity() {
         syncFallback = SessionPrefs.syncFallback(this)
         fsyncFirst = SessionPrefs.fsyncFirst(this)
         gamescopeRealtime = SessionPrefs.gamescopeRealtime(this)
+        unlockFrameLimit = SessionPrefs.unlockFrameLimit(this)
+        rtVulkan = SessionPrefs.rtVulkan(this)
+        rtDxr = SessionPrefs.rtDxr(this)
         ramCapMb = SessionPrefs.ramCapMb(this)
         zramClient = SessionPrefs.zramClient(this)
         vramCapMb = SessionPrefs.vramCapMb(this)

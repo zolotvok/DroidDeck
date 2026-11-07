@@ -21,6 +21,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,6 +51,10 @@ fun PerformancePage(
     syncFallback: Boolean,
     fsyncFirst: Boolean,
     gamescopeRealtime: Boolean,
+    unlockFrameLimit: Boolean,
+    rtVulkan: Boolean,
+    rtDxr: Boolean,
+    dxrStatus: com.droiddeck.launcher.gpu.BlobferryPackage.Capability,
     gpuClockPin: Boolean,
     performanceBoost: Boolean,
     boostCheck: Boolean,
@@ -75,6 +81,9 @@ fun PerformancePage(
     onSyncFallback: (Boolean) -> Unit,
     onFsyncFirst: (Boolean) -> Unit,
     onGamescopeRealtime: (Boolean) -> Unit,
+    onUnlockFrameLimit: (Boolean) -> Unit,
+    onRtVulkan: (Boolean) -> Unit,
+    onRtDxr: (Boolean) -> Unit,
     onGpuClockPin: (Boolean) -> Unit,
     onPerformanceBoost: (Boolean) -> Unit,
     onBoostCheck: (Boolean) -> Unit,
@@ -97,6 +106,21 @@ fun PerformancePage(
         lede = stringResource(R.string.perf_lede),
         onBack = onDismiss,
     ) {
+        // Ray tracing first, where everyone looks (user 11-07): docs/agents/rtx-switch-1107.md.
+        SettingsGroup(stringResource(R.string.rt_group)) {
+            val rtA11y = stringResource(R.string.rt_vulkan_a11y)
+            ToggleRow(
+                host, "rtVulkan", stringResource(R.string.rt_vulkan),
+                stringResource(R.string.rt_vulkan_hint),
+                rtVulkan, chipModifier = Modifier.semantics { contentDescription = rtA11y }, onChange = onRtVulkan,
+            )
+            val dxrA11y = stringResource(R.string.rt_dxr_a11y)
+            ToggleRow(
+                host, "rtDxr", stringResource(R.string.rt_dxr),
+                stringResource(R.string.rt_dxr_hint, dxrStatusText(dxrStatus)),
+                rtDxr, chipModifier = Modifier.semantics { contentDescription = dxrA11y }, onChange = onRtDxr,
+            )
+        }
         SettingsGroup(stringResource(R.string.perf_client_cores_group)) {
             ToggleRow(
                 host, "override", stringResource(R.string.perf_override),
@@ -150,6 +174,11 @@ fun PerformancePage(
             )
         }
         SettingsGroup(stringResource(R.string.perf_gpu)) {
+            ToggleRow(
+                host, "unlockfps", stringResource(R.string.perf_unlock_fps),
+                stringResource(R.string.perf_unlock_fps_hint),
+                unlockFrameLimit, onChange = onUnlockFrameLimit,
+            )
             ToggleRow(
                 host, "gpuclock", stringResource(R.string.perf_gpuclock),
                 stringResource(R.string.perf_gpuclock_hint),
@@ -289,3 +318,12 @@ fun PerformancePage(
         }
     }
 }
+
+@Composable
+internal fun dxrStatusText(status: com.droiddeck.launcher.gpu.BlobferryPackage.Capability): String = stringResource(
+    when (status) {
+        com.droiddeck.launcher.gpu.BlobferryPackage.Capability.SUPPORTED -> R.string.rt_dxr_supported
+        com.droiddeck.launcher.gpu.BlobferryPackage.Capability.NOT_IMPLEMENTED -> R.string.rt_dxr_not_implemented
+        com.droiddeck.launcher.gpu.BlobferryPackage.Capability.UNKNOWN -> R.string.rt_dxr_unknown
+    },
+)

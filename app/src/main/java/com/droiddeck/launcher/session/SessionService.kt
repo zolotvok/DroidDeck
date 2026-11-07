@@ -857,6 +857,8 @@ class SessionService : Service() {
         guest.add("BL_SYNC_FALLBACK=" + (if (SessionPrefs.syncFallback(this)) "1" else "0"))
         guest.add("BL_FSYNC_FIRST=" + (if (SessionPrefs.fsyncFirst(this)) "1" else "0"))
         guest.add("BL_GAMESCOPE_REALTIME=" + (if (SessionPrefs.gamescopeRealtime(this)) "1" else "0"))
+        guest.add(SessionPrefs.unlockFrameLimitEnv(this))
+        guest.addAll(SessionPrefs.rayTracingEnv(this))
         if (SessionPrefs.cursorComposite(this)) guest.add("BL_CURSOR_COMPOSITE=1")
         if (com.droiddeck.launcher.core.ZramSupport.supported()) {
             guest.add("BL_ZRAM=1")
