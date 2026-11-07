@@ -789,6 +789,30 @@ class LaunchTest(FexTestCase):
         self.assertEqual(started(other, "10")[:2], (None, None))
 
 
+class NativeBridgeTest(FexTestCase):
+    def test_native_game_gets_bridge_wsi_and_ray_query_pools_panvk_unchanged(self):
+        config = self.home / ".config/droiddeck/game-environment.json"
+        program = self.write(self.tmp / "q2rtx/q2rtx", elf(62), 0o755)
+        icd = self.write(self.tmp / "bridge_icd.json", b"{}")
+        self.write(config, json.dumps({"version": 1, "games": {"1089130": {"BL_RT_VULKAN": "1", "MALI_COMPAT_DESC_POOL_SCALE": "16"}}}))
+
+        def started(extra):
+            with mock.patch.dict(G, {"launch": mock.Mock(return_value=0), "GAME_ENVIRONMENT": str(config)}), \
+                    mock.patch.dict(os.environ, dict({"SteamAppId": "1089130"}, **extra), clear=True):
+                self.quiet(FEX["main"], ["steam", "waitforexitandrun", str(program)])
+                return G["launch"].call_args[0][1]
+
+        env = started({"BL_VK_GAME_DRIVER": str(icd), "ENABLE_GAMESCOPE_WSI": "0"})
+        self.assertEqual((env["VK_DRIVER_FILES"], env["ENABLE_MALI_WSI"], env["ENABLE_GAMESCOPE_WSI"], env["SDL_VIDEODRIVER"]),
+                         (str(icd), "1", "1", "x11"))
+        self.assertEqual((env["MALI_COMPAT_DESC_POOL_PAD"], env["MALI_COMPAT_DESC_POOL_SCALE"]), ("4", "16"))
+        self.assertNotIn("DROIDDECK_GAME_DRIVER", env)
+        panvk = started({"ENABLE_GAMESCOPE_WSI": "0"})
+        self.assertEqual(panvk["ENABLE_GAMESCOPE_WSI"], "0")
+        for name in ("ENABLE_MALI_WSI", "SDL_VIDEODRIVER", "VK_DRIVER_FILES"):
+            self.assertNotIn(name, panvk)
+
+
 class AppInfoTest(unittest.TestCase):
     COMPAT = runpy.run_path(str(BIN / "steam-compatibility"))
 
