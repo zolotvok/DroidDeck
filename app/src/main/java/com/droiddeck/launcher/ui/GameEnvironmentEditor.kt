@@ -23,6 +23,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.input.InputMode
@@ -157,6 +160,13 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
                 SecondaryButton(stringResource(R.string.game_env_open), enabled = valid, onClick = open)
             }
         }
+        if (current != null && scope.isNotEmpty()) RayTracingPanel(current.entries(scope), scope, enabled = !busy) { name, on ->
+            save(current.withEntries(scope, current.entries(scope) + (name to if (on) "1" else "0")))
+        }
+        if (current != null) BlobferryOptionsPanel(
+            current.entries(scope), GameEnvironment.effective(current, preset, scope, forceSsbs),
+            gameName = if (scope.isEmpty()) null else profileName, enabled = !busy,
+        ) { name, value -> save(current.withEntries(scope, current.entries(scope).let { if (value == null) it - name else it + (name to value) })) }
         if (error) Small(stringResource(R.string.game_env_error), error = true)
         if (current == null && !error) Small(stringResource(R.string.game_env_loading))
         if (current != null) {
@@ -372,5 +382,46 @@ private fun VariableValueEditor(name: String, value: String, onChange: (String) 
             value, onChange, stringResource(R.string.game_env_value),
             if (option?.type == GameEnvironmentOptions.Type.NUMBER) KeyboardType.Number else KeyboardType.Ascii, ImeAction.Done, compact = true,
         )
+    }
+}
+
+/** The per-game ray-tracing switches (docs/agents/rtx-switch-1107.md): the game's own BL_RT_VULKAN / BL_DXR entry,
+ *  "1" or "0", wins over the Performance switches and the env-defaults manifest (Quake II RTX on). */
+@Composable
+private fun RayTracingPanel(own: Map<String, String?>, scope: String, enabled: Boolean, onChange: (String, Boolean) -> Unit) {
+    val context = LocalContext.current
+    val builtIn = mapOf(
+        "BL_RT_VULKAN" to (SessionPrefs.rtVulkan(context) || scope == "1089130"),
+        "BL_DXR" to SessionPrefs.rtDxr(context),
+    )
+    val dxrStatus = remember { com.droiddeck.launcher.gpu.BlobferryPackage.dxrCapability(com.droiddeck.launcher.runtime.LinuxRuntime.rootDir(context)) }
+    Panel {
+        Text(
+            stringResource(R.string.rt_game_title), fontSize = 17.sp, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp),
+        )
+        for ((name, label, hint, a11y) in listOf(
+            listOf("BL_RT_VULKAN", stringResource(R.string.rt_vulkan), stringResource(R.string.rt_vulkan_hint), stringResource(R.string.rt_vulkan_a11y)),
+            listOf("BL_DXR", stringResource(R.string.rt_dxr), stringResource(R.string.rt_dxr_hint, dxrStatusText(dxrStatus)), stringResource(R.string.rt_dxr_a11y)),
+        )) {
+            val value = own[name]
+            val checked = if (value == null) builtIn.getValue(name) else value == "1"
+            Row(
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        if (value == null) hint + " " + stringResource(R.string.rt_game_inherited) else hint,
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                ToggleSwitch(
+                    checked, enabled, label,
+                    Modifier.testTag("game-env-$name").semantics { contentDescription = a11y },
+                ) { onChange(name, it) }
+            }
+        }
     }
 }
