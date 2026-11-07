@@ -108,12 +108,16 @@ RECIPES = {
     )),
     "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1"}),
     # The only GPU vendor spoof: DOOM Eternal's launcher accepts NVIDIA/AMD/Intel only (doom_eternal.md). Never global.
-    "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de"},
+    "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1"},
                            note="reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts "
                                 "NVIDIA/AMD/Intel GPUs only"),
     # Vulkan ray queries: BL_RT_VULKAN=1 makes droiddeck-game-env / droiddeck-fex pad and scale the descriptor pools
     # (quake2rtx.md WIN, docs/agents/rtx-switch-1107.md). A game's own BL_RT_VULKAN=0 turns it off.
     "steam:1089130": Recipe("Quake II RTX", {"BL_RT_VULKAN": "1"}),
+    # The compat layer reports the real limits by default since 11-07 (752c09f's overrides broke Watch Dogs 2); DOOM
+    # Eternal needs both overrides back (above), RE Village only the storage-buffer alignment clamp to load.
+    "steam:1196590": Recipe("Resident Evil Village", {"MALI_COMPAT_FAKE_ALIGN": "1"},
+                            note="clamps the reported minStorageBufferOffsetAlignment to 16 for this game only"),
 }
 
 APPENDED = ("DXVK_CONFIG", "WINEDLLOVERRIDES")

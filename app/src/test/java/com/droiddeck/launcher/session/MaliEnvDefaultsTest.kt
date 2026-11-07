@@ -46,8 +46,8 @@ class MaliEnvDefaultsTest {
 
     @Test fun theShippedManifestIsValid() {
         val m = MaliEnvDefaults.parse(shipped.readBytes())
-        assertEquals(13, m.games.size)
-        assertEquals("2026.11.07.1", m.version)
+        assertEquals(14, m.games.size)
+        assertEquals("2026.11.07.2", m.version)
         assertEquals("release", JSONObject(String(shipped.readBytes())).getString("status"))
         assertEquals("12_1", m.games.getValue("steam:1245620").env["VKD3D_FEATURE_LEVEL"])
         assertEquals("2048", m.games.getValue("steam:1245620").env["MALI_COMPAT_BUDGET_MB"])
@@ -56,7 +56,10 @@ class MaliEnvDefaultsTest {
         assertEquals("0x0d6", m.games.getValue("epic:Calluna").env["MALI_COMPAT_FB_MASK"])
         assertTrue(m.games.getValue("steam:292030").pending >= 1)
         // no DXR forcing anywhere, and the NVIDIA vendor id only for DOOM Eternal (its launcher's whitelist)
-        assertEquals(mapOf("MALI_COMPAT_VENDOR_ID" to "10de"), m.games.getValue("steam:782330").env)
+        assertEquals(mapOf("MALI_COMPAT_VENDOR_ID" to "10de", "MALI_COMPAT_FAKE_LIMITS" to "1"), m.games.getValue("steam:782330").env)
+        // 752c09f's limit overrides are opt-in since layer 11-07 (they break Watch Dogs 2): DOOM both, RE Village the clamp only
+        assertEquals(mapOf("MALI_COMPAT_FAKE_ALIGN" to "1"), m.games.getValue("steam:1196590").env)
+        assertTrue(m.games.filterKeys { it != "steam:782330" && it != "steam:1196590" }.values.none { g -> g.env.keys.any { it.startsWith("MALI_COMPAT_FAKE_") && it != "MALI_COMPAT_FAKE_OCCLUSION" } })
         for ((key, game) in m.games) {
             assertFalse(key, game.env["VKD3D_FEATURE_LEVEL"] == "12_2")
             assertTrue(key, game.env.keys.none { "NVAPI" in it || it.startsWith("MALI_COMPAT_DEVICE_") })

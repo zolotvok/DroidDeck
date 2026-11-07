@@ -367,7 +367,12 @@ class EnvDefaultsManifestTest(unittest.TestCase):
                     self.assertNotIn("nvapi", recipe.env.get("WINEDLLOVERRIDES", "").lower())
                     if key != "steam:782330":
                         self.assertNotIn("MALI_COMPAT_VENDOR_ID", recipe.env)
-            self.assertEqual(source["steam:782330"].env, {"MALI_COMPAT_VENDOR_ID": "10de"})
+            self.assertEqual(source["steam:782330"].env, {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1"})
+            # 752c09f's limit overrides are opt-in since layer 11-07 (they break Watch Dogs 2): DOOM both, RE Village the clamp
+            self.assertEqual(source["steam:1196590"].env, {"MALI_COMPAT_FAKE_ALIGN": "1"})
+            for key, recipe in source.items():
+                if key not in ("steam:782330", "steam:1196590"):
+                    self.assertFalse([n for n in recipe.env if n in ("MALI_COMPAT_FAKE_LIMITS", "MALI_COMPAT_FAKE_ALIGN", "MALI_COMPAT_FAKE_SUBGROUP")], key)
         for game in raw["games"].values():
             for pending in game.get("pending", []):
                 self.assertNotIn("MALI_COMPAT_VENDOR_ID", pending["env"])
