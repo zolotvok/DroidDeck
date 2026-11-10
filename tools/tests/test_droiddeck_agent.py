@@ -1466,6 +1466,593 @@ class FocusGuardTest(unittest.TestCase):
         self.assertEqual({600}, agent.webhelper_browsers(self.proc))
 
 
+class FocusFixTest(unittest.TestCase):
+    """focus-fix-1110: the guard's input check (Steam's window keeps STEAM_INPUT_FOCUS with the game in front: the dead
+    input of Doom 11-06 and Village 11-07 launch 1), the re-arm on fresh reload evidence, the cheaper web helper sampling
+    and the opt-in launcher iconify (BL_ICONIFY_LAUNCHER, wd2-webcore-1104 XC-SMOKE1)."""
+
+    APP = FocusGuardTest.APP
+    GAME = FocusGuardTest.GAME
+    STEAM_WIN = FocusGuardTest.STEAM_WIN
+    setUp = FocusGuardTest.setUp
+    fake_proc = FocusGuardTest.fake_proc
+    snap = FocusGuardTest.snap
+    playing = FocusGuardTest.playing
+    dropped = FocusGuardTest.dropped
+    lines = FocusGuardTest.lines
+    restores_within = FocusGuardTest.restores_within
+
+    def held_input(self, value=1, overlay=None, focused=None):
+        """The game in front, Steam's window with STEAM_INPUT_FOCUS = value (the Village launch-1 picture)."""
+        snap = self.snap(focused or self.APP, [413091, self.APP, 769])
+        steam = snap["displays"][":0"][0]
+        steam.update({"inputFocus": value, "class": "steam", "geometry": [0, 0, 1600, 720]})
+        if overlay is not None:
+            steam["overlay"] = overlay
+        # the stray full-screen input-only override-redirect window of Doom/Village (also there when input works)
+        snap["displays"][":1"].append({"window": 8388609, "map": "viewable", "overrideRedirect": True,
+                                       "inputOnly": True, "pid": None, "geometry": [0, 0, 1600, 720]})
+        return snap
+
+    def inputs_within(self, snap, seconds):
+        """Plans every second for seconds; [(time after start, step, try)] of the input actions."""
+        start, out = self.now[0], []
+        while self.now[0] - start <= seconds:
+            for action in self.guard.plan(snap):
+                if action[0] == "input":
+                    out.append((self.now[0] - start, action[1], action[7]))
+            self.now[0] += 1
+        return out
+
+    # ---- input check ----
+
+    def test_steam_holding_the_input_with_the_game_in_front_gets_the_three_steps_then_gives_up(self):
+        self.playing()
+        steps = self.inputs_within(self.held_input(), 40)
+        settle, backoff = agent.FocusGuard.INPUT_SETTLE, agent.FocusGuard.INPUT_BACKOFF
+        self.assertEqual([(settle, "flick", 1), (settle + backoff, "configurator", 2),
+                          (settle + 2 * backoff, "take-focus", 3)], steps)
+        text = "\n".join(self.lines())
+        self.assertIn("holds STEAM_INPUT_FOCUS (Steam's UI thinks it has the input); watching", text)
+        self.assertIn("giving up for app %d" % self.APP, text)
+        self.assertEqual(1, text.count("giving up for app"))
+
+    def test_without_steam_input_focus_nothing_happens(self):
+        self.playing()
+        self.assertEqual([], self.inputs_within(self.held_input(value=0), 30))
+        self.assertEqual([], self.inputs_within(self.snap(self.APP, [413091, self.APP, 769]), 30))
+        self.assertNotIn("input", "\n".join(self.lines()))
+
+    def test_steams_overlay_with_the_input_is_a_menu_not_a_mismatch(self):
+        self.playing()
+        self.assertEqual([], self.inputs_within(self.held_input(overlay=1), 30))
+        # a real Steam menu: gamescope's focus is Steam's (focusedApp 769), the game still in the base layer
+        menu = self.held_input()
+        menu["focusedApp"] = 769
+        self.menu[0] = (self.now[0], "guide")
+        self.assertEqual([], self.inputs_within(menu, 30))
+
+    def test_the_input_step_clears_and_is_logged(self):
+        self.playing()
+        self.assertEqual([(agent.FocusGuard.INPUT_SETTLE, "flick", 1)],
+                         self.inputs_within(self.held_input(), agent.FocusGuard.INPUT_SETTLE))
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+        self.assertIn("let go of STEAM_INPUT_FOCUS 2.0 s after input try 1 (flick); app %d has the input" % self.APP,
+                      "\n".join(self.lines()))
+        self.assertIsNone(self.guard.input)
+
+    def test_a_user_press_delays_the_steps(self):
+        self.playing()
+        snap = self.held_input()
+        self.assertEqual([], self.guard.plan(snap))
+        start = self.now[0]
+        self.menu[0] = (start + 5, "guide")  # the user pressed Guide 5 s into the state (and closed the menu)
+        steps = self.inputs_within(snap, 20)
+        self.assertEqual("flick", steps[0][1])
+        self.assertAlmostEqual(start + 5 + agent.FocusGuard.INPUT_SETTLE, start + steps[0][0])
+        self.assertIn("guide press at", "\n".join(self.lines()))
+
+    def test_our_tools_press_delays_the_steps_too(self):
+        self.playing()
+        snap = self.held_input()
+        self.assertEqual([], self.guard.plan(snap))
+        start = self.now[0]
+        self.menu[0] = (start + 3, "qam")
+        self.windows[0] = [(start + 3, start + 3)]  # droiddeckctl input pad qam
+        steps = self.inputs_within(snap, 20)
+        self.assertAlmostEqual(start + 3 + agent.FocusGuard.INPUT_SETTLE, start + steps[0][0])
+        self.assertIn("is agent input (window", "\n".join(self.lines()))
+
+    def test_waits_until_the_reload_handling_ends(self):
+        # Village launch 1: Steam took the front at the launch, the guard's tries put the game back, the input stayed
+        self.launched = FocusGuardTest.launched.__get__(self)
+        self.launched()
+        self.now[0] += 1
+        hit = self.restores_within(self.dropped())
+        self.assertEqual(1, hit[1])
+        last = self.guard.episode["last"]
+        start = self.now[0]
+        steps = self.inputs_within(self.held_input(), agent.FocusGuard.EPISODE_SPAN + 10)
+        self.assertEqual("flick", steps[0][1])
+        self.assertAlmostEqual(last + agent.FocusGuard.EPISODE_SPAN, start + steps[0][0], delta=1.0)
+        text = "\n".join(self.lines())
+        self.assertIn("launch phase", text)
+        self.assertIn("waiting for the open reload handling", text)
+        self.assertIn("reload handled", text)
+
+    def step_applied(self, acted=True):
+        """Plans until the first input step and applies it (the step itself faked: acted or skipped)."""
+        snap = self.held_input()
+        for _ in range(30):
+            actions = [a for a in self.guard.plan(snap) if a[0] == "input"]
+            if actions:
+                with patch.object(self.guard, "input_step", return_value=("faked", acted)):
+                    self.guard.apply(actions)
+                return actions[0]
+            self.now[0] += 1
+        self.fail("no input step")
+
+    def test_a_steal_right_after_an_input_step_is_ours_to_undo(self):
+        self.playing()
+        self.step_applied()
+        self.assertEqual("flick", self.guard.input_last[1])
+        self.now[0] += 1
+        # Steam takes the front after the flick, the game still in its base layer (would be "Steam's menu")
+        self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
+        text = "\n".join(self.lines())
+        self.assertNotIn("Steam's menu over the game", text)
+        self.assertIn("our input step flick", text)
+        # back in front: that episode was only ours, it closes at once (no 60 s reload span for later menus)
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.guard.episode)
+        self.assertIn("the steal after our input step is undone; episode closed", "\n".join(self.lines()))
+        self.now[0] += 30
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+        self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_old_reload_evidence_does_not_keep_an_input_episode_open(self):
+        # review round 3: a crash ~200 s old (outside RELOAD_SPAN) must not turn our own steal into a reload episode
+        self.playing()
+        self.events.append((self.now[0] - 200, "Steam keyboard: Target crashed"))
+        self.step_applied()
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
+        self.assertTrue(self.guard.episode["own"])
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.guard.episode)
+        self.now[0] += 30
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+
+    def test_reload_evidence_during_an_input_steal_makes_it_a_reload(self):
+        # review round 4: a web helper crash arrives while our own steal is being undone
+        self.playing()
+        self.step_applied()
+        self.now[0] += 1
+        self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNotNone(self.guard.episode)
+        self.assertFalse(self.guard.episode["own"])
+        self.assertIn("handled as a reload", "\n".join(self.lines()))
+        self.now[0] += 10  # a second steal with the game still in the base layer: the reload's, put back
+        self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
+
+    def test_a_flick_that_fails_after_its_write_still_counts_and_is_put_back(self):
+        # review round 3: the write to 769 went through, the read back failed
+        writes, reads = [], [0]
+
+        class FakeX:
+            root = 1
+
+            def __init__(self, display):
+                pass
+
+            def prop(self, window, name):
+                reads[0] += 1
+                if reads[0] > 1:
+                    raise TimeoutError("timed out")
+                return [FocusFixTest.APP]
+
+            def set_cardinals(self, window, name, values):
+                writes.append(list(values))
+
+            def close(self):
+                pass
+
+        with patch.object(agent, "X", FakeX), patch.object(agent.time, "sleep"):
+            self.guard.apply([("input", "flick", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held")])
+        self.assertEqual([[769], [self.APP]], writes)
+        self.assertEqual("flick", self.guard.input_last[1])
+        self.assertIn("read back failed (timed out), set back to [%d]" % self.APP, self.lines()[-1])
+
+    def test_a_skipped_input_step_explains_no_steal(self):
+        # review round 2: the user opened Steam's menu between the plan and the flick; the flick skipped
+        self.playing()
+        self.step_applied(acted=False)
+        self.assertIsNone(self.guard.input_last)
+        self.now[0] += 1
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+        self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_a_later_steam_menu_without_a_stamp_stays_the_users(self):
+        # review 1110-235146: a Steam menu opened by mouse/keyboard (no Guide/QAM stamp) well after an input step
+        self.playing()
+        self.step_applied()
+        self.now[0] += 30
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.restores_within(self.snap(769, [413091, 769, self.APP]), seconds=20))
+        self.assertIn("Steam's menu over the game", "\n".join(self.lines()))
+
+    def test_off_switches(self):
+        self.playing()
+        with patch.dict(os.environ, {"BL_FOCUS_INPUT": "0"}):
+            self.assertEqual([], self.inputs_within(self.held_input(), 30))
+        self.assertIn("input check off (BL_FOCUS_INPUT=0)", "\n".join(self.lines()))
+        self.guard.input = None
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1", "BL_FOCUS_INPUT": "0"})
+        self.assertEqual([], self.inputs_within(self.held_input(), 30))
+        self.assertIn("the game's BL_FOCUS_INPUT=0", "\n".join(self.lines()))
+        # the guard's own off switch in the game's environment: not watched at all
+        guard = agent.FocusGuard(clock=lambda: self.now[0], proc=self.proc, menu_press=lambda: None, events=[],
+                                 browsers=lambda: set())
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1", "BL_FOCUS_GUARD": "0"})
+        for _ in range(30):
+            self.now[0] += 1
+            self.assertEqual([], guard.plan(self.held_input()))
+
+    def test_a_new_game_window_starts_over(self):
+        self.playing()
+        self.inputs_within(self.held_input(), 40)
+        other = self.held_input()
+        other["displays"][":1"][0]["window"] = self.GAME + 1
+        other["focusedWindow"] = self.GAME + 1
+        self.assertEqual("flick", self.inputs_within(other, agent.FocusGuard.INPUT_SETTLE)[0][1])
+
+    def test_spent_input_steps_stay_spent_until_steam_lets_go(self):
+        self.playing()
+        self.inputs_within(self.held_input(), 40)  # spent
+        self.menu[0] = (self.now[0], "guide")  # the user opens Steam's menu and comes back: still the same state
+        self.guard.plan(self.snap(769, [413091, 769, self.APP]))
+        self.now[0] += 1
+        self.assertEqual([], self.inputs_within(self.held_input(), 30))
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))  # Steam lets go: over
+        self.assertIsNone(self.guard.input)
+        self.now[0] += 1
+        self.assertEqual("flick", self.inputs_within(self.held_input(), 20)[0][1])  # a new mismatch: new steps
+
+    def test_steps_that_make_steam_take_the_front_do_not_loop(self):
+        # review round 5: flick -> Steam in front -> restore -> back with the mismatch -> the next step, not flick again
+        self.playing()
+        steps = []
+        for _ in range(6):
+            action = self.step_applied()
+            steps.append(action[1])
+            self.now[0] += 1
+            self.restores_within(self.snap(769, [413091, 769, self.APP]))
+            self.guard.plan(self.held_input())  # back in front, Steam still holds the input
+            self.now[0] += 1
+            if self.guard.input["tries"] >= 3:
+                break
+        self.assertEqual(["flick", "configurator", "take-focus"], steps)
+        self.assertEqual([], self.inputs_within(self.held_input(), 40))
+        self.assertIn("giving up for app", "\n".join(self.lines()))
+
+    def test_time_behind_steam_does_not_count_as_settling(self):
+        # review round 6: the mismatch seen, then a real Steam menu for 20 s, then back: settle again from the return
+        self.playing()
+        self.assertEqual([], self.guard.plan(self.held_input()))
+        self.now[0] += 3
+        self.menu[0] = (self.now[0], "guide")
+        menu = self.held_input()
+        menu["focusedApp"] = 769
+        for _ in range(20):
+            self.now[0] += 1
+            self.guard.plan(menu)
+        back = self.now[0] + 1
+        steps = self.inputs_within(self.held_input(), 15)
+        self.assertAlmostEqual(back + agent.FocusGuard.INPUT_SETTLE, self.now[0] - 16 + steps[0][0], delta=1.0)
+
+    def test_another_games_open_episode_does_not_block_the_input_steps(self):
+        self.playing()
+        self.guard.episode = {"app": 4242, "opened": self.now[0], "tries": 3, "last": self.now[0], "back": None}
+        self.assertEqual("flick", self.inputs_within(self.held_input(), 20)[0][1])
+
+    def test_a_relaunched_game_with_the_same_window_id_starts_over(self):
+        # review round 6: X window ids are reused; the pid tells the processes apart
+        self.playing()
+        self.inputs_within(self.held_input(), 40)  # spent
+        self.fake_proc(10748, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1"})
+        relaunched = self.held_input()
+        relaunched["displays"][":1"][0]["pid"] = 10748
+        relaunched["focusableWindows"][0]["pid"] = 10748
+        self.assertEqual("flick", self.inputs_within(relaunched, 20)[0][1])
+
+    def test_an_episode_without_a_try_expires(self):
+        # review round 5 (pre-existing): WD2 16:32:26 "back in front after try 0" kept its episode open for good
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        self.now[0] += 1
+        self.assertEqual([], self.guard.plan(self.dropped()))
+        self.assertIsNotNone(self.guard.episode)
+        self.now[0] += 1
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))  # back by itself before try 1
+        self.now[0] += agent.FocusGuard.EPISODE_SPAN
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.assertIsNone(self.guard.episode)
+        self.assertIn("after the steal (no try); reload handled", "\n".join(self.lines()))
+
+    def test_apply_input_steps(self):
+        sent, props = [], {"GAMESCOPE_FOCUSED_APP": [self.APP]}
+
+        class FakeX:
+            root = 1
+            protocols = []
+
+            def __init__(self, display):
+                self.display = display
+
+            def prop(self, window, name):
+                if name == "WM_PROTOCOLS":
+                    return list(FakeX.protocols)
+                return props.get(name)
+
+            def set_cardinals(self, window, name, values):
+                sent.append((self.display, name, list(values)))
+                props[name] = list(values)
+
+            def atom(self, name):
+                return {"WM_TAKE_FOCUS": 77}.get(name, 1)
+
+            def client_message(self, destination, window, kind, data, mask=0):
+                sent.append((self.display, destination, window, kind, list(data), mask))
+
+            def close(self):
+                pass
+
+        holders = [self.STEAM_WIN]
+        with patch.object(agent, "X", FakeX), patch.object(agent.time, "sleep"), \
+                patch.object(agent, "cdp_eval", return_value={"value": "ForceConfiguratorFocus true/false"}) as cdp:
+            self.guard.apply([("input", "flick", ":1", self.GAME, self.APP, 10747, holders, 1, "held 8.0 s")])
+            self.guard.apply([("input", "configurator", ":1", self.GAME, self.APP, 10747, holders, 2, "held 12.0 s")])
+            self.guard.agent_dir = Path(self.temp.name)
+            self.guard.apply([("input", "configurator", ":1", self.GAME, self.APP, 10747, holders, 2, "held 12.0 s")])
+            self.guard.apply([("input", "take-focus", ":1", self.GAME, self.APP, 10747, holders, 3, "held 16.0 s")])
+            FakeX.protocols = [5, 77]
+            self.guard.apply([("input", "take-focus", ":1", self.GAME, self.APP, 10747, holders, 3, "held 16.0 s")])
+        self.assertEqual(1, cdp.call_count)
+        self.assertEqual("take-focus", self.guard.input_last[1])
+        self.assertEqual([(":0", "GAMESCOPE_FOCUSED_APP", [769]), (":0", "GAMESCOPE_FOCUSED_APP", [self.APP]),
+                          (":1", self.GAME, self.GAME, "WM_PROTOCOLS", [77, 0], 0)], sent)
+        lines = self.lines()
+        self.assertIn("focus guard: input try 1/3 (flick): app %d window 0x4200005 on :1" % self.APP, lines[0])
+        self.assertIn("did: focus flick %d -> 769 -> %d (0.4 s) on :0" % (self.APP, self.APP), lines[0])
+        self.assertIn("did: skipped, no DevTools", lines[1])
+        self.assertIn("did: ForceConfiguratorFocus true/false", lines[2])
+        self.assertIn("did: skipped, window 0x4200005 has no WM_TAKE_FOCUS", lines[3])
+        self.assertIn("did: WM_TAKE_FOCUS sent to 0x4200005 on :1", lines[4])
+        # the focus moved meanwhile: the flick leaves it alone and explains no steal
+        props["GAMESCOPE_FOCUSED_APP"] = [769]
+        self.guard.input_last = None
+        with patch.object(agent, "X", FakeX), patch.object(agent.time, "sleep"):
+            self.guard.apply([("input", "flick", ":1", self.GAME, self.APP, 10747, holders, 1, "held 8.0 s")])
+        self.assertIn("did: skipped, GAMESCOPE_FOCUSED_APP is [769] now", self.lines()[-1])
+        self.assertIsNone(self.guard.input_last)
+
+    # ---- re-arm on fresh evidence (crash/remap twice within the span) ----
+
+    def test_fresh_evidence_after_the_last_try_rearms_twice_then_gives_up(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        tries = []
+        for i in range(120):
+            self.now[0] += 1
+            if i in (30, 60, 90):  # a web helper crash again after each set of tries
+                self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+            for action in self.guard.plan(self.dropped()):
+                tries.append(action[7])
+        self.assertEqual([1, 2, 3] * 3, tries)
+        text = "\n".join(self.lines())
+        self.assertIn("re-arm 1/2", text)
+        self.assertIn("re-arm 2/2", text)
+        self.assertIn("giving up for this reload", text)
+
+    def test_no_fresh_evidence_no_rearm(self):
+        self.playing()
+        self.events.append((self.now[0], "Steam keyboard: Target crashed"))
+        tries = []
+        for _ in range(80):
+            self.now[0] += 1
+            tries += [a[7] for a in self.guard.plan(self.dropped())]
+        self.assertEqual([1, 2, 3], tries)
+        self.assertNotIn("re-arm", "\n".join(self.lines()))
+
+    def test_a_browser_that_stays_gone_is_one_piece_of_evidence(self):
+        # review 1110-235146: "gone" every 5 s used to re-arm the tries twice from one disappearance
+        self.browser_pids[0] = {500}
+        self.playing()
+        self.browser_pids[0] = set()
+        tries = []
+        for _ in range(120):
+            self.now[0] += 1
+            tries += [a[7] for a in self.guard.plan(self.dropped())]
+        self.assertEqual([1, 2, 3], tries)
+        self.assertEqual(1, sum("steamwebhelper gone" in w for _, w in self.guard.seen))
+        self.assertNotIn("re-arm", "\n".join(self.lines()))
+        self.browser_pids[0] = {502}  # the web helper comes back: a new reload, one re-arm
+        for _ in range(30):
+            self.now[0] += 1
+            tries += [a[7] for a in self.guard.plan(self.dropped())]
+        self.assertEqual([1, 2, 3, 1, 2, 3], tries)
+        self.assertIn("re-arm 1/2", "\n".join(self.lines()))
+
+    # ---- cheaper web helper sampling ----
+
+    def test_browser_scan_only_when_a_known_browser_died(self):
+        calls = []
+        pids = [{600}]
+
+        def scan():
+            calls.append(1)
+            return set(pids[0])
+
+        guard = agent.FocusGuard(clock=lambda: self.now[0], proc=self.proc, menu_press=lambda: None, events=[],
+                                 browsers=scan)
+        self.fake_proc(600, 1, "steamwebhelper", cmdline=["steamwebhelper"])
+        guard.sample_browsers(0.0)
+        for k in range(1, 5):
+            guard.sample_browsers(k * agent.FocusGuard.BROWSER_EVERY)
+        self.assertEqual(1, len(calls))  # 600 lives: no /proc scan
+        self.fake_proc(600, 1, "bash")  # pid reused by something else = the browser died
+        pids[0] = {601}
+        guard.sample_browsers(5 * agent.FocusGuard.BROWSER_EVERY)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["steamwebhelper restarted (browser pid [600] -> [601])"], [w for _, w in guard.seen])
+
+    # ---- launcher iconify ----
+
+    def launcher_snap(self, focused=None, connect_state="normal", game_map="viewable"):
+        game = {"window": self.GAME, "map": game_map, "pid": 10747, "wmState": "normal",
+                "geometry": [0, 0, 1600, 720], "appId": 2274579123}
+        connect = {"window": 0x1e00012, "map": "viewable", "pid": 7001, "wmState": connect_state,
+                   "geometry": [73, 0, 1454, 720], "appId": 2274579123}
+        small = {"window": 0x1e00020, "map": "viewable", "pid": 7001, "wmState": "normal", "geometry": [0, 0, 300, 200]}
+        overlay_or = {"window": 0x1e00030, "map": "viewable", "pid": 7001, "overrideRedirect": True,
+                      "geometry": [0, 0, 1600, 720]}
+        return {"focusedApp": 2274579123, "focusedWindow": focused or self.GAME,
+                "displays": {":0": [{"window": self.STEAM_WIN, "map": "viewable", "appId": 769, "pid": 8300}],
+                             ":1": [game, connect, small, overlay_or]}}
+
+    def iconify_env(self, game_env=None, game_exe="C:\\\\Games\\\\WatchDogs2.exe"):
+        self.fake_proc(10747, 9451, "WatchDogs2.exe", cmdline=[game_exe.replace("\\\\", "\\")],
+                       env=game_env if game_env is not None else {"BL_ICONIFY_LAUNCHER": "1"})
+        self.fake_proc(7001, 1, "upc.exe",
+                       cmdline=["C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher\\upc.exe", "uplay://x"])
+
+    def run_iconify(self, snap, state, sent):
+        class FakeX:
+            root = 1
+
+            def __init__(self, display):
+                self.display = display
+
+            def client_message(self, destination, window, kind, data, mask=0):
+                sent.append(("msg", self.display, destination, window, kind, list(data), mask))
+
+            def set_prop32(self, window, name, kind, values):
+                sent.append(("prop", self.display, window, name, list(values)))
+
+            def close(self):
+                pass
+
+        return agent.iconify_launcher(snap, state, clock=lambda: self.now[0], proc=self.proc, xconn=FakeX)
+
+    def test_iconify_waits_then_picks_the_largest_connect_window_never_the_game(self):
+        self.iconify_env()
+        state, sent = {}, []
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER - 1
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))
+        self.now[0] += 1
+        self.assertEqual("iconified", self.run_iconify(self.launcher_snap(), state, sent))
+        self.assertEqual([("msg", ":1", 1, 0x1e00012, "WM_CHANGE_STATE", [3], (1 << 20) | (1 << 19))], sent)
+        self.assertNotIn(self.GAME, [s[3] for s in sent])
+        self.assertIn("launcher iconify: upc.exe window 0x1e00012 (pid 7001) on :1 iconified (1/3)",
+                      "\n".join(self.lines()))
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))  # once
+        self.assertEqual(1, len(sent))
+
+    def test_iconify_refuses_the_game_window_and_the_games_exe(self):
+        # the game's own window is the only upc.exe-named candidate: refused (focus window and game pid)
+        self.fake_proc(10747, 9451, "upc.exe", cmdline=["C:\\x\\upc.exe"], env={"BL_ICONIFY_LAUNCHER": "1"})
+        self.fake_proc(7001, 1, "upc.exe", cmdline=["C:\\x\\upc.exe"])
+        state, sent = {}, []
+        self.run_iconify(self.launcher_snap(), state, sent)
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER + 1
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))  # same exe as the game: never
+        self.assertEqual([], sent)
+        # Connect as the focus window: never iconified, whatever its exe
+        self.iconify_env()
+        state = {}
+        snap = self.launcher_snap(focused=0x1e00012)
+        self.run_iconify(snap, state, sent)
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER + 1
+        self.assertIsNone(self.run_iconify(snap, state, sent))
+        self.assertEqual([], sent)
+
+    def test_iconify_is_opt_in_and_has_an_agent_off_switch(self):
+        self.iconify_env(game_env={})
+        state, sent = {}, []
+        self.run_iconify(self.launcher_snap(), state, sent)
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER + 1
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))
+        self.iconify_env()
+        with patch.dict(os.environ, {"BL_ICONIFY_LAUNCHER": "0"}):
+            state = {}
+            self.run_iconify(self.launcher_snap(), state, sent)
+            self.now[0] += agent.LAUNCHER_ICONIFY_AFTER + 1
+            self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))
+        self.assertEqual([], sent)
+
+    def test_iconify_restores_when_connect_takes_the_focus_or_the_game_goes(self):
+        self.iconify_env()
+        state, sent = {}, []
+        self.run_iconify(self.launcher_snap(), state, sent)
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER
+        self.assertEqual("iconified", self.run_iconify(self.launcher_snap(), state, sent))
+        # Connect becomes the focus window (its own dialog, or the user): restore, then wait again
+        self.assertEqual("restored", self.run_iconify(self.launcher_snap(focused=0x1e00012, connect_state="iconic"),
+                                                      state, sent))
+        self.assertEqual(("prop", ":1", 0x1e00012, "WM_STATE", [1, 0]), sent[-1])
+        self.assertIsNone(self.run_iconify(self.launcher_snap(), state, sent))
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER
+        self.assertEqual("iconified", self.run_iconify(self.launcher_snap(), state, sent))
+        # the game window goes: restore Connect
+        self.assertEqual("restored", self.run_iconify(self.launcher_snap(game_map="unmapped", connect_state="iconic"),
+                                                      state, sent))
+        self.assertIn("is gone; restored upc.exe window 0x1e00012 on :1", "\n".join(self.lines()))
+
+    def test_iconify_follows_a_recreated_or_self_restored_connect_window(self):
+        # review 1110-235146: Connect destroys the iconified window and maps a new one while the game stays in front
+        self.iconify_env()
+        state, sent = {}, []
+        self.run_iconify(self.launcher_snap(), state, sent)
+        self.now[0] += agent.LAUNCHER_ICONIFY_AFTER
+        self.assertEqual("iconified", self.run_iconify(self.launcher_snap(), state, sent))
+        self.assertIsNone(self.run_iconify(self.launcher_snap(connect_state="iconic"), state, sent))  # tracked
+        recreated = self.launcher_snap()
+        recreated["displays"][":1"][1]["window"] = 0x1e00040
+        self.assertEqual("iconified", self.run_iconify(recreated, state, sent))
+        self.assertEqual(0x1e00040, sent[-1][3])
+        self.assertIn("window 0x1e00012 on :1 is gone; tracking it no more", "\n".join(self.lines()))
+        # something else restored it (WM_STATE Normal again, past the settle time): tracked anew, iconified again
+        self.now[0] += agent.LAUNCHER_ICONIFY_SETTLE
+        self.assertEqual("iconified", self.run_iconify(recreated, state, sent))
+        self.assertIn("no longer iconic (WM_STATE normal)", "\n".join(self.lines()))
+        self.assertEqual(3, len([x for x in sent if x[0] == "msg"]))
+        self.now[0] += agent.LAUNCHER_ICONIFY_SETTLE
+        self.assertIsNone(self.run_iconify(recreated, state, sent))  # the cap (3) is reached
+        self.assertNotIn(self.GAME, [x[3] for x in sent])
+
+    def test_iconify_cap_per_game_process(self):
+        self.iconify_env()
+        state, sent = {}, []
+        for _ in range(agent.LAUNCHER_ICONIFY_MAX + 2):
+            self.run_iconify(self.launcher_snap(), state, sent)
+            self.now[0] += agent.LAUNCHER_ICONIFY_AFTER
+            self.run_iconify(self.launcher_snap(), state, sent)
+            self.run_iconify(self.launcher_snap(focused=0x1e00012), state, sent)
+        self.assertEqual(agent.LAUNCHER_ICONIFY_MAX, len([s for s in sent if s[0] == "msg"]))
+
+    def test_process_exe(self):
+        self.fake_proc(7001, 1, "upc.exe", cmdline=["C:\\Program Files (x86)\\Ubisoft\\upc.exe", "uplay://x"])
+        self.assertEqual("upc.exe", agent.process_exe(7001, self.proc))
+        self.assertEqual("", agent.process_exe(99999, self.proc))
+
+
 class VrFocusTest(unittest.TestCase):
     def test_scene_dashboard_and_external_focus_changes(self):
         focus = agent.VrSceneFocus()

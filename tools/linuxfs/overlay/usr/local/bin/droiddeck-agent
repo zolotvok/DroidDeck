@@ -190,6 +190,17 @@ class X:
                        + struct.pack("<%dI" % len(values), *values))
         self.request(struct.pack("<BxH", 43, 1))
 
+    def client_message(self, destination, window, type_name, data, mask=0):
+        """SendEvent of a 32-bit ClientMessage (type_name, data = up to 5 longs) about window to destination, then a
+        round trip. mask 0 = to the destination's owner; SubstructureRedirect|SubstructureNotify on the root = to the WM."""
+        kind = self.atom(type_name)
+        if not kind:
+            raise OSError("no atom " + type_name)
+        longs = (list(data) + [0] * 5)[:5]
+        event = struct.pack("<BBHII5I", 33, 32, 0, window, kind, *longs)
+        self.s.sendall(struct.pack("<BBHII", 25, 0, 11, destination, mask) + event)
+        self.request(struct.pack("<BxH", 43, 1))
+
 
 def windows(x):
     out = []
@@ -729,7 +740,24 @@ class FocusGuard:
     layer as Steam does while a game runs (the game before 769), sets GAMESCOPECTRL_BASELAYER_WINDOW to the
     window and asks gamescope to restore its focus window: at most TRIES times per reload, BACKOFF s apart. The
     window control is released when the game was back in front for PIN_HOLD s, at a user Guide/QAM press, when
-    Steam itself puts 769 before the game, or when the window or process is gone. Every decision is logged."""
+    Steam itself puts 769 before the game, or when the window or process is gone. Every decision is logged.
+    Fresh reload evidence (a new web helper crash or browser pid, a new Steam window remap) after the last of the
+    TRIES re-arms them, at most REARMS times per reload (wd2-uncap-1535: two web helper OOM kills 40 s apart).
+    Input check (focus-fix-1110; BL_FOCUS_INPUT=0 in the agent's or the game's environment turns it off): the game is
+    gamescope's focused app, yet Steam's own window (not its overlay) keeps STEAM_INPUT_FOCUS: Steam's UI still thinks
+    it has the input. 32 captured focus snapshots: 13/13 with Steam in front have it; with a game in front it is set
+    in exactly the 3 dead-input states (Doom 11-06 x2, Village 11-07 launch 1, after the launch-time front steal and
+    the guard's two tries) and 0 in the 14 others (Village's working relaunch included). Clearing the property by hand
+    did nothing (doom-inputtex-1106 T4): it is Steam's report, not its switch. After INPUT_SETTLE s of that state (and
+    INPUT_SETTLE s after any Guide/QAM press, the user's or our tools'; never while a reload episode is open) one
+    step per INPUT_BACKOFF s: "flick" GAMESCOPE_FOCUSED_APP game -> 769 -> game on Steam's display (PadApply stage B:
+    Steam sees a focus switch back to the game; nothing is shown), "configurator"
+    SteamClient.Input.ForceConfiguratorFocus true/false (stage A), "take-focus" WM_TAKE_FOCUS to the game window
+    (Wine's own activation request), then it gives up for that game window until Steam lets go of the input. Each
+    step is logged; a Steam front steal within INPUT_STEAL_SPAN s after a step that wrote something is undone (an
+    episode only that step explains closes once the game is back), a later one is not (a Steam menu opened by mouse
+    or keyboard stays the user's). An episode in which the game came back without a try ends EPISODE_SPAN s after
+    the steal (it never ended before)."""
 
     TRIES = 3
     BACKOFF = (2.0, 4.0, 8.0)  # before try 1 (after Steam took the front), 2 and 3 (after the try before)
@@ -743,11 +771,18 @@ class FocusGuard:
     EPISODE_SPAN = 60.0  # back in front this long after the last try: the reload is over
     PIN_HOLD = 20.0
     BROWSER_EVERY = 5.0
+    REARMS = 2            # fresh reload evidence after the last try re-arms the TRIES this often per reload
+    INPUT_SETTLE = 8.0    # Steam's window holds STEAM_INPUT_FOCUS this long with the game in front: act
+    INPUT_BACKOFF = 4.0   # between the input steps
+    INPUT_STEPS = ("flick", "configurator", "take-focus")
+    INPUT_FLICK = 0.4
+    INPUT_STEAL_SPAN = 6.0  # Steam taking the front this soon after an input step: that step's doing, put the game back
     CONTROL = "GAMESCOPECTRL_BASELAYER_WINDOW"
 
     def __init__(self, clock=time.monotonic, proc=Path("/proc"), menu_press=None, events=None, browsers=None,
-                 user_input=None, agent_windows=None):
+                 user_input=None, agent_windows=None, agent_dir=None):
         self.clock = clock
+        self.agent_dir = agent_dir  # for the DevTools input step; None skips it
         self.proc = proc
         evdev = os.environ.get("FAKE_EVDEV_DIR")
         pad = Path(evdev) / ".padapply" if evdev else None
@@ -768,6 +803,9 @@ class FocusGuard:
         self.known_browsers = None
         self.browsers_at = None
         self.wake = None
+        self.input = None     # Steam's window holding STEAM_INPUT_FOCUS with the game in front: app, window, since, tries
+        self.input_last = None  # (t, what) of the last input step: a Steam steal within INPUT_STEAL_SPAN of it is ours
+        self.browsers_gone = False
 
     @staticmethod
     def off():
@@ -785,6 +823,21 @@ class FocusGuard:
         if env.get(b"ENABLE_MALI_COMPAT") == b"1" or env.get(b"ENABLE_MALI_WSI") == b"1":
             return True, "on the Mali bridge"
         return False, "not on the Mali bridge (BL_FOCUS_GUARD=1 turns it on)"
+
+    def input_enabled(self, pid):
+        if os.environ.get("BL_FOCUS_INPUT") == "0":
+            return False, "BL_FOCUS_INPUT=0"
+        if process_env(pid, self.proc).get(b"BL_FOCUS_INPUT") == b"0":
+            return False, "the game's BL_FOCUS_INPUT=0"
+        return True, "on"
+
+    @staticmethod
+    def steam_input_windows(snap):
+        """Steam's own windows (not its overlay) on Steam's display that hold STEAM_INPUT_FOCUS."""
+        return [w.get("window") for w in snap.get("displays", {}).get(os.environ.get("DISPLAY"), [])
+                if w.get("appId") == STEAM_UI_APP and w.get("map") == "viewable" and not w.get("overrideRedirect")
+                and not w.get("inputOnly") and not w.get("overlay") and not w.get("externalOverlay")
+                and w.get("inputFocus")]
 
     @staticmethod
     def steam_windows(snap):
@@ -850,15 +903,88 @@ class FocusGuard:
         if self.browsers_at is not None and now - self.browsers_at < self.BROWSER_EVERY:
             return
         self.browsers_at = now
+        if self.known_browsers and all(self.browser_alive(pid) for pid in self.known_browsers):
+            return  # no known browser died: neither a restart nor "gone" can be seen; skip the /proc scan
         pids = self.browsers()
         if self.known_browsers and pids and not pids & self.known_browsers:
             self.seen.append((now, "steamwebhelper restarted (browser pid %s -> %s)"
                               % (sorted(self.known_browsers), sorted(pids))))
-        elif self.known_browsers and not pids:
+        elif self.known_browsers and not pids and not self.browsers_gone:
+            # once: while it stays gone, the same disappearance is not new evidence every BROWSER_EVERY s
             self.seen.append((now, "steamwebhelper gone (browser pid %s)" % sorted(self.known_browsers)))
+            self.browsers_gone = True
+        if pids:
+            self.browsers_gone = False
         if pids or self.known_browsers is None:
             self.known_browsers = pids
         del self.seen[:-16]
+
+    def browser_alive(self, pid):
+        try:
+            return (self.proc / str(pid) / "comm").read_text().strip() == "steamwebhelper"
+        except OSError:
+            return False
+
+    def plan_input(self, snap, held, now):
+        """The input check (see the class doc): [] or [("input", step, display, window, app, pid, holders, try, why)]."""
+        holders = self.steam_input_windows(snap)
+        st = self.input
+        if st is not None and (st["app"], st["window"], st["pid"]) != (held["app"], held["window"], held["pid"]):
+            st = self.input = None
+        if not holders:
+            if st is not None and st["tries"]:
+                log("focus guard: input: Steam's window let go of STEAM_INPUT_FOCUS %.1f s after input try %d (%s); "
+                    "app %s has the input" % (now - st["last"], st["tries"], st["step"], held["app"]))
+            elif st is not None and not st.get("off"):
+                log("focus guard: input: Steam's window let go of STEAM_INPUT_FOCUS by itself after %.1f s (no try)"
+                    % (now - st["since"]))
+            self.input = None
+            return []
+        if st is None:
+            on, why = self.input_enabled(held["pid"])
+            st = self.input = {"app": held["app"], "window": held["window"], "pid": held["pid"], "since": now,
+                               "tries": 0, "last": None, "step": None, "noted": set(), "off": not on, "away": False}
+            log("focus guard: input: app %s in front (window 0x%x) but Steam's window %s holds STEAM_INPUT_FOCUS "
+                "(Steam's UI thinks it has the input); %s"
+                % (held["app"], held["window"], ", ".join("0x%x" % w for w in holders),
+                   "watching" if on else "input check off (%s)" % why))
+        if st["away"]:
+            st["away"] = False
+            st["since"] = now  # Steam had the front meanwhile (a menu, a steal): settle again, the budget stays
+        if st["off"]:
+            return []
+        if self.episode is not None and self.episode["app"] == held["app"]:
+            if "episode" not in st["noted"]:
+                st["noted"].add("episode")
+                log("focus guard: input: waiting for the open reload handling of app %s to end" % self.episode["app"])
+            return []
+        if st["tries"] >= len(self.INPUT_STEPS):
+            if "spent" not in st["noted"]:
+                st["noted"].add("spent")
+                log("focus guard: input: Steam's window still holds STEAM_INPUT_FOCUS %.0f s after input try %d (%s); "
+                    "giving up for app %s" % (now - st["last"], st["tries"], st["step"], held["app"]))
+            return []
+        due = st["since"] + self.INPUT_SETTLE
+        why = "held %.1f s" % (now - st["since"])
+        stamp = self.menu_press()  # the newest Guide/QAM stamp, the user's or our tools': never act right after one
+        if stamp and stamp[0] + self.INPUT_SETTLE > due:
+            due = stamp[0] + self.INPUT_SETTLE
+            if now < due and ("press", stamp) not in st["noted"]:
+                st["noted"].add(("press", stamp))
+                log("focus guard: input: %s press at %.1f; waiting until %.1f before any input step"
+                    % (stamp[1], stamp[0], due))
+        if st["last"] is not None:
+            due = max(due, st["last"] + self.INPUT_BACKOFF)
+        if now < due:
+            self.wake = due if self.wake is None else min(self.wake, due)
+            return []
+        step = self.INPUT_STEPS[st["tries"]]
+        st["tries"] += 1
+        st["last"] = now
+        st["step"] = step
+        if st["tries"] < len(self.INPUT_STEPS):
+            self.wake = now + self.INPUT_BACKOFF if self.wake is None else min(self.wake, now + self.INPUT_BACKOFF)
+        return [("input", step, held["display"], held["window"], held["app"], held["pid"], holders, st["tries"], why)]
 
     def plan(self, snap):
         """The actions for this snapshot: ("release", display, window, original, why) and
@@ -915,12 +1041,31 @@ class FocusGuard:
                     log("focus guard: app %s back in front after try %d" % (focused, ep["tries"]))
                     if self.pin and self.pin["window"] == win["window"]:
                         self.pin["back"] = now
-                elif ep["last"] is not None and now - ep["last"] >= self.EPISODE_SPAN:
-                    log("focus guard: app %s stayed in front %.0f s after the last try; reload handled"
-                        % (focused, now - ep["last"]))
+                    if ep.get("own"):
+                        fresh = self.evidence(now)  # newer than the episode's opening (spent = its open time)
+                        if fresh:
+                            ep["own"] = False
+                            log("focus guard: reload evidence came in during the steal after our input step (%s); "
+                                "handled as a reload" % "; ".join(w for _, w in fresh[-3:]))
+                        else:
+                            # only our input step made Steam take the front: undone; it consumed no reload evidence
+                            log("focus guard: the steal after our input step is undone; episode closed")
+                            self.episode = None
+                            self.spent = ep["spent_before"]
+                elif now - (ep["last"] if ep["last"] is not None else ep["opened"]) >= self.EPISODE_SPAN:
+                    # (no try: the game came back by itself; counted from the steal, else it never expired)
+                    log("focus guard: app %s stayed in front %.0f s after the %s; reload handled"
+                        % (focused, now - (ep["last"] if ep["last"] is not None else ep["opened"]),
+                           "last try" if ep["last"] is not None else "steal (no try)"))
                     self.episode = None
                     self.spent = now
+            if held["on"]:
+                actions += self.plan_input(snap, held, now)
             return actions
+        # self.input stays: its steps are spent per game window until Steam lets go of the input (no loop through
+        # flick -> Steam in front -> restore -> flick); a new game window or Steam letting go starts it over
+        if self.input is not None:
+            self.input["away"] = True
         if held is None or not held["on"]:
             return actions
         app = held["app"]
@@ -928,7 +1073,7 @@ class FocusGuard:
         if win is None or not pid_alive(held["pid"], self.proc):
             if self.episode or self.away:
                 log("focus guard: app %s %s; stopped" % (app, "window gone" if win is None else "process gone"))
-            self.held = self.away = self.episode = None
+            self.held = self.away = self.episode = self.input = None
             self.launch.pop(app, None)
             return actions
         if self.away is None:
@@ -974,23 +1119,31 @@ class FocusGuard:
                 self.episode = None
                 self.spent = now
             return actions
+        own = []  # our own input step right before this steal (not older: a later Steam menu is not ours)
+        if self.input_last is not None and 0.0 <= away["since"] - self.input_last[0] <= self.INPUT_STEAL_SPAN:
+            own = [(self.input_last[0], "our input step %s %.1f s before"
+                    % (self.input_last[1], away["since"] - self.input_last[0]))]
         if launch:
             evidence = [(away["since"], "launch phase: Steam took the front %.0f s after app %s first came to front, "
                          "no user Guide/QAM press since and no input on Steam's UI" % (away["since"] - first, app))]
-        elif app in baselayer and self.episode is None and not [
+        elif app in baselayer and self.episode is None and not own and not [
                 e for e in self.evidence(now) if e[0] >= away["since"] - self.RELOAD_SPAN]:
             self.note("menu", "Steam in front, app %s still in its base layer %s (Steam's menu over the game); "
                       "left alone" % (app, baselayer))
             return actions
         else:
-            evidence = self.evidence(now)
+            evidence = self.evidence(now) + own
         if not evidence and self.episode is None:
             self.note("quiet", "Steam in front and app %s dropped from its base layer %s, but no web helper crash "
                       "or Steam window remap (a quit?); left alone" % (app, baselayer))
             return actions
         ep = self.episode
         if ep is None or ep["app"] != app:
-            ep = self.episode = {"app": app, "opened": now, "tries": 0, "last": None, "back": None}
+            # only our input step explains it (no reload evidence within RELOAD_SPAN of the steal): closes once undone
+            ep = self.episode = {"app": app, "opened": now, "tries": 0, "last": None, "back": None,
+                                 "own": bool(own) and not launch and not [
+                                     e for e in self.evidence(now) if e[0] >= away["since"] - self.RELOAD_SPAN],
+                                 "spent_before": self.spent}
             self.spent = now
             launched = reaper_launch(held["pid"], self.proc)
             log("focus guard: Steam took the front from app %s (window 0x%x on %s, pid %s alive, %s; %s) without "
@@ -999,8 +1152,16 @@ class FocusGuard:
                    "its launch reaper alive" if launched == app else "reaper %s" % launched, held["why"], baselayer,
                    snap.get("focusableApps"), "; ".join("%s (%.0f s ago)" % (w, now - t) for t, w in evidence[-4:])))
         if ep["tries"] >= self.TRIES:
-            self.note("spent", "app %s still behind Steam after %d tries; giving up for this reload" % (app, self.TRIES))
-            return actions
+            fresh = [e for e in self.evidence(now) if ep["last"] is not None and e[0] > ep["last"]]
+            if fresh and ep.get("rearms", 0) < self.REARMS:
+                ep["rearms"] = ep.get("rearms", 0) + 1
+                ep["tries"] = 0
+                log("focus guard: new reload evidence after try %d (%s); app %s gets %d more tries (re-arm %d/%d)"
+                    % (self.TRIES, "; ".join(w for _, w in fresh[-3:]), app, self.TRIES, ep["rearms"], self.REARMS))
+            else:
+                self.note("spent", "app %s still behind Steam after %d tries; giving up for this reload"
+                          % (app, self.TRIES))
+                return actions
         due = away["since"] + self.BACKOFF[0]
         if ep["last"] is not None:
             due = max(due, ep["last"] + self.BACKOFF[min(ep["tries"], len(self.BACKOFF) - 1)])
@@ -1017,9 +1178,79 @@ class FocusGuard:
             self.wake = now + self.BACKOFF[ep["tries"]]
         return actions
 
+    def input_step(self, step, display, window, app):
+        """One input step (see plan_input); returns (what it did, for the log line; whether it may have changed
+        anything). A failure after the first write still counts as a change (Steam may react to it)."""
+        steam = os.environ.get("DISPLAY")
+        sent = [False]
+        try:
+            if step == "flick":
+                x = X(steam)
+                try:
+                    before = x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+                    if before != [app]:
+                        return "skipped, GAMESCOPE_FOCUSED_APP is %s now" % before, False
+                    FLICK_UNTIL[0] = time.monotonic() + self.INPUT_FLICK + 1.0
+                    sent[0] = True
+                    x.set_cardinals(x.root, "GAMESCOPE_FOCUSED_APP", [STEAM_UI_APP])
+                    try:
+                        time.sleep(self.INPUT_FLICK)
+                        during = x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+                        if during != [STEAM_UI_APP]:
+                            return ("focus flick %d -> %d; gamescope set %s meanwhile, left as is"
+                                    % (app, STEAM_UI_APP, during)), True
+                    except (OSError, struct.error) as e:
+                        x.set_cardinals(x.root, "GAMESCOPE_FOCUSED_APP", before)  # put it back before giving up
+                        return "focus flick %d -> %d, read back failed (%s), set back to %s" % (
+                            app, STEAM_UI_APP, e, before), True
+                    x.set_cardinals(x.root, "GAMESCOPE_FOCUSED_APP", before)
+                    return "focus flick %d -> %d -> %d (%.1f s) on %s" % (app, STEAM_UI_APP, app, self.INPUT_FLICK,
+                                                                          steam), True
+                finally:
+                    FLICK_UNTIL[0] = time.monotonic() + 0.3
+                    x.close()
+            if step == "configurator":
+                if self.agent_dir is None:
+                    return "skipped, no DevTools (agent dir unknown)", False
+                sent[0] = True  # a DevTools error may come after Steam ran the call
+                result = cdp_eval(self.agent_dir, """(async () => {
+                    const input = globalThis.SteamClient?.Input;
+                    if (typeof input?.ForceConfiguratorFocus !== 'function') return 'no SteamClient.Input.ForceConfiguratorFocus';
+                    input.ForceConfiguratorFocus(true);
+                    await new Promise(done => setTimeout(done, 400));
+                    input.ForceConfiguratorFocus(false);
+                    return 'ForceConfiguratorFocus true/false';
+                })()""", timeout=5)
+                value = str(result.get("value"))
+                return value, value == "ForceConfiguratorFocus true/false"
+            x = X(display)
+            try:
+                take = x.atom("WM_TAKE_FOCUS")
+                protocols = x.prop(window, "WM_PROTOCOLS") or []
+                if not take or take not in protocols:
+                    return ("skipped, window 0x%x has no WM_TAKE_FOCUS in WM_PROTOCOLS (%d atoms)"
+                            % (window, len(protocols))), False
+                sent[0] = True
+                x.client_message(window, window, "WM_PROTOCOLS", [take, 0])
+                return "WM_TAKE_FOCUS sent to 0x%x on %s" % (window, display), True
+            finally:
+                x.close()
+        except (AgentError, OSError, ValueError, struct.error) as e:
+            return "failed%s: %s" % (" after the first write" if sent[0] else "", e), sent[0]
+
     def apply(self, actions, control_busy=False):
         steam = os.environ.get("DISPLAY")
         for action in actions:
+            if action[0] == "input":
+                _, step, display, window, app, pid, holders, attempt, why = action
+                did, acted = self.input_step(step, display, window, app)
+                if acted:  # only a step that changed something may explain a Steam steal right after it
+                    self.input_last = (self.clock(), step)
+                log("focus guard: input try %d/%d (%s): app %s window 0x%x on %s (pid %s), Steam's window %s holds "
+                    "STEAM_INPUT_FOCUS, %s; did: %s"
+                    % (attempt, len(self.INPUT_STEPS), step, app, window, display, pid,
+                       ", ".join("0x%x" % w for w in holders), why, did))
+                continue
             if action[0] == "release":
                 _, display, window, original, why = action
                 try:
@@ -1070,6 +1301,136 @@ class FocusGuard:
                     % (attempt, self.TRIES, window, display, app, pid, why, ", ".join(steps), e))
 
 
+LAUNCHER_ICONIFY_AFTER = 20.0  # the game window is the focus window this long before its launcher is iconified
+LAUNCHER_ICONIFY_MAX = 3       # iconifies per game process (Connect taking the focus back each time would loop)
+LAUNCHER_ICONIFY_SETTLE = 5.0  # after this, the iconified window back in WM_STATE Normal was restored by someone else
+
+
+def process_exe(pid, proc=Path("/proc")):
+    """The basename of a process's argv[0] (Wine: C:\\...\\upc.exe -> upc.exe), lower case, or ''."""
+    try:
+        first = (proc / str(pid) / "cmdline").read_bytes().split(b"\0")[0].decode(errors="replace")
+    except (OSError, TypeError):
+        return ""
+    return first.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+def iconify_launcher(snap, state, clock=time.monotonic, proc=Path("/proc"), xconn=None):
+    """Opt-in per game (BL_ICONIFY_LAUNCHER=1 in the game's environment; BL_ICONIFY_LAUNCHER=0 in the agent's turns it
+    off for all): iconify the game's launcher window (BL_ICONIFY_LAUNCHER_EXE, default upc.exe = Ubisoft Connect, a
+    software-rendered Chromium that keeps painting behind the game) once the game window was gamescope's focus window
+    for LAUNCHER_ICONIFY_AFTER s. wd2-webcore-1104 XC-SMOKE1: WM_CHANGE_STATE IconicState to the root (gamescope fakes
+    it: WM_STATE Iconic, steamcompmgr.cpp:5360-5368) took Connect's CEF from 114.6 to 1.9 % of a core in <= 6 s, the
+    game window untouched. Never the focus window, never a window of the game's process or with the game's exe. Restored
+    (WM_STATE Normal) when the game window or process is gone, or when the launcher window becomes the focus window
+    (then gamescope takes it out of iconic itself, steamcompmgr.cpp:3780-3784). At most LAUNCHER_ICONIFY_MAX per game
+    process. Every action is logged as "launcher iconify: ...". state: the caller's dict, kept between snapshots."""
+    if os.environ.get("BL_ICONIFY_LAUNCHER") == "0":
+        return None
+    xconn = xconn or X
+    now = clock()
+    steam = os.environ.get("DISPLAY")
+    shown = snap.get("displays", {})
+    focused = snap.get("focusedWindow")
+    done = state.get("iconified")
+    if done:
+        wins = shown.get(done["display"], [])
+        game = next((w for w in wins if w.get("window") == done["game"]), None)
+        mine = next((w for w in wins if w.get("window") == done["window"]), None)
+        if (mine is None or mine.get("map") != "viewable"
+                or (mine.get("wmState") != "iconic" and now - done["at"] >= LAUNCHER_ICONIFY_SETTLE)) \
+                and focused != done["window"]:
+            # Connect destroyed/unmapped that window (a new one may come) or something else restored it: track anew
+            log("launcher iconify: %s window 0x%x on %s is %s; tracking it no more"
+                % (done["exe"], done["window"], done["display"], "gone" if mine is None or mine.get("map") != "viewable"
+                   else "no longer iconic (WM_STATE %s)" % mine.get("wmState")))
+            state["iconified"] = None
+            done = None
+    if done:
+        why = None
+        if focused == done["window"]:
+            why = "the launcher window became the focus window"
+        elif game is None or game.get("map") != "viewable" or not pid_alive(done["pid"], proc):
+            why = "the game window 0x%x or its process %s is gone" % (done["game"], done["pid"])
+        if not why:
+            return None
+        state["iconified"] = None
+        state["game"] = None
+        if not any(w.get("window") == done["window"] for w in wins):
+            log("launcher iconify: %s; launcher window 0x%x is gone, nothing to restore" % (why, done["window"]))
+            return "gone"
+        try:
+            x = xconn(done["display"])
+            try:
+                x.set_prop32(done["window"], "WM_STATE", "WM_STATE", [1, 0])
+            finally:
+                x.close()
+            log("launcher iconify: %s; restored %s window 0x%x on %s (WM_STATE Normal)"
+                % (why, done["exe"], done["window"], done["display"]))
+        except OSError as e:
+            log("launcher iconify: %s; restore of 0x%x failed: %s" % (why, done["window"], e))
+        return "restored"
+    app = snap.get("focusedApp")
+    display, game = None, None
+    for d, wins in shown.items():
+        if d == steam:
+            continue
+        for w in wins:
+            if w.get("window") == focused and w.get("map") == "viewable" and w.get("pid"):
+                display, game = d, w
+    if game is None or app in (None, STEAM_UI_APP):
+        state["game"] = None
+        return None
+    pid = game["pid"]
+    enabled = state.setdefault("enabled", {})
+    if pid not in enabled:
+        enabled[pid] = process_env(pid, proc).get(b"BL_ICONIFY_LAUNCHER") == b"1"
+        if enabled[pid]:
+            log("launcher iconify: on for app %s (window 0x%x on %s, pid %s); waiting %.0f s in front"
+                % (app, focused, display, pid, LAUNCHER_ICONIFY_AFTER))
+    if not enabled[pid]:
+        return None
+    current = state.get("game")
+    if not current or (current["window"], current["pid"]) != (focused, pid):
+        current = state["game"] = {"window": focused, "pid": pid, "since": now}
+    if now - current["since"] < LAUNCHER_ICONIFY_AFTER:
+        return None
+    counts = state.setdefault("count", {})
+    if counts.get(pid, 0) >= LAUNCHER_ICONIFY_MAX:
+        return None
+    exes = [e.strip().lower() for e in os.environ.get("BL_ICONIFY_LAUNCHER_EXE", "upc.exe").split(",") if e.strip()]
+    game_exe = process_exe(pid, proc)
+    targets = []
+    for w in shown.get(display, []):
+        wpid = w.get("pid")
+        if (w.get("window") == focused or not wpid or wpid == pid or w.get("map") != "viewable"
+                or w.get("overrideRedirect") or w.get("inputOnly") or w.get("wmState") == "iconic"):
+            continue
+        exe = process_exe(wpid, proc)
+        if exe in exes and exe != game_exe:
+            geo = w.get("geometry") or [0, 0, 0, 0]
+            targets.append((geo[2] * geo[3], w, exe))
+    if not targets:
+        return None
+    _, target, exe = max(targets, key=lambda t: t[0])
+    counts[pid] = counts.get(pid, 0) + 1
+    try:
+        x = xconn(display)
+        try:
+            x.client_message(x.root, target["window"], "WM_CHANGE_STATE", [3], mask=(1 << 20) | (1 << 19))
+        finally:
+            x.close()
+    except OSError as e:
+        log("launcher iconify: %s window 0x%x on %s: failed: %s" % (exe, target["window"], display, e))
+        return "failed"
+    state["iconified"] = {"display": display, "window": target["window"], "exe": exe, "game": focused, "pid": pid,
+                          "at": now}
+    log("launcher iconify: %s window 0x%x (pid %s) on %s iconified (%d/%d); game app %s window 0x%x (pid %s) in front "
+        "%.0f s" % (exe, target["window"], target["pid"], display, counts[pid], LAUNCHER_ICONIFY_MAX, app, focused, pid,
+                    now - current["since"]))
+    return "iconified"
+
+
 class FocusWatcher(threading.Thread):
 
     def __init__(self, path):
@@ -1080,7 +1441,8 @@ class FocusWatcher(threading.Thread):
         self.seq = 0
         self.vr_focus = VrSceneFocus()
         self.reassert = FocusReassert()
-        self.guard = FocusGuard()
+        self.guard = FocusGuard(agent_dir=Path(path).parent)
+        self.launcher = {}
         self.nudged = {}
 
     NUDGE_TRIES = 3
@@ -1179,6 +1541,10 @@ class FocusWatcher(threading.Thread):
                         self.guard.apply(actions, control_busy=self.reassert.control is not None)
                 except Exception as e:  # never let the focus watcher die
                     log("focus guard: %s: %s" % (type(e).__name__, e))
+            try:
+                iconify_launcher(snap, self.launcher)
+            except Exception as e:  # never let the focus watcher die
+                log("launcher iconify: %s: %s" % (type(e).__name__, e))
             try:
                 self.nudge_dialog(snap)
             except OSError as e:
