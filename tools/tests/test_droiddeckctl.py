@@ -575,6 +575,19 @@ class ComponentCtlTest(FakeAdbTest):
         code, out = self.run_ctl("panvk", "rollback")
         self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
 
+    def test_panvk_use_and_unuse_need_tools_and_a_stopped_session(self):
+        self.provider()
+        code, out = self.run_ctl("panvk", "use")
+        self.assertEqual(0, code, out)
+        code, out = self.run_ctl("panvk", "unuse")
+        self.assertEqual(0, code, out)
+        self.assertEqual([{"op": "use"}, {"op": "unuse"}], [c["request"] for c in self.calls("panvk")])
+        self.assertEqual(2, len(self.calls("access")))
+        self.provider(session="READY")
+        code, out = self.run_ctl("panvk", "use")
+        self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
+        self.assertEqual(2, len(self.calls("panvk")))
+
     def test_panvk_rejects_other_names_and_status_needs_no_tools(self):
         self.provider()
         other = self.dir / "PanVK-Kbase-glibc.zip"

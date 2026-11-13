@@ -35,8 +35,10 @@ class PanvkOwnSlotTest {
     private lateinit var legacy: PanvkPackage.Legacy
     private val commit = "10a845b24cce8278838951dbc603fd9c6d8d9f8f"
 
-    private class FakeHost(var bundledZip: ByteArray? = null, var bundledVersion: String = "") : PanvkPackage.Host {
-        override val sessionRunning = false
+    private class FakeHost(
+        var bundledZip: ByteArray? = null, var bundledVersion: String = "",
+        override val sessionDriver: String? = null, override val sessionRunning: Boolean = false,
+    ) : PanvkPackage.Host {
         override val bundled get() = bundledZip?.let { PanvkPackage.Bundled(bundledVersion, sha256(it)) }
         override fun openBundled(): InputStream? = bundledZip?.inputStream()
     }
@@ -147,7 +149,7 @@ class PanvkOwnSlotTest {
         // the file name path too (no meta name)
         assertFalse(LinuxVulkanDriverManager.isReservedId(m.uniqueId(LinuxVulkanDriverManager.sanitizeId("blobferry panvk"))))
         assertFalse(m.removeDriver("Blobferry_PanVK"))
-        assertFalse(m.removeDriver("blobferry_panvk"))
+        m.removeDriver("blobferry_panvk")
         assertEquals(before, snapshot(ours.slot))
         assertTrue(m.isPanvk(PanvkPackage.SLOT_ID))
         File(context.filesDir, LinuxVulkanDriverManager.DIR_NAME).deleteRecursively()
@@ -212,10 +214,16 @@ class PanvkOwnSlotTest {
     }
 
     @Test fun theSessionKeepsAnExistingPanvkAndUsesOursOnlyWhenItIsTheOnlyOne() {
-        assertEquals("PanVK_Kbase", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "PanVK_Kbase")))
-        assertEquals("My-PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "My-PanVK")))
-        assertEquals("Blobferry_PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK")))
-        assertEquals("", LinuxVulkanDriver.pickSessionPanvk(emptyList()))
+        val ours = setOf("Blobferry_PanVK")
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "PanVK_Kbase"), ours, null))
+        assertEquals("My-PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "My-PanVK"), ours, null))
+        assertEquals("Blobferry_PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK"), ours, null))
+        assertEquals("", LinuxVulkanDriver.pickSessionPanvk(emptyList(), ours, null))
+        // panvk use stored ours; a stored id that is gone falls back to the automatic pick
+        assertEquals("Blobferry_PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "PanVK_Kbase"), ours, "Blobferry_PanVK"))
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.pickSessionPanvk(listOf("PanVK_Kbase"), ours, "Blobferry_PanVK"))
+        // a slot of that name without owner blobferry is no different from any other PanVK (review L2)
+        assertEquals("Blobferry_PanVK", LinuxVulkanDriver.pickSessionPanvk(listOf("Blobferry_PanVK", "PanVK_Kbase"), emptySet(), null))
     }
 
     @Test fun migrationCopiesABundledPanvkKbaseAndLeavesTheSource() {
@@ -263,6 +271,205 @@ class PanvkOwnSlotTest {
         val log = events()
         assertEquals(4, log.size)
         assertTrue(log.all { it[2] == "refused" && it[7] == "NOT_OURS" })
+    }
+
+    // ---- review M1: which PanVK the session uses; L1: no write during a session; L2: owner meta, not the name ----
+
+    @Test fun statusAndTheInstallLogSayWhenTheSessionUsesAnotherPanvk() {
+        foreignSlot(File(drivers, "PanVK_Kbase"))
+        val elsewhere = FakeHost(sessionDriver = "PanVK_Kbase")
+        val status = install("v1", host = elsewhere)
+        assertEquals(false, status.inUse)
+        val json = status.json()
+        assertEquals(false, json.getBoolean("inUse"))
+        assertEquals("PanVK_Kbase", json.getString("sessionDriver"))
+        assertEquals("next session start", json.getString("sessionFrom"))
+        val session = json.getJSONObject("sessionPanvk")
+        assertEquals("PanVK_Kbase", session.getString("id"))
+        assertEquals(md5(so("users-own")), session.getString("soMd5"))
+        assertEquals("v26.3.1+users-own", session.getString("version"))
+        assertFalse(session.getBoolean("ours"))
+        assertEquals("the session uses PanVK_Kbase; this changed Blobferry_PanVK, which is not in use. Run `droiddeckctl panvk use` to switch",
+            status.note("install"))
+        assertEquals("the session uses PanVK_Kbase, not Blobferry_PanVK; run `droiddeckctl panvk use` to switch", status.note("status"))
+        install("v2", host = elsewhere)
+        PanvkPackage.rollback(layout, elsewhere)
+        for (line in events()) {
+            assertEquals(9, line.size)
+            assertEquals("not in use: session uses PanVK_Kbase", line[8])
+            assertEquals("ok", line[7])
+        }
+        assertEquals("the session uses the runtime's own driver, not Blobferry_PanVK; run `droiddeckctl panvk use` to switch",
+            PanvkPackage.status(layout, FakeHost(sessionDriver = "")).note("status"))
+
+        val here = PanvkPackage.status(layout, FakeHost(sessionDriver = PanvkPackage.SLOT_ID))
+        assertEquals(true, here.inUse)
+        assertEquals(null, here.note("install"))
+        val ours = here.json().getJSONObject("sessionPanvk")
+        assertTrue(ours.getBoolean("ours"))
+        assertEquals("v1", ours.getString("version"))
+        assertEquals(md5(so("v1")), ours.getString("soMd5"))
+        install("v3", host = FakeHost(sessionDriver = PanvkPackage.SLOT_ID))
+        assertEquals(8, events().last().size)
+        // unknown session driver (the pure entry points): no claim either way
+        assertTrue(PanvkPackage.status(layout, FakeHost()).json().isNull("inUse"))
+    }
+
+    @Test fun ensureCurrentDefersEveryWriteWhileASessionRuns() {
+        val busy = FakeHost(zip("v2"), "v2", sessionRunning = true)
+        assertEquals("deferred", PanvkPackage.ensureCurrent(layout, busy, legacy))
+        assertFalse(layout.slot.exists())
+        install("v1", source = PanvkPackage.SOURCE_BUNDLED)
+        val before = snapshot(layout.slot)
+        assertEquals("deferred", PanvkPackage.ensureCurrent(layout, busy, legacy))
+        assertEquals(before, snapshot(layout.slot))
+        assertEquals(listOf("install"), events().map { it[2] })
+        assertEquals("upgraded", PanvkPackage.ensureCurrent(layout, FakeHost(zip("v2"), "v2"), legacy))
+    }
+
+    @Test fun aSlotNamedLikeOursWithoutOwnerIsAnOrdinaryDriver() {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val m = LinuxVulkanDriverManager(context)
+        val root = File(context.filesDir, LinuxVulkanDriverManager.DIR_NAME)
+        root.deleteRecursively()
+        try {
+            foreignSlot(m.getDriverDir("Blobferry_PanVK"), "old-import")
+            foreignSlot(m.getDriverDir("blobferry_panvk"), "lower")
+            assertTrue(m.isPanvk("Blobferry_PanVK"))
+            assertFalse(m.isOurPanvk("Blobferry_PanVK"))
+            assertFalse(m.isOurPanvk("blobferry_panvk"))
+            assertTrue(m.removeDriver("blobferry_panvk"))
+            assertTrue(m.removeDriver("Blobferry_PanVK"))
+            assertFalse(m.getDriverDir("Blobferry_PanVK").exists())
+            // the import path still never takes the reserved id
+            assertFalse(LinuxVulkanDriverManager.isReservedId(m.uniqueId("Blobferry_PanVK")))
+            val ours = PanvkPackage.layout(context)
+            PanvkPackage.install(ours, FakeHost(), PanvkPackage.prepare(ours, zip("v2").inputStream()), "adb")
+            assertTrue(m.isOurPanvk("Blobferry_PanVK"))
+            assertFalse(m.removeDriver("Blobferry_PanVK"))
+            assertTrue(m.isPanvk("Blobferry_PanVK"))
+        } finally {
+            root.deleteRecursively()
+            File(context.filesDir, PanvkPackage.STORE).deleteRecursively()
+            File(context.filesDir, ComponentLog.DIR).deleteRecursively()
+        }
+    }
+
+    /** The phone's state: PanVK_Kbase (foreign) + our slot, a Robolectric context with the real driver dir and prefs. */
+    private fun withPhone(block: (Context, LinuxVulkanDriverManager) -> Unit) {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val prefs = context.getSharedPreferences("session", Context.MODE_PRIVATE)
+        val m = LinuxVulkanDriverManager(context)
+        fun clean() {
+            prefs.edit().clear().commit()
+            File(context.filesDir, LinuxVulkanDriverManager.DIR_NAME).deleteRecursively()
+            File(context.filesDir, PanvkPackage.STORE).deleteRecursively()
+            File(context.filesDir, ComponentLog.DIR).deleteRecursively()
+            com.droiddeck.launcher.session.SessionState.running = false
+        }
+        clean()
+        try {
+            foreignSlot(m.getDriverDir("PanVK_Kbase"))
+            block(context, m)
+        } finally {
+            clean()
+        }
+    }
+
+    private fun installOurs(context: Context) = PanvkPackage.layout(context).let { ours ->
+        PanvkPackage.install(ours, FakeHost(), PanvkPackage.prepare(ours, zip("v26.3.1-234-237").inputStream()), "adb")
+    }
+
+    private fun prefsOf(context: Context) = context.getSharedPreferences("session", Context.MODE_PRIVATE).all.toMap()
+
+    private fun phoneEvents(context: Context) = ComponentLog.tail(ComponentLog.file(context.filesDir), 100).map { it.split('\t') }
+
+    @Test fun useMakesOursTheAutomaticSessionPanvkAndUnuseRestoresExactly() = withPhone { context, m ->
+        installOurs(context)
+        val kbase = snapshot(m.getDriverDir("PanVK_Kbase"))
+        val prefsBefore = prefsOf(context)
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.sessionDriver(context, true))
+        val notInUse = PanvkPackage.status(PanvkPackage.layout(context), PanvkPackage.host(context, mali = true))
+        assertEquals(false, notInUse.inUse)
+        val used = PanvkPackage.use(context, mali = true)
+        assertTrue(used.changed)
+        assertEquals("PanVK_Kbase", used.from)
+        assertEquals(PanvkPackage.SLOT_ID, used.to)
+        assertEquals(true, used.status.inUse)
+        assertEquals(PanvkPackage.SLOT_ID, LinuxVulkanDriver.sessionDriver(context, true))
+        assertEquals(PanvkPackage.SLOT_ID, SessionPrefs.sessionPanvk(context))
+        assertFalse(prefsOf(context).containsKey("linuxDriver"))
+        assertEquals(false, PanvkPackage.use(context, mali = true).changed)
+        assertEquals(kbase, snapshot(m.getDriverDir("PanVK_Kbase")))
+
+        val back = PanvkPackage.unuse(context, mali = true)
+        assertEquals("PanVK_Kbase", back.to)
+        assertEquals(prefsBefore, prefsOf(context))
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.sessionDriver(context, true))
+        assertEquals("NO_PRIOR", code { PanvkPackage.unuse(context, mali = true) })
+        assertEquals(kbase, snapshot(m.getDriverDir("PanVK_Kbase")))
+        assertEquals(listOf("use", "PanVK_Kbase", "Blobferry_PanVK", "sessionPanvk", "ok"),
+            phoneEvents(context).first { it[2] == "use" }.let { listOf(it[2], it[3], it[4], it[6], it[7]) })
+        assertEquals(listOf("unuse", "Blobferry_PanVK", "PanVK_Kbase"), phoneEvents(context).first { it[2] == "unuse" }.let { listOf(it[2], it[3], it[4]) })
+    }
+
+    @Test fun useKeepsTheBridgeForTheGames() = withPhone { context, m ->
+        installOurs(context)
+        val bridge = m.getDriverDir(LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID).apply { mkdirs() }
+        File(bridge, LinuxVulkanDriverManager.BRIDGE_LIB_NAME).writeBytes(so("bridge"))
+        File(bridge, "icd.json").writeText("{}")
+        assertEquals(LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID, SessionPrefs.linuxDriver(context, mali = true))
+        val games = LinuxVulkanDriver.gameDriver(context, SessionPrefs.linuxDriver(context, mali = true))
+        val prefsBefore = prefsOf(context)
+        PanvkPackage.use(context, mali = true)
+        assertEquals(LinuxVulkanDriverManager.BUNDLED_BRIDGE_ID, SessionPrefs.linuxDriver(context, mali = true))
+        assertEquals(games, LinuxVulkanDriver.gameDriver(context, SessionPrefs.linuxDriver(context, mali = true)))
+        assertEquals(PanvkPackage.SLOT_ID, LinuxVulkanDriver.sessionDriver(context, true))
+        PanvkPackage.unuse(context, mali = true)
+        assertEquals(prefsBefore, prefsOf(context))
+    }
+
+    @Test fun useSwapsAnExplicitPanvkChoiceAndUnuseRestoresTheKeyAsItWas() = withPhone { context, _ ->
+        installOurs(context)
+        // an older app version stored the choice under linuxDriver.steam only
+        context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().putString("linuxDriver.steam", "PanVK_Kbase").commit()
+        val prefsBefore = prefsOf(context)
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.sessionDriver(context, true))
+        PanvkPackage.use(context, mali = true)
+        assertEquals(PanvkPackage.SLOT_ID, SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER))
+        assertEquals(null, SessionPrefs.sessionPanvk(context))
+        assertEquals(PanvkPackage.SLOT_ID, LinuxVulkanDriver.sessionDriver(context, true))
+        PanvkPackage.unuse(context, mali = true)
+        assertEquals(prefsBefore, prefsOf(context))
+
+        // a choice made on the driver page after use stays
+        SessionPrefs.setLinuxDriver(context, "PanVK_Kbase")
+        PanvkPackage.use(context, mali = true)
+        SessionPrefs.setLinuxDriver(context, "PanVK_Kbase")
+        assertEquals("CHANGED_SINCE", code { PanvkPackage.unuse(context, mali = true) })
+        assertEquals("PanVK_Kbase", SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER))
+    }
+
+    @Test fun useIsRefusedWithoutTouchingAnything() = withPhone { context, m ->
+        val prefsBefore = prefsOf(context)
+        assertEquals("NOT_INSTALLED", code { PanvkPackage.use(context, mali = true) })
+        installOurs(context)
+        val turnip = m.getDriverDir("Turnip").apply { mkdirs() }
+        File(turnip, LinuxVulkanDriverManager.LIB_NAME).writeBytes(so("turnip"))
+        File(turnip, "icd.json").writeText("{}")
+        SessionPrefs.setStoredChoice(context, SessionPrefs.LINUX_DRIVER, "Turnip")
+        val withTurnip = prefsOf(context)
+        assertEquals("NOT_PANVK_SESSION", code { PanvkPackage.use(context, mali = true) })
+        assertEquals(withTurnip, prefsOf(context))
+        SessionPrefs.setStoredChoice(context, SessionPrefs.LINUX_DRIVER, null)
+        assertEquals(prefsBefore, prefsOf(context))
+        com.droiddeck.launcher.session.SessionState.running = true
+        assertEquals("SESSION_RUNNING", code { PanvkPackage.use(context, mali = true) })
+        assertEquals(prefsBefore, prefsOf(context))
+        assertFalse(File(PanvkPackage.layout(context).store, "use.json").exists())
+        assertEquals(listOf("NOT_INSTALLED", "NOT_PANVK_SESSION", "SESSION_RUNNING"),
+            phoneEvents(context).filter { it[2] == "refused" }.map { it[7] })
+        assertTrue(phoneEvents(context).filter { it[2] == "refused" }.all { it[8] == "use" })
     }
 
     companion object {

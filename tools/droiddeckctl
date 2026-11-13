@@ -1168,13 +1168,15 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
         sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
 
-    pvk = commands.add_parser("panvk", help="PanVK (Mali session driver) in our own Blobferry_PanVK slot: status, install, rollback, reset")
+    pvk = commands.add_parser("panvk", help="PanVK (Mali session driver) in our own Blobferry_PanVK slot: status, install, rollback, reset, use, unuse")
     pvk_ops = pvk.add_subparsers(dest="panvk_op", required=True)
-    pvk_ops.add_parser("status", help="our PanVK: source, version, commit, .so md5, previous; other PanVK slots read-only")
+    pvk_ops.add_parser("status", help="our PanVK: source, version, commit, .so md5, previous, inUse + the session's PanVK; other PanVK slots read-only")
     pvk_switches = [
         pvk_ops.add_parser("install", help="install a panvk-kbase-<V>.zip (debugging tools; the old .so is kept)"),
         pvk_ops.add_parser("rollback", help="swap the installed PanVK and the previous one (debugging tools)"),
         pvk_ops.add_parser("reset", help="back to the PanVK the APK bundles, the current one kept (debugging tools)"),
+        pvk_ops.add_parser("use", help="make Blobferry_PanVK the session's PanVK (debugging tools; the choice before is kept for unuse)"),
+        pvk_ops.add_parser("unuse", help="restore the driver choice from before the last use (debugging tools)"),
     ]
     pvk_switches[0].add_argument("file", help="the component zip, e.g. ../bridge/build/release/panvk/panvk-kbase-v26.3.1-234-237.zip")
     pvk_switches[0].add_argument("--sha256", help="expected sha256 (default: <zip>.sha256 next to the zip, when it exists)")

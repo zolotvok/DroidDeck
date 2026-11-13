@@ -74,8 +74,9 @@ object SessionFiles {
             .onFailure { Log.w(TAG, "bundled Mali system driver not installed", it) }
         if (com.droiddeck.launcher.core.DeviceSupport.mali()) {
             // PanVK, our own Blobferry_PanVK slot only: an interrupted switch is finished, the slot is created / migrated /
-            // upgraded to the bundled one (newer or a known-stale .so). Other PanVK slots and the driver choice stay.
-            runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureCurrent(context) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
+            // upgraded to the bundled one (newer or a known-stale .so). Other PanVK slots and the driver choice stay. Deferred
+            // while a session runs (stage() from a guest command), never at the session start's own stage().
+            runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureCurrent(context, startsSession) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
             // env defaults: the installed manifest to the guest while it is newer than the bundled one
             MaliEnvDefaults.publish(context)
         }

@@ -271,8 +271,7 @@ class AgentBridgeProvider : ContentProvider() {
         val chosen = SessionPrefs.linuxDriver(context)
         val manager = LinuxVulkanDriverManager(context)
         fun label(id: String?) = if (id.isNullOrEmpty()) JSONObject.NULL else manager.getDriverName(id)
-        val session = if (SessionState.running) SessionState.sessionDriver
-            else LinuxVulkanDriver.effective(context, chosen).ifEmpty { null }
+        val session = LinuxVulkanDriver.sessionDriver(context).ifEmpty { null }
         val games = if (SessionState.running) SessionState.gameDriver
             else LinuxVulkanDriver.gameDriver(context, chosen).ifEmpty { null }
         return JSONObject()
@@ -341,12 +340,17 @@ class AgentBridgeProvider : ContentProvider() {
     private fun openInbox(file: File) = java.nio.file.Files.newInputStream(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
 
     /** PanVK component ops (gpu/PanvkPackage, our Blobferry_PanVK slot only), as blobferry: status always (with the other PanVK
-     *  slots listed read-only), install/rollback/reset behind Debugging tools. */
+     *  slots listed read-only and the session's PanVK), install/rollback/reset/use/unuse behind Debugging tools. */
     private fun panvk(context: Context, request: JSONObject): JSONObject {
         val pv = com.droiddeck.launcher.gpu.PanvkPackage
         val op = request.optString("op", "status")
         if (op != "status") AgentAccess.requireCommands(context)
         return try {
+            if (op == "use" || op == "unuse") {
+                val choice = if (op == "use") pv.use(context) else pv.unuse(context)
+                return choice.status.json().put("ok", true).put("command", "panvk").put("op", op).put("from", choice.from)
+                    .put("to", choice.to).put("changed", choice.changed).put("note", choice.note).put("appliesAt", "next session start")
+            }
             val status = when (op) {
                 "status" -> pv.status(context)
                 "install" -> {
@@ -361,7 +365,8 @@ class AgentBridgeProvider : ContentProvider() {
                 "reset" -> pv.reset(context)
                 else -> throw AgentException("INVALID_REQUEST", "Unknown panvk op '$op'")
             }
-            status.json().put("ok", true).put("command", "panvk").put("op", op).apply { if (op != "status") put("appliesAt", "next session start") }
+            status.json().put("ok", true).put("command", "panvk").put("op", op).put("note", status.note(op) ?: JSONObject.NULL)
+                .apply { if (op != "status") put("appliesAt", "next session start") }
         } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
             error(e.code, e.message ?: e.code)
         }

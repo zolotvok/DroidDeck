@@ -10,7 +10,8 @@ import java.util.TimeZone
 
 /**
  * The updater's install log, `files/components/install.log`: append-only TSV, one line per event
- * (time, component, op, from-version, to-version, sha256, source, result). Rotated at [MAX_BYTES] into one `.1`.
+ * (time, component, op, from-version, to-version, sha256, source, result[, note]). The optional 9th column only follows the
+ * 8 fixed ones (a PanVK change while the session runs another PanVK says so there). Rotated at [MAX_BYTES] into one `.1`.
  * Never throws into the caller: a log that cannot be written is only a logcat warning. [app, Claude Opus 5.5] 2026-11-13
  */
 object ComponentLog {
@@ -26,10 +27,12 @@ object ComponentLog {
     const val RESTAGE = "restage"
     const val UPGRADE_AT_START = "upgrade-at-start"
     const val MIGRATE = "migrate"
+    const val USE = "use"
+    const val UNUSE = "unuse"
     const val REFUSED = "refused"
     const val OK = "ok"
 
-    val FIELDS = listOf("time", "component", "op", "from", "to", "sha256", "source", "result")
+    val FIELDS = listOf("time", "component", "op", "from", "to", "sha256", "source", "result", "note")
     private val LOCK = Any()
 
     /** The log of the app whose files dir is [filesDir]. */
@@ -46,11 +49,12 @@ object ComponentLog {
 
     fun append(
         log: File, component: String, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String?,
-        now: Long = System.currentTimeMillis(),
+        note: String? = null, now: Long = System.currentTimeMillis(),
     ) {
         try {
             val time = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(now))
-            val line = listOf(time, component, op, from, to, sha256, source, result).joinToString("\t") { clean(it) } + "\n"
+            val fields = listOf(time, component, op, from, to, sha256, source, result) + listOfNotNull(note)
+            val line = fields.joinToString("\t") { clean(it) } + "\n"
             synchronized(LOCK) {
                 log.parentFile?.mkdirs()
                 if (log.isFile && log.length() + line.length > MAX_BYTES) {

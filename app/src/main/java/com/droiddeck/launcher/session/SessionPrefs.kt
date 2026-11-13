@@ -442,8 +442,8 @@ object SessionPrefs {
         storedLinuxDriver(context) ?: maliDefaultLinuxDriver(context, mali)
 
     private fun storedLinuxDriver(context: Context): String? =
-        prefs(context).getString("linuxDriver", null)
-            ?: prefs(context).getString("linuxDriver.steam", null)
+        prefs(context).getString(LINUX_DRIVER, null)
+            ?:prefs(context).getString("linuxDriver.steam", null)
             ?: prefs(context).getString("linuxDriver.desktop", null)
 
     // Mali with no Linux driver chosen: games draw on the bundled Mali system driver (the session stays on PanVK, see
@@ -454,7 +454,26 @@ object SessionPrefs {
     }
 
     fun setLinuxDriver(context: Context, id: String) {
-        prefs(context).edit().putString("linuxDriver", id).apply()
+        prefs(context).edit().putString(LINUX_DRIVER, id).apply()
+    }
+
+    const val LINUX_DRIVER = "linuxDriver"
+    const val SESSION_PANVK = "sessionPanvk"
+
+    /** The PanVK the session uses while the Linux driver choice is automatic or the bridge (droiddeckctl panvk use); null =
+     *  the automatic pick (LinuxVulkanDriver.pickSessionPanvk). */
+    fun sessionPanvk(context: Context): String? = prefs(context).getString(SESSION_PANVK, null)
+
+    /** The raw stored value of [key] ([LINUX_DRIVER] or [SESSION_PANVK]; null = not stored), for panvk use / unuse. */
+    fun storedChoice(context: Context, key: String): String? {
+        require(key == LINUX_DRIVER || key == SESSION_PANVK) { "not a driver choice: $key" }
+        return prefs(context).getString(key, null)
+    }
+
+    /** Sets [key] to exactly [value]; null removes it (the state before a panvk use comes back as it was). */
+    fun setStoredChoice(context: Context, key: String, value: String?): Boolean {
+        require(key == LINUX_DRIVER || key == SESSION_PANVK) { "not a driver choice: $key" }
+        return prefs(context).edit().apply { if (value == null) remove(key) else putString(key, value) }.commit()
     }
 
     const val GPU_DRIVERS_AUTO = "auto"

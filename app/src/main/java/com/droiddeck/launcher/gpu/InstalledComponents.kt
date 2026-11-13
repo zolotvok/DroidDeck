@@ -30,8 +30,11 @@ object InstalledComponents {
     fun panvk(s: PanvkPackage.Status) = Row(
         PanvkPackage.COMPONENT, s.version, s.source, s.commit, s.date, s.changelog,
         PanvkPackage.LIB, s.soMd5, s.previous, s.previous != null && s.canSwitch && !s.notOurs,
-        // the other PanVK slots (PanVK_Kbase, imports) are listed read-only: "user-installed, not managed"
-        JSONObject().put("slot", s.slot).put("notOurs", s.notOurs).put("foreign", JSONArray(s.foreign.map { it.json() })),
+        // the other PanVK slots (PanVK_Kbase, imports) are listed read-only: "user-installed, not managed"; inUse / sessionPanvk
+        // say which PanVK the session actually runs (review M1)
+        JSONObject().put("slot", s.slot).put("notOurs", s.notOurs).put("foreign", JSONArray(s.foreign.map { it.json() }))
+            .put("inUse", s.inUse ?: JSONObject.NULL).put("sessionDriver", s.session?.driver?.ifEmpty { null } ?: JSONObject.NULL)
+            .put("sessionPanvk", s.session?.panvk ?: JSONObject.NULL).put("note", s.note("status") ?: JSONObject.NULL),
     )
 
     fun envDefaults(s: MaliEnvDefaults.Status) = Row(

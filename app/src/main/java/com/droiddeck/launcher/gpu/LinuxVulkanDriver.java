@@ -7,7 +7,9 @@ import com.droiddeck.launcher.runtime.LinuxRuntime;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class LinuxVulkanDriver {
     private static final String TAG = "LinuxVulkanDriver";
@@ -39,35 +41,58 @@ public final class LinuxVulkanDriver {
     /** The driver the session itself (Steam, gamescope, the desktop) draws with. With the bridge chosen it is PanVK,
      *  unless the experimental "session on the Mali system driver" setting puts the session on the bridge too. */
     public static String effective(Context context, String value) {
+        return effective(context, value, com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali());
+    }
+
+    static String effective(Context context, String value, boolean mali) {
         if (value != null && !value.isEmpty() && !isBridge(context, value)) return value;
         if (isBridge(context, value) && com.droiddeck.launcher.session.SessionPrefs.INSTANCE.bridgeSession(context)
                 && !gameDriver(context, value).isEmpty()) {
             Log.i(TAG, "Mali system driver for the session too (experimental setting): " + value);
             return value;
         }
-        if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return "";
+        if (!mali) return "";
         String id = sessionPanvk(context);
         if (!id.isEmpty()) Log.i(TAG, "Mali GPU and no Linux driver chosen; using PanVK " + id);
         return id;
+    }
+
+    /** The session's own Linux driver ("" = the runtime's): what the running session was started with, else what a session
+     *  started now uses (SessionService). The one answer for status lines and droiddeckctl panvk use. */
+    public static String sessionDriver(Context context) {
+        return sessionDriver(context, com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali());
+    }
+
+    static String sessionDriver(Context context, boolean mali) {
+        if (com.droiddeck.launcher.session.SessionState.INSTANCE.getRunning()) {
+            String running = com.droiddeck.launcher.session.SessionState.INSTANCE.getSessionDriver();
+            return running == null ? "" : running;
+        }
+        return effective(context, com.droiddeck.launcher.session.SessionPrefs.INSTANCE.linuxDriver(context, mali), mali);
     }
 
     /** The PanVK the session uses when no non-bridge Linux driver is chosen ("" without one), see [pickSessionPanvk]. */
     public static String sessionPanvk(Context context) {
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
         List<String> panvk = new ArrayList<>();
-        for (String id : m.enumerateInstalledDrivers()) if (m.isPanvk(id)) panvk.add(id);
-        return pickSessionPanvk(panvk);
+        Set<String> ours = new HashSet<>();
+        for (String id : m.enumerateInstalledDrivers()) {
+            if (!m.isPanvk(id)) continue;
+            panvk.add(id);
+            if (m.isOurPanvk(id)) ours.add(id);
+        }
+        return pickSessionPanvk(panvk, ours, com.droiddeck.launcher.session.SessionPrefs.INSTANCE.sessionPanvk(context));
     }
 
     /**
      * Decision D10 (b): a PanVK the user has (an import, or the PanVK_Kbase slot of an older app version) keeps being
-     * used, as before; our own Blobferry_PanVK is the session's PanVK only when it is the only one, i.e. on a new install.
-     * Nothing is stored, so no choice changes: an existing phone stays on its PanVK until the user picks ours.
+     * used, as before; our own Blobferry_PanVK ([ours], by its owner meta) is the session's PanVK only when it is the only
+     * one, i.e. on a new install. D10 (c): [preferred] (stored only by droiddeckctl panvk use) wins while it is installed.
      */
-    static String pickSessionPanvk(List<String> sortedPanvkIds) {
-        for (String id : sortedPanvkIds) if (!LinuxVulkanDriverManager.isReservedId(id)) return id;
-        for (String id : sortedPanvkIds) if (LinuxVulkanDriverManager.isReservedId(id)) return id;
-        return "";
+    static String pickSessionPanvk(List<String> sortedPanvkIds, Set<String> ours, String preferred) {
+        if (preferred != null && sortedPanvkIds.contains(preferred)) return preferred;
+        for (String id : sortedPanvkIds) if (!ours.contains(id)) return id;
+        return sortedPanvkIds.isEmpty() ? "" : sortedPanvkIds.get(0);
     }
 
     /** The driver the game processes draw with when it is not the session's: the bridge, or "" for the session's own. */

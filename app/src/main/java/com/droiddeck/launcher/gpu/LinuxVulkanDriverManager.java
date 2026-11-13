@@ -36,7 +36,10 @@ public class LinuxVulkanDriverManager {
     /** Our own PanVK slot (gpu/PanvkPackage): only PanvkPackage writes it; no import gets or replaces this id. */
     public static final String RESERVED_PANVK_ID = "Blobferry_PanVK";
 
-    /** The reserved id in any letter case (a case-folding file system or a later rename must not reach our slot). */
+    /** The owner gpu/PanvkPackage writes into our slot's meta.json. */
+    public static final String RESERVED_PANVK_OWNER = "blobferry";
+
+    /** The reserved id in any letter case: an import never gets it (a case-folding file system must not reach our slot). */
     public static boolean isReservedId(String id) {
         return id != null && id.equalsIgnoreCase(RESERVED_PANVK_ID);
     }
@@ -68,6 +71,14 @@ public class LinuxVulkanDriverManager {
 
     public boolean isPanvk(String id) {
         return isInstalled(id) && new File(getDriverDir(id), PANVK_LIB_NAME).isFile();
+    }
+
+    /** Our own PanVK slot: the reserved id whose meta.json says owner blobferry. A foreign slot of that name (an import from
+     *  an older app version) is an ordinary driver: removable, normal priority. */
+    public boolean isOurPanvk(String id) {
+        if (!isReservedId(id) || id.contains("/")) return false;
+        JSONObject m = readMeta(id);
+        return m != null && RESERVED_PANVK_OWNER.equals(m.optString("owner", ""));
     }
 
     public boolean hasPanvk() {
@@ -127,7 +138,7 @@ public class LinuxVulkanDriverManager {
     /** Deletes an imported driver; false (nothing deleted) for a bad id or our own PanVK slot (PanvkPackage manages it). */
     public boolean removeDriver(String id) {
         if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return false;
-        if (isReservedId(id)) {
+        if (isOurPanvk(id)) {
             Log.w(TAG, "not removing " + id + ": the Blobferry PanVK slot is managed by the PanVK updater (roll back / reset)");
             return false;
         }

@@ -5,6 +5,7 @@ import android.util.Log
 import com.droiddeck.launcher.BuildConfig
 import com.droiddeck.launcher.core.ArchivePaths
 import com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException
+import com.droiddeck.launcher.session.SessionPrefs
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -28,14 +29,15 @@ import java.util.zip.ZipFile
  * meta.json, icd.json, package.json), `applying` = the journal. The live .so is replaced by one rename, so the slot never
  * lacks a driver; recover() finishes the bookkeeping of a switch a crash interrupted. ensureCurrent() (every stage())
  * creates the slot, copies a bundled PanVK_Kbase into it once (migration), and upgrades it when the APK bundles a newer
- * one or its .so is a known-stale build. Nothing here changes a driver choice. Switches only while no session runs.
+ * one or its .so is a known-stale build. Nothing but [use] / [unuse] (an explicit droiddeckctl command, D10 c) changes a
+ * driver choice. Switches only while no session runs. Status says which PanVK the session uses (review M1).
  * [app, Claude Opus 5.5] 2026-11-06, own slot 2026-11-13
  */
 object PanvkPackage {
     private const val TAG = "PanvkPackage"
     const val SLOT_ID = LinuxVulkanDriverManager.RESERVED_PANVK_ID
     const val SLOT_NAME = "PanVK (Blobferry)"
-    const val OWNER = "blobferry"
+    const val OWNER = LinuxVulkanDriverManager.RESERVED_PANVK_OWNER
     const val STORE = "panvk-blobferry"
     /** The slot the APK's bundled PanVK went into before 0.6.9-mali.2 (now someone else's; only read once, to migrate). */
     const val LEGACY_SLOT_ID = "PanVK_Kbase"
@@ -51,6 +53,8 @@ object PanvkPackage {
     private const val STATE = "state.json"
     private const val JOURNAL = "applying"
     private const val PACKAGE = "package.json"
+    /** The driver choice before the last [use] (key + exact value), so [unuse] restores it. */
+    private const val USE_RECORD = "use.json"
     val VERSION = Regex("[A-Za-z0-9._+-]{1,48}")
     private val SUM_LINE = Regex("""^([0-9a-f]{64}) [ *](?:\./)?(.+)$""")
     private val COMMIT = Regex("""\b([0-9a-f]{40})\b""")
@@ -75,6 +79,8 @@ object PanvkPackage {
         val bundled: Bundled?
         /** The bundled zip (reset, ensureCurrent), null without one. */
         fun openBundled(): InputStream? = null
+        /** The Linux driver the session uses (LinuxVulkanDriver.sessionDriver; "" = the runtime's own), null = unknown. */
+        val sessionDriver: String? get() = null
     }
 
     class Bundled(val version: String, val sha256: String)
@@ -93,6 +99,9 @@ object PanvkPackage {
             .put("managed", false).put("note", "user-installed, not managed")
     }
 
+    /** The driver the session uses ([driver] "" = the runtime's own): [panvk] describes it when it is a PanVK slot. */
+    class SessionUse(val driver: String, val ours: Boolean, val panvk: JSONObject?, val running: Boolean)
+
     class Status(
         val source: String, val version: String, val driverVersion: String, val commit: String, val soMd5: String,
         val previous: String?, val bundledVersion: String?, val installed: Boolean, val canSwitch: Boolean, val slot: String,
@@ -100,13 +109,35 @@ object PanvkPackage {
         /** The slot exists but its meta.json does not say owner blobferry: nothing here writes it. */
         val notOurs: Boolean = false,
         val foreign: List<Foreign> = emptyList(),
+        /** null when the caller does not know the session's driver (the pure entry points' hosts). */
+        val session: SessionUse? = null,
     ) {
+        /** Our slot is the session's PanVK; null = unknown. */
+        val inUse: Boolean? get() = session?.ours
+
+        /** One plain line when our slot is installed but the session runs another driver ([op] status or a change). */
+        fun note(op: String): String? {
+            val s = session ?: return null
+            if (s.ours || !installed || notOurs) return null
+            val uses = "the session uses ${label(s.driver)}"
+            return if (op == "status") "$uses, not $slot; run `droiddeckctl panvk use` to switch"
+            else "$uses; this changed $slot, which is not in use. Run `droiddeckctl panvk use` to switch"
+        }
+
         fun json(): JSONObject = JSONObject().put("source", source).put("version", version).put("driverVersion", driverVersion)
             .put("commit", commit).put("soMd5", soMd5).put("hasPrevious", previous != null).put("previous", previous ?: JSONObject.NULL)
             .put("bundledVersion", bundledVersion ?: JSONObject.NULL).put("installed", installed).put("canSwitch", canSwitch)
             .put("slot", slot).put("date", date).put("changelog", changelog).put("owner", if (notOurs) JSONObject.NULL else OWNER)
             .put("notOurs", notOurs).put("foreign", org.json.JSONArray(foreign.map { it.json() }))
+            .put("inUse", inUse ?: JSONObject.NULL).put("sessionDriver", session?.driver?.ifEmpty { null } ?: JSONObject.NULL)
+            .put("sessionPanvk", session?.panvk ?: JSONObject.NULL)
+            .put("sessionFrom", session?.let { if (it.running) "running session" else "next session start" } ?: JSONObject.NULL)
     }
+
+    /** The result of [use] / [unuse]: the session driver before and after, and whether a stored choice changed. */
+    class Choice(val status: Status, val from: String, val to: String, val changed: Boolean, val note: String)
+
+    fun label(driver: String) = driver.ifEmpty { "the runtime's own driver" }
 
     // ---- context entry points ----
 
@@ -114,10 +145,12 @@ object PanvkPackage {
 
     fun legacy(context: Context) = Legacy(File(context.filesDir, LEGACY_STORE), LinuxVulkanDriverManager(context).getDriverDir(LEGACY_SLOT_ID))
 
-    fun host(context: Context): Host = object : Host {
+    fun host(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): Host = object : Host {
         override val sessionRunning get() = BlobferryPackage.sessionBusy()
         override val bundled get() = bundled(context)
         override fun openBundled(): InputStream? = openBundledAsset(context)
+        override val sessionDriver get() = runCatching { LinuxVulkanDriver.sessionDriver(context, mali) }
+            .onFailure { Log.w(TAG, "session driver unknown", it) }.getOrNull()
     }
 
     private fun openBundledAsset(context: Context): InputStream? = runCatching { context.assets.open(BUNDLED_ASSET) }.getOrNull()
@@ -133,13 +166,17 @@ object PanvkPackage {
     fun status(context: Context) = status(layout(context), host(context))
     fun recover(context: Context) = recover(layout(context))
 
-    /** Mali, at stage(): our slot is created, migrated or upgraded (see the pure ensureCurrent). No driver choice changes. */
-    @JvmStatic fun ensureCurrent(context: Context): String {
+    /**
+     * Mali, at stage(): our slot is created, migrated or upgraded (see the pure ensureCurrent). No driver choice changes.
+     * [startsSession]: the session start's own stage(), before its guest starts; stage() from a guest command or Proton
+     * extras may run during a session, which then defers any write (review L1).
+     */
+    @JvmStatic fun ensureCurrent(context: Context, startsSession: Boolean = false): String {
         if (!com.droiddeck.launcher.core.DeviceSupport.mali()) return "not-mali"
         val bundled = bundled(context)
-        // stage() runs before the guest starts: nothing has loaded our slot's .so (the switch is one rename anyway)
+        val busy = !startsSession && BlobferryPackage.sessionBusy()
         val host = object : Host {
-            override val sessionRunning = false
+            override val sessionRunning = busy
             override val bundled = bundled
             override fun openBundled(): InputStream? = openBundledAsset(context)
         }
@@ -150,7 +187,8 @@ object PanvkPackage {
      * Our slot at stage(): finishes an interrupted switch; copies a bundled PanVK_Kbase into it while ours is missing
      * (migration, the source stays); creates it from the APK's PanVK when still missing; upgrades it when the bundled
      * version is newer than our managed one or its .so is on [STALE_MD5] (a hand-deployed unknown .so in our slot is left
-     * alone otherwise). previous/ keeps the .so before. Returns what it did. Never reads or writes a driver choice.
+     * alone otherwise). previous/ keeps the .so before. Returns what it did ("deferred" while a session runs and a write
+     * would be needed). Never reads or writes a driver choice.
      */
     fun ensureCurrent(layout: Layout, host: Host, legacy: Legacy? = null, staleMd5: Set<String> = STALE_MD5): String = synchronized(BlobferryPackage.LOCK) {
         recover(layout)
@@ -158,6 +196,7 @@ object PanvkPackage {
             log(layout, ComponentLog.REFUSED, currentVersion(layout), host.bundled?.version, null, SOURCE_BUNDLED, "NOT_OURS")
             return@synchronized "not-ours"
         }
+        if (host.sessionRunning && slotAbsent(layout)) return@synchronized "deferred"
         val migrated = legacy != null && slotAbsent(layout) && migrate(layout, legacy)
         val bundled = host.bundled ?: return@synchronized if (migrated) "migrated" else if (slotAbsent(layout)) "none" else "current"
         val live = File(layout.slot, LIB)
@@ -170,6 +209,7 @@ object PanvkPackage {
             val newer = state != null && state.optString("source") == SOURCE_BUNDLED && compareVersions(bundled.version, state.optString("version")) > 0
             if (!stale && !newer) return@synchronized if (migrated) "migrated" else "current"
         }
+        if (host.sessionRunning) return@synchronized "deferred"
         val prepared = host.openBundled()?.use { prepare(layout, it, bundled.sha256) }
             ?: return@synchronized if (migrated) "migrated" else "no-bundled-zip"
         if (prepared.soMd5 == liveMd5) {
@@ -359,7 +399,7 @@ object PanvkPackage {
             prepared.meta?.let { m -> state.put("date", m.date).put("changelog", m.changelog).put("repo", m.repo) }
             switchTo(layout, so, state, null)
             Log.i(TAG, "PanVK ${prepared.version} installed from $source into ${layout.slot}")
-            log(layout, op, from, prepared.version, prepared.zipSha256, source, ComponentLog.OK)
+            log(layout, op, from, prepared.version, prepared.zipSha256, source, ComponentLog.OK, notInUse(layout, host))
             status(layout, host)
         } catch (e: BlobferryException) {
             log(layout, ComponentLog.REFUSED, from, prepared.version, prepared.zipSha256, source, e.code)
@@ -386,7 +426,8 @@ object PanvkPackage {
         // switchTo stages a copy of previous/'s .so before it rewrites previous/ with the live one
         val from = currentVersion(layout)
         switchTo(layout, so, state, readJson(File(previous, LinuxVulkanDriverManager.META_NAME)))
-        log(layout, ComponentLog.ROLLBACK, from, state.optString("version"), state.optString("zipSha256"), state.optString("source"), ComponentLog.OK)
+        log(layout, ComponentLog.ROLLBACK, from, state.optString("version"), state.optString("zipSha256"), state.optString("source"), ComponentLog.OK,
+            notInUse(layout, host))
         status(layout, host)
     }
 
@@ -397,6 +438,79 @@ object PanvkPackage {
         val prepared = host.openBundled()?.use { prepare(layout, it, bundled.sha256) }
             ?: throw BlobferryException("NO_BUNDLED", "this app has no bundled PanVK")
         install(layout, host, prepared, SOURCE_BUNDLED, ComponentLog.RESET)
+    }
+
+    /**
+     * D10 (c), only on an explicit user command (droiddeckctl panvk use): our slot becomes the session's PanVK. Exactly one
+     * stored choice changes: an explicit PanVK Linux driver choice is swapped for ours; otherwise (automatic, or the bridge
+     * for the games, which stays) the session's PanVK pick [SessionPrefs.SESSION_PANVK]. Its value before goes into use.json
+     * for [unuse]. No driver slot is written. Refused while a session runs and when the session's driver is not a PanVK.
+     */
+    fun use(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): Choice = synchronized(BlobferryPackage.LOCK) {
+        val layout = layout(context)
+        val host = host(context, mali)
+        val manager = LinuxVulkanDriverManager(context)
+        val before = LinuxVulkanDriver.sessionDriver(context, mali)
+        try {
+            if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+            requireOurs(layout)
+            if (!manager.isOurPanvk(SLOT_ID) || !manager.isPanvk(SLOT_ID)) {
+                throw BlobferryException("NOT_INSTALLED", "$SLOT_ID is not installed yet (the next session start creates it)")
+            }
+            if (before == SLOT_ID) return@synchronized Choice(status(layout, host), before, before, false, "$SLOT_ID is already the session's PanVK; nothing changed")
+            val chosen = SessionPrefs.linuxDriver(context, mali)
+            val explicit = chosen.isNotEmpty() && !manager.isBridge(chosen)
+            val key = when {
+                explicit && manager.isPanvk(chosen) -> SessionPrefs.LINUX_DRIVER
+                !explicit && manager.isPanvk(before) -> SessionPrefs.SESSION_PANVK
+                else -> throw BlobferryException("NOT_PANVK_SESSION", "the session uses ${label(before)}, not a PanVK; choose the Linux driver on the driver page")
+            }
+            val prior = SessionPrefs.storedChoice(context, key)
+            writeAtomic(File(layout.store, USE_RECORD), JSONObject().put("key", key).put("value", prior ?: JSONObject.NULL)
+                .put("session", before).put("at", System.currentTimeMillis()).toString(2))
+            if (!SessionPrefs.setStoredChoice(context, key, SLOT_ID)) throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
+            val after = LinuxVulkanDriver.sessionDriver(context, mali)
+            if (after != SLOT_ID) {
+                SessionPrefs.setStoredChoice(context, key, prior)
+                File(layout.store, USE_RECORD).delete()
+                throw BlobferryException("APPLY_FAILED", "the session would still use ${label(after)}; the choice is back as it was")
+            }
+            log(layout, ComponentLog.USE, before, SLOT_ID, null, key, ComponentLog.OK)
+            Choice(status(layout, host), before, SLOT_ID, true, "the next session start uses $SLOT_ID; `droiddeckctl panvk unuse` goes back to ${label(before)}")
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, before, SLOT_ID, null, null, e.code, ComponentLog.USE)
+            throw e
+        }
+    }
+
+    /**
+     * Undoes the last [use]: the stored choice it changed gets back its exact value before ("not stored" included), unless
+     * it was changed again since (that later choice stays: CHANGED_SINCE). No driver slot is written.
+     */
+    fun unuse(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): Choice = synchronized(BlobferryPackage.LOCK) {
+        val layout = layout(context)
+        val host = host(context, mali)
+        val before = LinuxVulkanDriver.sessionDriver(context, mali)
+        try {
+            if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+            val record = readJson(File(layout.store, USE_RECORD))
+                ?: throw BlobferryException("NO_PRIOR", "nothing to undo: no `droiddeckctl panvk use` is in force")
+            val key = record.optString("key").takeIf { it == SessionPrefs.LINUX_DRIVER || it == SessionPrefs.SESSION_PANVK }
+                ?: throw BlobferryException("NO_PRIOR", "the record of the last panvk use is not readable")
+            val prior = if (record.isNull("value")) null else record.optString("value")
+            val now = SessionPrefs.storedChoice(context, key)
+            if (now != SLOT_ID) {
+                throw BlobferryException("CHANGED_SINCE", "the driver choice changed since panvk use (now ${now ?: "not stored"}); it stays")
+            }
+            if (!SessionPrefs.setStoredChoice(context, key, prior)) throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
+            File(layout.store, USE_RECORD).delete()
+            val after = LinuxVulkanDriver.sessionDriver(context, mali)
+            log(layout, ComponentLog.UNUSE, before, after, null, key, ComponentLog.OK)
+            Choice(status(layout, host), before, after, true, "the next session start uses ${label(after)} again")
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, before, null, null, null, e.code, ComponentLog.UNUSE)
+            throw e
+        }
     }
 
     /**
@@ -500,6 +614,19 @@ object PanvkPackage {
         val md5 = if (live.isFile) md5(live) else ""
         val managed = state != null && state.optString("soMd5") == md5
         val previous = readJson(File(layout.store, "previous/$PACKAGE"))?.takeIf { File(layout.store, "previous/$LIB").isFile }
+        val notOurs = !ownedOrAbsent(layout)
+        val version = if (managed) state!!.optString("version") else meta?.optString("driverVersion").orEmpty()
+        val foreign = foreign(layout)
+        val session = host.sessionDriver?.let { id ->
+            val ours = id == layout.slot.name && live.isFile && !notOurs
+            val panvk = if (ours) JSONObject().put("id", id).put("name", meta?.optString("name").orEmpty()).put("version", version)
+                .put("driverVersion", meta?.optString("driverVersion").orEmpty()).put("soMd5", md5).put("ours", true)
+            else foreign.firstOrNull { it.id == id }?.let { f ->
+                JSONObject().put("id", f.id).put("name", f.name).put("version", f.driverVersion).put("driverVersion", f.driverVersion)
+                    .put("soMd5", f.soMd5).put("ours", false)
+            }
+            SessionUse(id, ours, panvk, host.sessionRunning)
+        }
         return Status(
             source = when {
                 !live.isFile -> "none"
@@ -507,13 +634,13 @@ object PanvkPackage {
                 state != null -> "changed on disk"
                 else -> SOURCE_HAND
             },
-            version = if (managed) state!!.optString("version") else meta?.optString("driverVersion").orEmpty(),
+            version = version,
             driverVersion = meta?.optString("driverVersion").orEmpty(),
             commit = if (managed) state!!.optString("commit") else meta?.optString("commit").orEmpty(),
             soMd5 = md5, previous = previous?.optString("version")?.ifEmpty { "?" }, bundledVersion = host.bundled?.version,
             installed = live.isFile, canSwitch = !host.sessionRunning, slot = layout.slot.name,
             date = if (managed) state!!.optString("date") else "", changelog = if (managed) state!!.optString("changelog") else "",
-            notOurs = !ownedOrAbsent(layout), foreign = foreign(layout),
+            notOurs = notOurs, foreign = foreign, session = session,
         )
     }
 
@@ -538,8 +665,12 @@ object PanvkPackage {
             ?: readJson(File(layout.slot, LinuxVulkanDriverManager.META_NAME))?.optString("driverVersion")?.ifEmpty { null } ?: "hand-imported"
     }
 
-    private fun log(layout: Layout, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String) =
-        ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, op, from, to, sha256, source, result)
+    private fun log(layout: Layout, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String, note: String? = null) =
+        ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, op, from, to, sha256, source, result, note)
+
+    /** The install-log note of a change to our slot while the session uses another driver (review M1). */
+    private fun notInUse(layout: Layout, host: Host): String? =
+        host.sessionDriver?.takeIf { it != layout.slot.name }?.let { "not in use: session uses ${it.ifEmpty { "runtime-default" }}" }
 
     private fun readJson(file: File): JSONObject? = runCatching { JSONObject(file.readText()) }.getOrNull()
 
