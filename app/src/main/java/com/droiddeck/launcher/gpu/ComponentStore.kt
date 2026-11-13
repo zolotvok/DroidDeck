@@ -91,6 +91,19 @@ class ComponentStore(val dir: File) {
         endJournal()
     }
 
+    /**
+     * At stage(), the APK-upgrade rule of every store-backed component: an active package older than the one the APK
+     * bundles ([bundledVersion], compared as PanvkPackage.compareVersions; equal = the installed one wins, an empty or
+     * missing bundled version never wins) goes to previous/ and the bundled package is used. Returns the version that
+     * went to previous/, null when nothing changed. The caller logs [ComponentLog.UPGRADE_AT_START].
+     */
+    fun upgradeAtStart(bundledVersion: String?, apply: (File?) -> Unit): String? {
+        val version = activeRecord()?.optString("version") ?: return null
+        if (!olderThanBundled(version, bundledVersion)) return null
+        reset(bundledVersion!!, apply)
+        return version
+    }
+
     /** At stage(): a switch a crash interrupted is finished (live files := active/, else the bundled package). */
     fun recover(apply: (File?) -> Unit): Boolean {
         if (!File(dir, JOURNAL).exists()) return false
@@ -125,6 +138,10 @@ class ComponentStore(val dir: File) {
         const val RECORD = "package.json"
         const val BUNDLED_MARK = "BUNDLED"
         const val JOURNAL = "applying"
+
+        /** [version] is older than [bundledVersion]: such a package would be replaced at the next stage() ([upgradeAtStart]). */
+        fun olderThanBundled(version: String, bundledVersion: String?): Boolean =
+            !bundledVersion.isNullOrEmpty() && PanvkPackage.compareVersions(version, bundledVersion) < 0
 
         fun writeAtomic(target: File, text: String) {
             target.parentFile?.mkdirs()

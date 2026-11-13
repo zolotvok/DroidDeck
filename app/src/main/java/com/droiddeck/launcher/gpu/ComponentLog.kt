@@ -73,28 +73,50 @@ object ComponentLog {
 
     private val TIME = Regex("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z""")
 
+    /** The most a merge reads from a guest log, and the longest line it takes (longer lines are dropped). */
+    const val MAX_INGEST_BYTES = 64 * 1024
+    const val MAX_INGEST_LINE = 2048
+    const val SOURCE_GUEST = "guest"
+
     /**
      * Moves the events another writer left in [guest] (the guest's own TSV of the same 8 or 9 fields, e.g.
-     * droiddeck-mali-defaults' fex events) into [log], keeping their time. Only lines [accept] takes (fields split) are
-     * copied; the guest file is renamed away first, so a writer that appends meanwhile starts a new one. Returns the count.
+     * droiddeck-mali-defaults' fex events) into [log], keeping their time. Any process in the guest can write there, so the
+     * source field is always set to [SOURCE_GUEST], at most [MAX_INGEST_BYTES] are read (the rest is dropped), and a line
+     * that is longer than [MAX_INGEST_LINE], not 8..9 fields, without a time or not taken by [accept] is dropped. The guest
+     * file is renamed away first, so a writer that appends meanwhile starts a new one; the taken file is always removed.
+     * Returns the count.
      */
     fun ingest(log: File, guest: File, accept: (List<String>) -> Boolean): Int = synchronized(INGEST_LOCK) {
         val taken = File(guest.parentFile, guest.name + ".ingest")
         try {
             if (!taken.isFile && (!guest.isFile || !guest.renameTo(taken))) return@synchronized 0
+            val bytes = taken.inputStream().use { input ->
+                val buffer = ByteArray(MAX_INGEST_BYTES)
+                var n = 0
+                while (n < buffer.size) {
+                    val r = input.read(buffer, n, buffer.size - n)
+                    if (r < 0) break
+                    n += r
+                }
+                buffer.copyOf(n)
+            }
+            val out = StringBuilder()
             var count = 0
-            val lines = taken.bufferedReader().use { r -> generateSequence { r.readLine() }.take(10_000).toList() }
-            for (line in lines) {
-                val fields = line.split('\t')
+            for (line in bytes.toString(Charsets.UTF_8).split('\n')) {
+                if (line.length > MAX_INGEST_LINE) continue
+                val fields = line.removeSuffix("\r").split('\t').toMutableList()
                 if (fields.size !in 8..9 || !TIME.matches(fields[0]) || !accept(fields)) continue
-                appendLine(log, fields.joinToString("\t") { clean(it) } + "\n")
+                fields[6] = SOURCE_GUEST
+                out.append(fields.joinToString("\t") { clean(it) }).append('\n')
                 count++
             }
-            taken.delete()
+            if (count > 0) appendLine(log, out.toString())
             count
         } catch (e: Throwable) {
             Log.w(TAG, "guest log ${guest.path} not ingested", e)
             0
+        } finally {
+            taken.delete()
         }
     }
 

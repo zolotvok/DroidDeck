@@ -303,7 +303,8 @@ fi
 
 # The patched FEX arm64ec DLLs, one per FEX build, as a fex-arm64ec table package (gpu/FexArm64ecPackage.kt, read by
 # droiddeck-mali-defaults): DROIDDECK_FEX_TABLE = a fex-arm64ec-<V> folder or zip (tools/make-fex-arm64ec-release.sh).
-# Without it, DROIDDECK_FEX_ARM64EC (by default the FEX-2610-101 build of a ../bridge checkout) becomes a one-row table.
+# Without it, DROIDDECK_FEX_ARM64EC (by default the FEX-2610-101 build of a ../bridge checkout) becomes a one-row table
+# (FEX-2610-101 only: a Proton on FEX-2610-175 then keeps its stock DLL), with a WARNING.
 fex_arm64ec_out="${linuxfs_dir}/usr/local/lib/droiddeck-fex-arm64ec"
 fex_tool="${repo_root}/tools/make-fex-arm64ec-package.py"
 rm -rf "${fex_arm64ec_out}"
@@ -322,9 +323,10 @@ if [[ -z "${fex_table}" ]]; then
             echo "${fex_arm64ec_patch} is missing (DROIDDECK_FEX_PATCH, the FEX patch of ${fex_arm64ec})" >&2
             exit 1
         fi
+        echo "WARNING: DROIDDECK_FEX_TABLE is not set: bundling a ONE-ROW fex-arm64ec table (FEX-2610-101 only, no FEX-2610-175 row); set DROIDDECK_FEX_TABLE=<fex-arm64ec-<V>.zip> (tools/make-fex-arm64ec-release.sh) for a release" >&2
         fex_tmp=$(mktemp -d)
         python3 "${fex_tool}" build --version 2026.11.04.1 --date 2026-11-04 --commit ab9f7d7148006dfc0027111aeffd8ab43bf0c5b6 \
-            --out "${fex_tmp}" --row "stock_md5=863695500852d6df6a7b6b971893b4c1,fex_version=FEX-2610-101-g1c4f04b,fex_commit=1c4f04b71a4d,dll=${fex_arm64ec},patch=${fex_arm64ec_patch}" >/dev/null
+            --typed-stock-md5 --out "${fex_tmp}" --row "stock_md5=863695500852d6df6a7b6b971893b4c1,fex_version=FEX-2610-101-g1c4f04b,fex_commit=1c4f04b71a4d,dll=${fex_arm64ec},patch=${fex_arm64ec_patch}" >/dev/null
         fex_table="${fex_tmp}/fex-arm64ec-2026.11.04.1"
     fi
 fi

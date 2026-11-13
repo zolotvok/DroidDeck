@@ -264,8 +264,7 @@ object GuestToolsPackage {
             return@synchronized if (recovered) "recovered" else "bundled"
         }
         val version = record.optString("version")
-        if (bundled != null && older(version, bundled)) {
-            store.reset(bundled.release) { sync(layout, host, it) }
+        if (bundled != null && store.upgradeAtStart(bundled.release) { sync(layout, host, it) } != null) {
             log(layout, ComponentLog.UPGRADE_AT_START, version, "${bundled.release} (bundled)", null, SOURCE_BUNDLED, ComponentLog.OK,
                 "the APK's agent is newer; $version kept as previous")
             return@synchronized "upgrade-at-start"
@@ -288,8 +287,7 @@ object GuestToolsPackage {
     }
 
     /** [version] is older than the bundled agent's release (a bundled agent without a release never wins). */
-    private fun older(version: String, bundled: Bundled): Boolean =
-        bundled.release.isNotEmpty() && PanvkPackage.compareVersions(version, bundled.release) < 0
+    private fun older(version: String, bundled: Bundled): Boolean = ComponentStore.olderThanBundled(version, bundled.release)
 
     private fun requireNotOlder(version: String, host: Host) {
         val bundled = host.bundled ?: return

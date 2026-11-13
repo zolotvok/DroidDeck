@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -399,12 +400,16 @@ def apply_prefix(found, env):
 
 FEX_DLL = "files/lib/wine/aarch64-windows/libarm64ecfex.dll"
 # The fex-arm64ec table packages (gpu/FexArm64ecPackage.kt): the one installed through the app's updater (staged at the
-# session start), else the one the APK bundles. table.json rows: stock_md5, fex_version, patched (a dll/ file), patched_md5.
+# session start), else the one the APK bundles. table.json rows: stock_md5, fex_version, patched (a dll/ file), patched_md5,
+# supersedes (optional: patched md5s of older builds for the same stock DLL, replaced by this row's DLL).
 FEX_TABLES = (("/usr/local/lib/droiddeck-fex-arm64ec-active", "installed"), ("/usr/local/lib/droiddeck-fex-arm64ec", "bundled"))
 FEX_VERSION = re.compile(rb"FEX-\d{4}(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?")
 FEX_VERSION_TEXT = re.compile(r"FEX-\d{4}(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?")
 HEX32 = re.compile(r"[0-9a-f]{32}")
+EMPTY_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
 FEX_MAX_ROWS = 64
+STAGED_SUFFIX = ".bl-new"
+STALE_STAGED_SECONDS = 600
 FEX_COMPONENT = "fex-arm64ec"
 
 
@@ -455,18 +460,68 @@ def components_choice(tool, app_id, folder):
     return False
 
 
-def place(source, target):
-    staged = target.with_name(target.name + ".bl-new")
-    shutil.copyfile(source, staged)
-    os.chmod(staged, 0o644)
-    os.replace(staged, target)
+def fsync_dir(folder):
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def place(source, target, expected=None):
+    """Copies source over target so that a crash leaves either the old or the new file: a temp file of its own in the
+    target's folder (two launches never share one), fsynced, its md5 checked against expected (default: the source's),
+    renamed over the target, the folder fsynced. OSError when the copy does not match; the target is then unchanged."""
+    target = Path(target)
+    expected = expected or md5_of(source)
+    fd, staged = tempfile.mkstemp(prefix="." + target.name + ".", suffix=STAGED_SUFFIX, dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "wb") as out, open(source, "rb") as src:
+            shutil.copyfileobj(src, out, 1 << 20)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(staged, 0o644)
+        if md5_of(staged) != expected:
+            raise OSError("the copy of %s is not md5 %s" % (source, expected))
+        os.replace(staged, target)
+    except BaseException:
+        try:
+            os.unlink(staged)
+        except OSError:
+            pass
+        raise
+    fsync_dir(target.parent)
+
+
+def clean_staged(folder, now=None):
+    """Removes temp files an interrupted place() left in folder (older than STALE_STAGED_SECONDS, so a place() of another
+    launch keeps its own); the fixed name of the 0.6.9-mali.1 script too."""
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if not name.endswith(STAGED_SUFFIX):
+            continue
+        path = Path(folder) / name
+        try:
+            if path.is_file() and not path.is_symlink() and now - path.stat().st_mtime > STALE_STAGED_SECONDS:
+                path.unlink()
+        except OSError:
+            pass
 
 
 def parse_fex_table(data, folder):
     """The rows of a table.json (parsed JSON) as dicts with the DLL's absolute path; ValueError when it is refused."""
     if not isinstance(data, list) or not 1 <= len(data) <= FEX_MAX_ROWS:
         raise ValueError("not a list of 1..%d rows" % FEX_MAX_ROWS)
-    rows, stocks, patched = [], set(), set()
+    rows, seen = [], set()
     for row in data:
         if not isinstance(row, dict):
             raise ValueError("a row is not an object")
@@ -476,13 +531,17 @@ def parse_fex_table(data, folder):
             raise ValueError("bad row %r" % (row,))
         if not rel.startswith("dll/") or "\\" in rel or any(part in ("", ".", "..") for part in rel.split("/")):
             raise ValueError("bad patched path %r" % (rel,))
-        if stock in stocks or done in patched:
-            raise ValueError("%s listed twice" % (stock if stock in stocks else done))
-        stocks.add(stock)
-        patched.add(done)
-        rows.append({"stock_md5": stock, "patched_md5": done, "fex_version": version, "path": Path(folder) / rel})
-    if stocks & patched:
-        raise ValueError("a patched md5 is also a stock md5")
+        old = row.get("supersedes", [])
+        if not isinstance(old, list) or ("supersedes" in row and not 1 <= len(old) <= FEX_MAX_ROWS) \
+                or not all(isinstance(v, str) and HEX32.fullmatch(v) for v in old):
+            raise ValueError("bad supersedes %r" % (old,))
+        # every md5 has one role in one row, and none is an empty file's (what a crash can leave)
+        for value in [stock, done] + old:
+            if value in seen or value == EMPTY_MD5:
+                raise ValueError("%s listed twice" % value if value in seen else "%s is an empty file's md5" % value)
+            seen.add(value)
+        rows.append({"stock_md5": stock, "patched_md5": done, "fex_version": version, "path": Path(folder) / rel,
+                     "supersedes": list(old)})
     return rows
 
 
@@ -536,11 +595,41 @@ def unmatched(folder, tool, version, current):
     guest_log(folder, "fex-unmatched", version, "-", "unmatched", "fex-unmatched %s %s (%s)" % (version, current, tool))
 
 
+def repair_damaged(target, stock_dir, record, folder, tool):
+    """A 0-byte or non-PE DLL (a crash during an older, unsynced swap) gets the stock copy back that the .stock record
+    names for this Proton build (the record's second field; a record of another build or without one is not trusted, as
+    the 0.6.9-mali.1 record that names the 101 stock in a Proton now on 175), when that copy is intact. Returns a note when
+    it did, else None (the DLL is then left to the normal rules: it matches no row)."""
+    try:
+        with open(target, "rb") as f:
+            head = f.read(2)
+        if head == b"MZ":
+            return None
+        fields = record.read_text(encoding="utf-8").split("\n")[0].split("\t")
+    except OSError:
+        return None
+    build = proton_build(tool)
+    if len(fields) != 2 or not HEX32.fullmatch(fields[0]) or not build or fields[1] != build:
+        return None
+    stock_md5 = fields[0]
+    stock = stock_dir / (stock_md5 + ".dll")
+    if not stock.is_file() or md5_of(stock) != stock_md5:
+        return None
+    size = target.stat().st_size
+    before = md5_of(target)
+    place(stock, target, stock_md5)
+    guest_log(folder, "fex-stock", before, stock_md5, "ok",
+              "%s: damaged DLL (%d bytes) replaced by the kept stock copy" % (tool.name, size))
+    return "FEX arm64ec: the damaged DLL of %s (%d bytes) got its stock copy back" % (tool.name, size)
+
+
 def fex_patch(command, env, app_id=None, folder=None, tables=FEX_TABLES):
     """Puts the patched libarm64ecfex.dll of the table row whose stock_md5 is the ARM64 Proton's current DLL into that
     Proton before a game starts, keeping the stock copy, and again after a Proton update or verify. A DLL whose md5 is a
-    row's patched_md5 is already patched; one that matches no row is left as it is (fex-unmatched in the install log). A
-    game with BL_FEX_ARM64EC_PATCH=0 gets the row's kept stock DLL back. Returns a note or None."""
+    row's patched_md5 is already patched; one in a row's supersedes (an older patched build) gets that row's DLL; one that
+    matches no row, or whose FEX version string is not the row's, is left as it is (fex-unmatched in the install log). A
+    0-byte or non-PE DLL gets the kept stock copy back first. Every swap is crash-safe (place). A game with
+    BL_FEX_ARM64EC_PATCH=0 gets the row's kept stock DLL back. Returns a note or None."""
     if len(command) < 2 or command[1] != "waitforexitandrun":
         return None
     tool = Path(command[0]).parent
@@ -555,44 +644,64 @@ def fex_patch(command, env, app_id=None, folder=None, tables=FEX_TABLES):
         return ("FEX arm64ec: %s; %s left as it is" % ("; ".join(problems), tool.name)) if problems else None
     by_patched = {row["patched_md5"]: row for row in rows}
     by_stock = {row["stock_md5"]: row for row in rows}
+    by_superseded = {old: row for row in rows for old in row["supersedes"]}
     stock_dir = folder / "fex-arm64ec"
     record = stock_dir / (re.sub(r"[^A-Za-z0-9._+-]+", "_", tool.name) + ".stock")
+    notes = []
     try:
+        clean_staged(target.parent)
+        clean_staged(stock_dir)
+        repaired = repair_damaged(target, stock_dir, record, folder, tool)
+        if repaired:
+            notes.append(repaired)
         current = md5_of(target)
         if switch_off(FEX_SWITCH, env):
-            row = by_patched.get(current)
+            row = by_patched.get(current) or by_superseded.get(current)
             if row is None:
                 return None
             stock = stock_dir / (row["stock_md5"] + ".dll")
             if not stock.is_file() or md5_of(stock) != row["stock_md5"]:
                 return "FEX arm64ec: %s=0 but no stock copy of %s's DLL (%s); the patched one stays" % (
                     FEX_SWITCH, tool.name, row["fex_version"])
-            place(stock, target)
+            place(stock, target, row["stock_md5"])
             guest_log(folder, "fex-stock", current, row["stock_md5"], "ok", "%s %s" % (tool.name, row["fex_version"]))
             return "FEX arm64ec: stock DLL for this game (%s=0)" % FEX_SWITCH
         if current in by_patched:
-            return None
+            return "; ".join(notes) or None
         row = by_stock.get(current)
-        if row is None:
-            version = (fex_version(target) or b"an unnamed FEX").decode()
+        superseded = row is None and current in by_superseded
+        if superseded:
+            row = by_superseded[current]
+        found = fex_version(target)
+        version = (found or b"an unnamed FEX").decode()
+        if row is None or version != row["fex_version"]:
             unmatched(folder, tool.name, version, current)
-            return "FEX arm64ec: %s has %s (md5 %s), no row of the %s; left as it is" % (tool.name, version, current, label)
+            if row is None:
+                why = "no row of the %s" % label
+            else:
+                why = "the %s row for this md5 is for %s" % (label, row["fex_version"])
+            return "; ".join(notes + ["FEX arm64ec: %s has %s (md5 %s), %s; left as it is" % (tool.name, version, current, why)])
         patched = row["path"]
         if not patched.is_file() or md5_of(patched) != row["patched_md5"]:
-            return "FEX arm64ec: the patched DLL for %s is missing or damaged (%s); stock kept" % (row["fex_version"], patched)
+            return "; ".join(notes + ["FEX arm64ec: the patched DLL for %s is missing or damaged (%s); %s kept" % (
+                row["fex_version"], patched, "the older patched DLL" if superseded else "stock")])
+        if not superseded:
+            stock_dir.mkdir(parents=True, exist_ok=True)
+            stock = stock_dir / (current + ".dll")
+            if not stock.is_file() or md5_of(stock) != current:
+                place(target, stock, current)
         stock_dir.mkdir(parents=True, exist_ok=True)
-        stock = stock_dir / (current + ".dll")
-        if not stock.is_file() or md5_of(stock) != current:
-            place(target, stock)
-        record.write_text(current + "\n")
-        place(patched, target)
+        # the Proton build makes the record usable for repair_damaged() only in this build
+        record.write_text("%s\t%s\n" % (row["stock_md5"], proton_build(tool)))
+        place(patched, target, row["patched_md5"])
     except OSError as error:
-        return "FEX arm64ec: not changed (%s)" % error
+        return "; ".join(notes + ["FEX arm64ec: not changed (%s)" % error])
     try:
         with open(folder / "reapplied.log", "a", encoding="utf-8") as log:
             log.write("%d\t%s\t1\n" % (time.time(), tool.name))
     except OSError:
         pass
-    guest_log(folder, "fex-apply", current, row["patched_md5"], "ok", "%s %s (%s)" % (tool.name, row["fex_version"], label))
-    return "FEX arm64ec: patched DLL for %s put in %s (%s; unaligned-atomic fallback; %s=0 for stock)" % (
-        row["fex_version"], tool.name, label, FEX_SWITCH)
+    guest_log(folder, "fex-apply", current, row["patched_md5"], "ok", "%s %s (%s%s)" % (
+        tool.name, row["fex_version"], label, "; replaces a superseded patched build" if superseded else ""))
+    return "; ".join(notes + ["FEX arm64ec: patched DLL for %s put in %s (%s%s; unaligned-atomic fallback; %s=0 for stock)" % (
+        row["fex_version"], tool.name, label, "; replaced an older patched build" if superseded else "", FEX_SWITCH)])

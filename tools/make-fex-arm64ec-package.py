@@ -3,14 +3,18 @@
 FEX build, keyed by the stock DLL's md5, for droiddeck-mali-defaults' fex_patch() and gpu/FexArm64ecPackage.kt.
 
   make-fex-arm64ec-package.py build --version V --date YYYY-MM-DD --commit SHA --out DIR [--zip] \
-      --row stock_md5=..,fex_version=..,dll=PATH,patch=PATH[,proton_build=..][,fex_commit=..] [--row ...]
+      --row stock=PATH,fex_version=..,dll=PATH,patch=PATH[,proton_build=..][,fex_commit=..][,supersedes=MD5:MD5..] [--row ...]
   make-fex-arm64ec-package.py check DIR-or-ZIP
   make-fex-arm64ec-package.py unpack DIR-or-ZIP OUT
 
 Package `fex-arm64ec-<V>/`: meta.json (every other file with sha256 + md5), table.json (the rows), dll/, patches/,
 LICENSE (FEX, MIT) and NOTICE. The same file set always gives the same bytes (sorted entries, fixed zip times).
 check applies the app's rules: listed files only and all matching, ARM64EC PE DLLs whose FEX version string is the
-row's, unique stock md5s. Prints the md5s."""
+row's, every md5 (stock, patched, superseded) in one role of one row only. Prints the md5s.
+
+A row's stock md5 comes from the stock DLL itself (stock=PATH: Proton's own libarm64ecfex.dll, which must be ARM64EC and
+carry the row's FEX version). stock_md5=<md5> instead is taken only with --typed-stock-md5 (nothing checks it then).
+supersedes = patched md5s of older builds for the same stock DLL: the guest replaces such a DLL with this row's one."""
 import argparse
 import hashlib
 import json
@@ -34,7 +38,8 @@ LICENSE = Path(__file__).resolve().parent / "linuxfs/fex-arm64ec/LICENSE"
 MIN_APP = 20
 MAX_ROWS = 64
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
-ROW_KEYS = ("stock_md5", "fex_version", "proton_build", "patched", "patched_md5", "patch", "patch_md5", "fex_commit")
+ROW_KEYS = ("stock_md5", "fex_version", "proton_build", "patched", "patched_md5", "patch", "patch_md5", "fex_commit", "supersedes")
+EMPTY_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
 
 
 class Refused(Exception):
@@ -88,13 +93,40 @@ def parse_row(text):
     row = {}
     for part in text.split(","):
         key, _, value = part.partition("=")
-        if key not in ("stock_md5", "fex_version", "proton_build", "dll", "patch", "fex_commit") or not value:
+        if key not in ("stock", "stock_md5", "fex_version", "proton_build", "dll", "patch", "fex_commit", "supersedes") \
+                or not value or key in row:
             raise Refused("bad --row part %r" % part)
         row[key] = value
-    for key in ("stock_md5", "fex_version", "dll", "patch"):
+    for key in ("fex_version", "dll", "patch"):
         if key not in row:
             raise Refused("--row needs %s" % key)
+    if "stock" not in row and "stock_md5" not in row:
+        raise Refused("--row needs stock=PATH (Proton's stock DLL)")
+    if "supersedes" in row:
+        row["supersedes"] = row["supersedes"].split(":")
+        if not all(HEX32.fullmatch(v) for v in row["supersedes"]):
+            raise Refused("supersedes must be md5s separated by ':'")
     return row
+
+
+def stock_md5(row, typed_ok):
+    """The row's stock md5: from stock=PATH (an ARM64EC DLL with the row's FEX version), or the typed stock_md5= with
+    --typed-stock-md5. Both given: they must agree."""
+    if "stock" not in row:
+        if not typed_ok:
+            raise Refused("%s: stock_md5= is typed by hand; give stock=PATH, or --typed-stock-md5" % row["fex_version"])
+        if not HEX32.fullmatch(row["stock_md5"]):
+            raise Refused("%s: stock_md5 is not 32 hex digits" % row["fex_version"])
+        return row["stock_md5"]
+    data = Path(row["stock"]).read_bytes()
+    if not arm64ec_dll(data):
+        raise Refused("%s is not an ARM64EC PE DLL" % row["stock"])
+    if fex_version(data) != row["fex_version"]:
+        raise Refused("%s: FEX version %s, the row says %s" % (row["stock"], fex_version(data), row["fex_version"]))
+    md5 = digest(data, "md5")
+    if row.get("stock_md5", md5) != md5:
+        raise Refused("%s: md5 %s, the row says %s" % (row["stock"], md5, row["stock_md5"]))
+    return md5
 
 
 def build(args):
@@ -108,7 +140,9 @@ def build(args):
     notice = ["FEX (https://github.com/FEX-Emu/FEX), the arm64ec FEX in Proton (ARM64), rebuilt with one patch per FEX",
               "build that recompiles JIT blocks which keep trapping on unaligned atomics with an out-of-line fallback.",
               "One patched libarm64ecfex.dll per row of table.json:", ""]
+    typed_ok = getattr(args, "typed_stock_md5", False)
     for row in rows:
+        row["stock_md5"] = stock_md5(row, typed_ok)
         dll = Path(row["dll"]).read_bytes()
         patch = Path(row["patch"]).read_bytes()
         version = row["fex_version"]
@@ -127,10 +161,14 @@ def build(args):
         entry.update(patched=name, patched_md5=patched_md5, patch=patch_name, patch_md5=digest(patch, "md5"))
         if row.get("fex_commit"):
             entry["fex_commit"] = row["fex_commit"]
+        if row.get("supersedes"):
+            entry["supersedes"] = row["supersedes"]
         table.append(entry)
         notice.append("  %s%s (upstream %s): stock md5 %s -> patched md5 %s" % (
             version, " / Proton " + row["proton_build"] if row.get("proton_build") else "", row.get("fex_commit", "?"),
             row["stock_md5"], patched_md5))
+        if row.get("supersedes"):
+            notice.append("    replaces the older patched builds %s" % ", ".join(row["supersedes"]))
         notice.append("    patch %s (md5 %s)" % (patch_name, entry["patch_md5"]))
     notice += ["", "The patches are the files in patches/ (md5s above). Package built from %s commit %s." % (REPO, args.commit),
                "FEX and these patches are under the MIT license; see LICENSE (FEX's own LICENSE). The patches are not part",
@@ -222,7 +260,7 @@ def check(source):
     table = json.loads(files.get("table.json", b"null"))
     if not isinstance(table, list) or not 1 <= len(table) <= MAX_ROWS:
         raise Refused("table.json must be a list of 1..%d rows" % MAX_ROWS)
-    stocks, patched, used = set(), set(), set()
+    seen, used = set(), set()
     for row in table:
         if not isinstance(row, dict) or set(row) - set(ROW_KEYS):
             raise Refused("bad row %r" % (row,))
@@ -235,14 +273,20 @@ def check(source):
             raise Refused("row %s: bad proton_build" % row["fex_version"])
         if "fex_commit" in row and not re.fullmatch(r"[0-9a-f]{7,40}", str(row["fex_commit"])):
             raise Refused("row %s: bad fex_commit" % row["fex_version"])
-        if row["stock_md5"] in stocks:
-            raise Refused("stock_md5 %s twice" % row["stock_md5"])
-        stocks.add(row["stock_md5"])
+        old = row.get("supersedes", [])
+        if not isinstance(old, list) or ("supersedes" in row and not 1 <= len(old) <= MAX_ROWS) \
+                or not all(HEX32.fullmatch(str(v)) for v in old):
+            raise Refused("row %s: supersedes must be a list of 1..%d md5s" % (row["fex_version"], MAX_ROWS))
+        for value in [row["stock_md5"], row["patched_md5"]] + old:
+            if value == EMPTY_MD5:
+                raise Refused("row %s: %s is an empty file's md5" % (row["fex_version"], value))
+            if value in seen:
+                raise Refused("md5 %s twice (one role in one row only)" % value)
+            seen.add(value)
         dll = files.get(row.get("patched"))
         if not str(row.get("patched")).startswith("dll/") or dll is None or row["patched"] in used:
             raise Refused("row %s: patched must be its own dll/ file of the package" % row["fex_version"])
         used.add(row["patched"])
-        patched.add(row["patched_md5"])
         if digest(dll, "md5") != row["patched_md5"]:
             raise Refused("row %s: %s is not md5 %s" % (row["fex_version"], row["patched"], row["patched_md5"]))
         if not arm64ec_dll(dll):
@@ -252,8 +296,6 @@ def check(source):
         patch = files.get(row.get("patch"))
         if not str(row.get("patch")).startswith("patches/") or patch is None or digest(patch, "md5") != row["patch_md5"]:
             raise Refused("row %s: patch %s missing or not md5 %s" % (row["fex_version"], row.get("patch"), row["patch_md5"]))
-    if stocks & patched:
-        raise Refused("a patched md5 is also a stock md5")
     stray = [rel for rel in files if rel.startswith("dll/") and rel not in used]
     if stray:
         raise Refused("DLLs no row uses: %s" % ", ".join(stray))
@@ -262,8 +304,9 @@ def check(source):
             raise Refused("%s is missing" % name)
     print("%s ok: %d rows" % (top, len(table)))
     for row in table:
-        print("  %-24s %-30s stock %s -> patched %s  patch %s" % (
-            row["fex_version"], row.get("proton_build", "-"), row["stock_md5"], row["patched_md5"], row["patch_md5"]))
+        print("  %-24s %-30s stock %s -> patched %s  patch %s%s" % (
+            row["fex_version"], row.get("proton_build", "-"), row["stock_md5"], row["patched_md5"], row["patch_md5"],
+            "  supersedes " + ",".join(row["supersedes"]) if row.get("supersedes") else ""))
     return top, table
 
 
@@ -278,6 +321,7 @@ def main(argv):
     b.add_argument("--row", action="append", required=True)
     b.add_argument("--out", required=True)
     b.add_argument("--zip", action="store_true", help="also write <out>/fex-arm64ec-<V>.zip (+ .sha256)")
+    b.add_argument("--typed-stock-md5", action="store_true", help="take a row's stock_md5= as typed (no stock DLL to check)")
     c = sub.add_parser("check")
     c.add_argument("package")
     u = sub.add_parser("unpack", help="check, then write the package's files into OUT (the APK assets; no top folder)")

@@ -300,6 +300,155 @@ class FexPatchTest(unittest.TestCase):
         self.assertIn("bad patched path", self.run_patch())
         self.assertEqual(self.target.read_bytes(), self.STOCK)
 
+    def set_rows(self, change):
+        rows = json.loads((self.bundled / "table.json").read_text())
+        change(rows)
+        (self.bundled / "table.json").write_text(json.dumps(rows))
+
+    def test_a_superseded_patched_build_gets_the_rows_dll_and_opting_out_still_finds_the_stock(self):
+        old = b"MZ older patched FEX-2610-101-g1c4f04b"
+        self.run_patch()
+        self.target.write_bytes(old)
+        self.assertIn("left as it is", self.run_patch())
+        self.set_rows(lambda rows: rows[0].update(supersedes=[md5(old)]))
+        self.assertIn("replaced an older patched build", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+        stock = self.components / "fex-arm64ec" / (md5(self.STOCK) + ".dll")
+        self.assertEqual(stock.read_bytes(), self.STOCK)
+        self.assertFalse((self.components / "fex-arm64ec" / (md5(old) + ".dll")).exists())
+        self.assertIn("replaces a superseded patched build", self.events()[-1][8])
+        self.target.write_bytes(old)
+        self.assertIn("stock DLL for this game", self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+
+    def test_an_md5_in_two_roles_or_an_empty_files_md5_refuses_the_table(self):
+        for change in (lambda rows: rows[0].update(supersedes=[rows[1]["patched_md5"]]),
+                       lambda rows: rows[1].update(supersedes=[rows[1]["stock_md5"]]),
+                       lambda rows: rows[0].update(supersedes=[md5(b"")]),
+                       lambda rows: rows[0].update(supersedes=[]),
+                       lambda rows: rows[0].update(supersedes="0" * 32)):
+            self.table(self.bundled, "2026.11.13.1", [("101", self.STOCK, self.PATCHED), ("175", self.STOCK175, self.PATCHED175)])
+            self.set_rows(change)
+            self.assertIn("bundled fex-arm64ec table ignored", self.run_patch())
+            self.assertEqual(self.target.read_bytes(), self.STOCK)
+
+    def test_a_row_whose_fex_version_is_not_the_dlls_leaves_it(self):
+        # a copy/paste slip: the 175 stock md5 on the 101 row would put a 101 DLL into a 175 Proton
+        self.set_rows(lambda rows: (rows[0].update(stock_md5=md5(self.STOCK175)), rows.pop()))
+        self.target.write_bytes(self.STOCK175)
+        note = self.run_patch()
+        self.assertIn("the bundled table 2026.11.13.1 row for this md5 is for FEX-2610-101-g1c4f04b; left as it is", note)
+        self.assertEqual(self.target.read_bytes(), self.STOCK175)
+        self.assertEqual(["fex-unmatched"], [e[2] for e in self.events()])
+
+    def test_place_checks_the_copy_and_leaves_no_temp_file(self):
+        self.run_patch()
+        self.assertEqual([], [p.name for p in self.target.parent.iterdir() if p.name.endswith(".bl-new")])
+        self.target.write_bytes(self.STOCK)
+        with mock.patch.dict(MALI["place"].__globals__, {"md5_of": lambda path: "0" * 32 if str(path).endswith(".bl-new") else md5(Path(path).read_bytes())}):
+            self.assertIn("not changed (the copy of", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+        self.assertEqual([], [p.name for p in self.target.parent.iterdir() if p.name.endswith(".bl-new")])
+
+    def test_a_left_over_temp_file_is_removed_once_it_is_stale(self):
+        old = self.target.parent / ".libarm64ecfex.dll.abc123.bl-new"
+        fresh = self.target.parent / ".libarm64ecfex.dll.def456.bl-new"
+        legacy = self.target.parent / "libarm64ecfex.dll.bl-new"
+        for path in (old, fresh, legacy):
+            path.write_bytes(b"half")
+        for path in (old, legacy):
+            os.utime(path, (1, 1))
+        self.run_patch()
+        self.assertEqual([fresh.name], sorted(p.name for p in self.target.parent.iterdir() if p.name.endswith(".bl-new")))
+
+    def test_a_zero_byte_dll_is_never_patched_and_gets_its_builds_stock_copy_back(self):
+        self.run_patch()
+        record = self.components / "fex-arm64ec" / "Proton_Experimental_ARM64_.stock"
+        self.assertEqual(record.read_text(), "%s\texperimental-11.0-20261027b\n" % md5(self.STOCK))
+        self.target.write_bytes(b"")
+        self.assertIn("got its stock copy back", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+        self.assertEqual(["fex-apply", "fex-stock", "fex-apply"], [e[2] for e in self.events()])
+        # a record of another Proton build (or the one-field record of 0.6.9-mali.1) is not trusted
+        for text in ("%s\texperimental-11.0-20261105c\n" % md5(self.STOCK), md5(self.STOCK) + "\n"):
+            record.write_text(text)
+            self.target.write_bytes(b"")
+            self.assertIn("left as it is", self.run_patch())
+            self.assertEqual(self.target.read_bytes(), b"")
+
+
+def fake_arm64ec(tag=b""):
+    """A minimal PE32+ DLL of machine AMD64 whose load config has a CHPE metadata pointer (as test_droiddeckctl)."""
+    import struct
+    data = bytearray(0x600)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x40)
+    data[0x40:0x44] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", data, 0x44, 0x8664, 1, 0, 0, 0, 0xF0, 0x2022)
+    opt = 0x58
+    struct.pack_into("<H", data, opt, 0x20B)
+    struct.pack_into("<Q", data, opt + 24, 0x180000000)
+    struct.pack_into("<II", data, opt + 112 + 80, 0x1000, 0x138)
+    struct.pack_into("<8sIIII", data, opt + 0xF0, b".rdata", 0x400, 0x1000, 0x400, 0x200)
+    struct.pack_into("<I", data, 0x200, 0x138)
+    struct.pack_into("<Q", data, 0x200 + 0xC8, 0x180000000 + 0x1100)
+    return bytes(data) + tag
+
+
+class FexPackagerTest(unittest.TestCase):
+    """tools/make-fex-arm64ec-package.py: stock md5 from the stock DLL, supersedes, one role per md5."""
+    TOOL = runpy.run_path(str(Path(__file__).resolve().parents[1] / "make-fex-arm64ec-package.py"))
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.files = {}
+        for name, data in (("stock", fake_arm64ec(b"stock FEX-2610-101-g1c4f04b")), ("patched", fake_arm64ec(b"patched FEX-2610-101-g1c4f04b")),
+                           ("stock175", fake_arm64ec(b"stock FEX-2610-175-geff9f45")), ("patch", b"diff")):
+            (self.dir / name).write_bytes(data)
+            self.files[name] = data
+
+    def build(self, row, typed=False):
+        import argparse
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.TOOL["build"](argparse.Namespace(version="2026.11.20.1", date="2026-11-20", commit="a" * 40, changelog="t",
+                                                         row=[row], out=str(self.dir / "out"), zip=False, typed_stock_md5=typed))
+
+    def row(self, stock="stock_md5=%s" % ("1" * 32), extra=""):
+        return "%s,fex_version=FEX-2610-101-g1c4f04b,dll=%s,patch=%s%s" % (stock, self.dir / "patched", self.dir / "patch", extra)
+
+    def test_the_stock_md5_comes_from_the_stock_dll(self):
+        folder = self.build(self.row("stock=%s" % (self.dir / "stock")))
+        table = json.loads((folder / "table.json").read_text())
+        self.assertEqual(md5(self.files["stock"]), table[0]["stock_md5"])
+        self.assertNotIn("supersedes", table[0])
+        with self.assertRaisesRegex(self.TOOL["Refused"], "FEX version FEX-2610-175-geff9f45, the row says FEX-2610-101"):
+            self.build(self.row("stock=%s" % (self.dir / "stock175")))
+        with self.assertRaisesRegex(self.TOOL["Refused"], "not an ARM64EC"):
+            self.build(self.row("stock=%s" % (self.dir / "patch")))
+        with self.assertRaisesRegex(self.TOOL["Refused"], "the row says"):
+            self.build(self.row("stock=%s,stock_md5=%s" % (self.dir / "stock", "1" * 32)))
+
+    def test_a_typed_stock_md5_needs_the_explicit_flag(self):
+        with self.assertRaisesRegex(self.TOOL["Refused"], "typed by hand"):
+            self.build(self.row())
+        folder = self.build(self.row(), typed=True)
+        self.assertEqual("1" * 32, json.loads((folder / "table.json").read_text())[0]["stock_md5"])
+
+    def test_supersedes_is_written_checked_and_one_role_per_md5(self):
+        folder = self.build(self.row(extra=",supersedes=%s:%s" % ("3" * 32, "4" * 32)), typed=True)
+        self.assertEqual(["3" * 32, "4" * 32], json.loads((folder / "table.json").read_text())[0]["supersedes"])
+        self.assertIn("replaces the older patched builds", (folder / "NOTICE").read_text())
+        with self.assertRaisesRegex(self.TOOL["Refused"], "twice"):
+            self.build(self.row(extra=",supersedes=%s" % ("1" * 32)), typed=True)
+        with self.assertRaisesRegex(self.TOOL["Refused"], "twice"):
+            self.build(self.row(extra=",supersedes=%s" % md5(self.files["patched"])), typed=True)
+        with self.assertRaisesRegex(self.TOOL["Refused"], "separated by"):
+            self.build(self.row(extra=",supersedes=xyz"), typed=True)
+
 
 RELEASE = Path(__file__).resolve().parents[2] / "../release/fex-arm64ec/fex-arm64ec-2026.11.13.1"
 PHONE_STOCK_175 = Path(__file__).resolve().parents[2] / "../fex-175-1111/S0/stock-phone.dll"

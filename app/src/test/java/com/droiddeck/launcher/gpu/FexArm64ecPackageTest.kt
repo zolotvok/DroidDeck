@@ -33,8 +33,9 @@ class FexArm64ecPackageTest {
     private val host = object : FexArm64ecPackage.Host {
         var running = false
         var hasBundled = true
+        var bundledVersion = "2026.11.13.1"
         override val sessionRunning get() = running
-        override val bundled get() = if (hasBundled) FexArm64ecPackage.Bundled("2026.11.13.1", bundledRows, "c".repeat(32)) else null
+        override val bundled get() = if (hasBundled) FexArm64ecPackage.Bundled(bundledVersion, bundledRows, "c".repeat(32)) else null
     }
     private val commit = "2d90092006bf8e48a792aab94515ed01af5af685"
 
@@ -263,6 +264,93 @@ class FexArm64ecPackageTest {
         assertTrue(lines[0][8].startsWith("fex-unmatched FEX-2611-3-gabcdef0 "))
         assertFalse(guest.exists())
         assertEquals(0, FexArm64ecPackage.ingestGuestLog(layout))
+    }
+
+    private fun tableText(vararg rows: JSONObject) = JSONArray(rows.toList()).toString()
+    private fun row(stock: String, patched: String, dll: String, supersedes: List<String>? = null) = JSONObject()
+        .put("stock_md5", stock).put("fex_version", "FEX-2610-101-g1c4f04b").put("patched", "dll/$dll.dll").put("patched_md5", patched)
+        .put("patch", "patches/p.patch").put("patch_md5", "b".repeat(32)).also { r -> supersedes?.let { r.put("supersedes", JSONArray(it)) } }
+
+    @Test fun supersedesIsParsedAndEveryMd5HasOneRoleInOneRow() {
+        val rows = FexArm64ecPackage.parseTable(tableText(row(stock101, "a".repeat(32), "a", listOf("3".repeat(32), "4".repeat(32))), row(stock175, "5".repeat(32), "b")))
+        assertEquals(listOf("3".repeat(32), "4".repeat(32)), rows[0].supersedes)
+        assertEquals(emptyList<String>(), rows[1].supersedes)
+        assertEquals(2, rows[0].json().getJSONArray("supersedes").length())
+        for (bad in listOf(
+            tableText(row(stock101, "a".repeat(32), "a", listOf("5".repeat(32))), row(stock175, "5".repeat(32), "b")),
+            tableText(row(stock101, "a".repeat(32), "a", listOf(stock175)), row(stock175, "5".repeat(32), "b")),
+            tableText(row(stock101, "a".repeat(32), "a", listOf("a".repeat(32)))),
+            tableText(row(stock101, "a".repeat(32), "a", listOf(FexArm64ecPackage.EMPTY_MD5))),
+            tableText(row(stock101, FexArm64ecPackage.EMPTY_MD5, "a")),
+            tableText(row(stock101, "a".repeat(32), "a", emptyList())),
+            tableText(row(stock101, "a".repeat(32), "a", listOf("XYZ"))),
+            tableText(row(stock101, "a".repeat(32), "a"), row(stock101, "5".repeat(32), "b")),
+        )) refused("BAD_TABLE") { FexArm64ecPackage.parseTable(bad) }
+    }
+
+    @Test fun aPackageWithSupersedesInstalls() {
+        val old = "3".repeat(32)
+        val status = install(zip("2026.11.20.1", files { _, table -> table.getJSONObject(1).put("supersedes", JSONArray(listOf(old))) }))
+        assertEquals(listOf(emptyList(), listOf(old)), status.rows.map { it.supersedes })
+        assertTrue(File(live, "table.json").readText().contains(old))
+    }
+
+    @Test fun aNewerBundledTableReplacesAnOlderInstalledOneAtTheStart() {
+        install(pkg("2026.11.13.1"))
+        assertEquals("current", FexArm64ecPackage.restage(layout, host, emptyList()))
+        host.bundledVersion = "2026.11.20.1"
+        assertEquals("upgrade-at-start", FexArm64ecPackage.restage(layout, host, emptyList()))
+        assertFalse(live.exists())
+        val status = FexArm64ecPackage.status(layout, host)
+        assertEquals("bundled", status.source)
+        assertEquals("2026.11.20.1", status.version)
+        assertEquals("2026.11.13.1", status.previous)
+        val event = logLines().last()
+        assertEquals(listOf("upgrade-at-start", "2026.11.13.1", "2026.11.20.1 (bundled)", "bundled", "ok"), listOf(event[2], event[3], event[4], event[6], event[7]))
+        assertEquals("current", FexArm64ecPackage.restage(layout, host, emptyList()))
+        // an older table would be hidden again at the next start: install and roll back refuse it
+        refused("OLDER_THAN_BUNDLED") { FexArm64ecPackage.rollback(layout, host) }
+        refused("OLDER_THAN_BUNDLED") { install(pkg("2026.11.14.1")) }
+        assertEquals("refused", logLines().last()[2])
+        // equal versions: the installed table wins
+        install(pkg("2026.11.20.1", tag = "same version"))
+        assertEquals("current", FexArm64ecPackage.restage(layout, host, emptyList()))
+        assertTrue(live.isDirectory)
+    }
+
+    @Test fun restageRepairsASameLengthChangeOfAGuestDll() {
+        install(pkg())
+        val dll = File(live, "dll/FEX-2610-101-g1c4f04b.dll")
+        val bytes = dll.readBytes()
+        bytes[bytes.size - 1] = (bytes.last() + 1).toByte()
+        dll.writeBytes(bytes)
+        assertEquals("restaged", FexArm64ecPackage.restage(layout, host, emptyList()))
+        assertEquals(FexArm64ecPackage.parseTable(File(live, "table.json").readText())[0].patchedMd5, md5(dll.readBytes()))
+        File(live, "stray").writeText("x")
+        assertEquals("restaged", FexArm64ecPackage.restage(layout, host, emptyList()))
+        assertFalse(File(live, "stray").exists())
+        assertEquals("current", FexArm64ecPackage.restage(layout, host, emptyList()))
+    }
+
+    @Test fun theGuestLogIsMergedAsGuestWithCapsAndMalformedLinesDropped() {
+        val guest = File(layout.rootfs, FexArm64ecPackage.GUEST_LOG).apply { parentFile?.mkdirs() }
+        val ok = "2026-11-13T12:00:00Z\tfex-arm64ec\tfex-apply\ta\tb\t-\tadb\tok\tnote"
+        guest.writeText(listOf(
+            ok,
+            "2026-11-13T12:00:01Z\tfex-arm64ec\tfex-apply\ta\tb\t-\tdownload\tok\t" + "x".repeat(ComponentLog.MAX_INGEST_LINE),
+            "2026-11-13T12:00:02Z\tfex-arm64ec\tfex-apply\ta\tb\t-\tguest\tok\tn\textra",
+            "12:00\tfex-arm64ec\tfex-apply\ta\tb\t-\tguest\tok",
+        ).joinToString("\n", postfix = "\n") + "y".repeat(ComponentLog.MAX_INGEST_BYTES * 2) + "\n" + ok + "\n")
+        assertEquals(1, FexArm64ecPackage.ingestGuestLog(layout))
+        assertEquals(listOf("guest"), logLines().map { it[6] })
+        assertFalse(guest.exists())
+        assertFalse(File(guest.parentFile, guest.name + ".ingest").exists())
+        // a file the merge cannot read is not kept around for every later start
+        File(guest.parentFile, guest.name + ".ingest").mkdirs()
+        guest.writeText(ok + "\n")
+        assertEquals(0, FexArm64ecPackage.ingestGuestLog(layout))
+        assertFalse(File(guest.parentFile, guest.name + ".ingest").exists())
+        assertEquals(1, FexArm64ecPackage.ingestGuestLog(layout))
     }
 
     @Test fun statusWithoutAnInstallIsTheBundledTable() {

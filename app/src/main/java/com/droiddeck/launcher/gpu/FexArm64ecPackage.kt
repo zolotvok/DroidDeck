@@ -16,14 +16,20 @@ import java.security.MessageDigest
 /**
  * The patched FEX arm64ec DLLs as a table package (release-perf-1111.md § 3.3): `fex-arm64ec-<V>/` with `meta.json`
  * (§ 3.1, lists every other file), `table.json` = rows {stock_md5, fex_version, proton_build?, patched, patched_md5, patch,
- * patch_md5, fex_commit?}, one ARM64EC DLL per row under `dll/`, the patches under `patches/`, LICENSE and NOTICE
- * (tools/make-fex-arm64ec-package.py). droiddeck-mali-defaults' fex_patch() picks the row whose stock_md5 is the Proton's
- * current DLL.
+ * patch_md5, fex_commit?, supersedes?}, one ARM64EC DLL per row under `dll/`, the patches under `patches/`, LICENSE and
+ * NOTICE (tools/make-fex-arm64ec-package.py). droiddeck-mali-defaults' fex_patch() picks the row whose stock_md5 is the
+ * Proton's current DLL, or whose `supersedes` list (older patched builds of that stock DLL) holds it; every md5 of a table
+ * has exactly one role in one row.
  *
  * The APK bundles one package at linuxfs/[BUNDLED_DIR]; an installed one lives in the store `files/fex-arm64ec/`
  * (ComponentStore: active/, previous/, journal) and is copied to the rootfs at [ACTIVE_DIR], which the guest reads first.
  * stage() calls [restage]: an interrupted switch is finished, [ACTIVE_DIR] follows active/ (removed without one), the
- * guest's fex events go into the install log. Switches only while no session runs. [app, Claude Opus 5.5] 2026-11-13
+ * guest's fex events go into the install log. Switches only while no session runs.
+ *
+ * APK-upgrade rule (as guest-tools, ComponentStore.upgradeAtStart): the guest reads only one table, so an installed table
+ * older than the bundled one would hide the newer APK's rows. At the first stage() of such an APK the installed table goes to
+ * previous/ (logged `upgrade-at-start`) and the bundled table is used; install and roll back refuse a table older than the
+ * bundled one (OLDER_THAN_BUNDLED). Equal versions: the installed table wins. [app, Claude Opus 5.5] 2026-11-13
  */
 object FexArm64ecPackage {
     private const val TAG = "FexArm64ecPackage"
@@ -47,17 +53,21 @@ object FexArm64ecPackage {
     val FEX_VERSION = Regex("""FEX-\d{4}(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?""")
     private val PROTON_BUILD = Regex("[A-Za-z0-9._+-]{1,64}")
     private val FEX_COMMIT = Regex("[0-9a-f]{7,40}")
-    private val ROW_KEYS = setOf("stock_md5", "fex_version", "proton_build", "patched", "patched_md5", "patch", "patch_md5", "fex_commit")
+    private val ROW_KEYS = setOf("stock_md5", "fex_version", "proton_build", "patched", "patched_md5", "patch", "patch_md5", "fex_commit", "supersedes")
+    /** The md5 of an empty file: never a stock, patched or superseded DLL (a crash can leave a 0-byte DLL). */
+    const val EMPTY_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
 
     class Layout(val store: File, val rootfs: File)
 
     class Row(
         val stockMd5: String, val fexVersion: String, val protonBuild: String?, val patched: String, val patchedMd5: String,
         val patch: String, val patchMd5: String, val fexCommit: String?,
+        /** Patched md5s of older builds for this stock DLL: a Proton DLL with one of them gets this row's DLL. */
+        val supersedes: List<String> = emptyList(),
     ) {
         fun json(): JSONObject = JSONObject().put("stock_md5", stockMd5).put("fex_version", fexVersion)
             .put("proton_build", protonBuild ?: JSONObject.NULL).put("patched_md5", patchedMd5).put("patch_md5", patchMd5)
-            .put("fex_commit", fexCommit ?: JSONObject.NULL)
+            .put("fex_commit", fexCommit ?: JSONObject.NULL).put("supersedes", JSONArray(supersedes))
     }
 
     class Bundled(val version: String, val rows: List<Row>, val tableMd5: String, val commit: String = "", val date: String = "", val changelog: String = "")
@@ -139,14 +149,22 @@ object FexArm64ecPackage {
             val patch = j.optString("patch")
             if (!ComponentMeta.safePath(patched) || !patched.startsWith("dll/")) bad("row $i: patched must be a dll/ file of the package")
             if (!ComponentMeta.safePath(patch) || !patch.startsWith("patches/")) bad("row $i: patch must be a patches/ file of the package")
+            val supersedes = if (!j.has("supersedes")) emptyList() else {
+                val list = j.optJSONArray("supersedes") ?: bad("row $i: supersedes must be a list")
+                if (list.length() !in 1..MAX_ROWS) bad("row $i: supersedes must list 1..$MAX_ROWS md5s")
+                (0 until list.length()).map { k -> (list.opt(k) as? String)?.takeIf { HEX32.matches(it) } ?: bad("row $i: bad supersedes entry ${list.opt(k)}") }
+            }
             Row(
                 text("stock_md5", HEX32)!!, text("fex_version", FEX_VERSION)!!, text("proton_build", PROTON_BUILD, true), patched,
-                text("patched_md5", HEX32)!!, patch, text("patch_md5", HEX32)!!, text("fex_commit", FEX_COMMIT, true),
+                text("patched_md5", HEX32)!!, patch, text("patch_md5", HEX32)!!, text("fex_commit", FEX_COMMIT, true), supersedes,
             )
         }
-        if (rows.map { it.stockMd5 }.toSet().size != rows.size) bad("a stock_md5 is listed twice")
-        if (rows.map { it.patchedMd5 }.toSet().size != rows.size || rows.map { it.patched }.toSet().size != rows.size) bad("one DLL per row")
-        if (rows.any { r -> rows.any { it.stockMd5 == r.patchedMd5 } }) bad("a patched_md5 is also a stock_md5")
+        if (rows.map { it.patched }.toSet().size != rows.size) bad("one DLL per row")
+        val seen = HashSet<String>()
+        for (md5 in rows.flatMap { listOf(it.stockMd5, it.patchedMd5) + it.supersedes }) {
+            if (md5 == EMPTY_MD5) bad("$md5 is the md5 of an empty file")
+            if (!seen.add(md5)) bad("$md5 is listed twice (one role in one row only)")
+        }
         return rows
     }
 
@@ -267,6 +285,7 @@ object FexArm64ecPackage {
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
             if (!prepared.root.isDirectory) throw BlobferryException("STALE", "the prepared package is gone; import it again")
+            requireNotOlder(prepared.version, host)
             val record = JSONObject().put("version", prepared.version).put("commit", prepared.meta.commit).put("zipSha256", prepared.zipSha256)
                 .put("tableMd5", prepared.tableMd5).put("rows", prepared.rows.size).put("source", source)
                 .put("installedAt", System.currentTimeMillis()).put("meta", prepared.meta.record())
@@ -287,6 +306,7 @@ object FexArm64ecPackage {
         val from = currentVersion(store, host)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+            store.record(store.previous)?.let { requireNotOlder(it.optString("version"), host) }
             store.rollback(host.bundled?.version) { sync(layout, it) }
         } catch (e: BlobferryException) {
             log(layout, ComponentLog.REFUSED, from, null, null, null, e.code, ComponentLog.ROLLBACK)
@@ -311,22 +331,37 @@ object FexArm64ecPackage {
     }
 
     /**
-     * At every stage(): finishes an interrupted switch, makes [ACTIVE_DIR] match active/ (removed without one), removes files
-     * of an older bundled package from [BUNDLED_DIR] (the 0.6.9-mali.1 single DLL included) and moves the guest's fex events
-     * into the install log. Returns what it did.
+     * At every stage(): finishes an interrupted switch, applies the APK-upgrade rule (an installed table older than the bundled
+     * one goes to previous/), makes [ACTIVE_DIR] match active/ (removed without one), removes files of an older bundled
+     * package from [BUNDLED_DIR] (the 0.6.9-mali.1 single DLL included) and moves the guest's fex events into the install
+     * log. Returns what it did.
      */
     fun restage(layout: Layout, host: Host, bundledFiles: List<String>): String = synchronized(BlobferryPackage.LOCK) {
         val store = ComponentStore(layout.store)
         val recovered = store.recover { sync(layout, it) }
         if (recovered) log(layout, ComponentLog.RESTAGE, null, currentVersion(store, host), null, null, ComponentLog.OK)
+        val bundled = host.bundled?.version
+        val upgraded = store.upgradeAtStart(bundled) { sync(layout, it) }
+        if (upgraded != null) {
+            log(layout, ComponentLog.UPGRADE_AT_START, upgraded, "$bundled (bundled)", null, SOURCE_BUNDLED, ComponentLog.OK,
+                "the APK's table is newer; $upgraded kept as previous")
+        }
         val changed = sync(layout, store.active.takeIf { store.record(it) != null })
         cleanBundled(layout.rootfs, bundledFiles.toSet())
         ingestGuestLog(layout)
         when {
             recovered -> "recovered"
+            upgraded != null -> "upgrade-at-start"
             changed -> "restaged"
             else -> "current"
         }
+    }
+
+    private fun requireNotOlder(version: String, host: Host) {
+        val bundled = host.bundled?.version
+        if (ComponentStore.olderThanBundled(version, bundled)) throw BlobferryException(
+            "OLDER_THAN_BUNDLED", "fex-arm64ec $version is older than the table this app bundles ($bundled); it would never be used",
+        )
     }
 
     /** Moves the guest's fex-arm64ec events (droiddeck-mali-defaults) and guest-tools events into the app's install log. */
@@ -345,9 +380,7 @@ object FexArm64ecPackage {
         if (pkg == null) return target.exists().also { if (it && !target.deleteRecursively()) throw IOException("cannot remove $target") }
         val record = File(pkg, ComponentStore.RECORD).readText()
         val files = pkg.walkTopDown().filter { it.isFile }.associateBy { it.relativeTo(pkg).invariantSeparatorsPath }
-        val current = runCatching { File(target, ComponentStore.RECORD).readText() }.getOrNull() == record &&
-            files.all { (rel, f) -> File(target, rel).let { it.isFile && it.length() == f.length() } }
-        if (current) return false
+        if (current(target, pkg, record, files)) return false
         for ((rel, f) in files) f.copyTo(File(next, rel), overwrite = true)
         for (row in parseTable(File(next, TABLE).readText())) {
             if (md5(File(next, row.patched)) != row.patchedMd5) throw IOException("${row.patched} changed in the store")
@@ -359,6 +392,25 @@ object FexArm64ecPackage {
         }
         old.deleteRecursively()
         return true
+    }
+
+    /**
+     * [target] holds [pkg]'s files: the same record and meta.json text, every file meta.json lists with its md5 (the DLLs and
+     * table, so a same-length change is caught too), the others byte-equal, nothing else.
+     */
+    private fun current(target: File, pkg: File, record: String, files: Map<String, File>): Boolean {
+        return runCatching {
+            if (File(target, ComponentStore.RECORD).readText() != record) return false
+            val metaText = File(pkg, ComponentMeta.NAME).readText()
+            if (File(target, ComponentMeta.NAME).readText() != metaText) return false
+            val sums = ComponentMeta.parse(metaText).files
+            val present = target.walkTopDown().filter { it.isFile }.map { it.relativeTo(target).invariantSeparatorsPath }.toSet()
+            present == files.keys && files.all { (rel, f) ->
+                val t = File(target, rel)
+                val md5 = sums[rel]?.md5
+                if (md5 != null) t.length() == f.length() && md5(t) == md5 else t.readBytes().contentEquals(f.readBytes())
+            }
+        }.getOrDefault(false)
     }
 
     /** Regular files in the rootfs [BUNDLED_DIR] that the APK's package does not list go (they belong to an older APK). */

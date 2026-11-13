@@ -661,7 +661,7 @@ class ComponentCtlTest(FakeAdbTest):
         out = self.dir / "release"
         with contextlib.redirect_stdout(io.StringIO()):
             folder = tool["build"](argparse.Namespace(version="2026.11.13.1", date="2026-11-13", commit="a" * 40, changelog="t",
-                                                      row=rows, out=str(out), zip=False))
+                                                      row=rows, out=str(out), zip=False, typed_stock_md5=True))
         if broken:
             table = json.loads((folder / "table.json").read_text())
             table[1]["stock_md5"] = table[0]["stock_md5"]
