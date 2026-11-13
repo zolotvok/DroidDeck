@@ -150,7 +150,7 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
             DriverRow(id, it.label, activity.getString(if (linux) R.string.drivers_bundle_sets_display else R.string.drivers_bundle_sets_runtime), true, DriverRow.BUNDLE)
         }
         // On Mali with no choice saved, the session silently uses the imported PanVK (LinuxVulkanDriver.effective), so say so.
-        val autoPanvk = if (com.droiddeck.launcher.core.DeviceSupport.mali()) lm.enumerateInstalledDrivers().firstOrNull { lm.isPanvk(it) } else null
+        val autoPanvk = if (com.droiddeck.launcher.core.DeviceSupport.mali()) LinuxVulkanDriver.sessionPanvk(activity).ifEmpty { null } else null
         linuxRows = LinuxVulkanDriver.optionValues(activity).map { id ->
             if (id.isEmpty() && autoPanvk != null) DriverRow("", activity.getString(R.string.drivers_automatic), lm.getDriverName(autoPanvk), false)
             else if (id.isEmpty()) DriverRow("", activity.getString(R.string.gpu_runtime_default), activity.getString(R.string.drivers_runtime_builtin), false)
@@ -789,7 +789,11 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
             return
         }
         if (linux) {
-            LinuxVulkanDriverManager(activity).removeDriver(id)
+            // our own PanVK slot is not deleted here (the PanVK card's roll back / reset manage it)
+            if (!LinuxVulkanDriverManager(activity).removeDriver(id)) {
+                refreshDrivers()
+                return
+            }
             if (SessionPrefs.linuxDriver(activity) == id) SessionPrefs.setLinuxDriver(activity, "")
         } else {
             val td = TurnipDriver(activity)

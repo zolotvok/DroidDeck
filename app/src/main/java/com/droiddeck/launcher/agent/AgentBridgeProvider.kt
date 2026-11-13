@@ -340,7 +340,8 @@ class AgentBridgeProvider : ContentProvider() {
 
     private fun openInbox(file: File) = java.nio.file.Files.newInputStream(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
 
-    /** PanVK component ops (gpu/PanvkPackage), as blobferry: status always, install/rollback behind Debugging tools. */
+    /** PanVK component ops (gpu/PanvkPackage, our Blobferry_PanVK slot only), as blobferry: status always (with the other PanVK
+     *  slots listed read-only), install/rollback/reset behind Debugging tools. */
     private fun panvk(context: Context, request: JSONObject): JSONObject {
         val pv = com.droiddeck.launcher.gpu.PanvkPackage
         val op = request.optString("op", "status")
@@ -357,6 +358,7 @@ class AgentBridgeProvider : ContentProvider() {
                     }
                 }
                 "rollback" -> pv.rollback(context)
+                "reset" -> pv.reset(context)
                 else -> throw AgentException("INVALID_REQUEST", "Unknown panvk op '$op'")
             }
             status.json().put("ok", true).put("command", "panvk").put("op", op).apply { if (op != "status") put("appliesAt", "next session start") }

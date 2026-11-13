@@ -13,7 +13,7 @@ object DeviceSupport {
 
     fun supportedGpu(context: Context): Boolean =
         adreno() || mali() && (com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).hasPanvk() ||
-            // the APK's bundled PanVK is installed at the first session start (PanvkPackage.ensureBundled)
+            // the APK's bundled PanVK is installed at the first session start (PanvkPackage.ensureCurrent)
             com.droiddeck.launcher.gpu.PanvkPackage.bundled(context) != null)
 
     const val MALI_DEVICE = "/dev/mali0"

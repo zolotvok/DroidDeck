@@ -14,22 +14,32 @@ import java.util.zip.ZipFile
 
 /**
  * PanVK, the session's Vulkan driver on Mali (glibc build of panvk-kbase-android), as a managed component next to
- * Blobferry: a verified `panvk-kbase-<V>.zip` goes into the existing driver slot `linux_vulkan_drivers/PanVK_Kbase`, so
- * the driver choice (SessionPrefs: the slot id) stays as it is, and the .so it replaces is kept for one roll back.
+ * Blobferry. A verified `panvk-kbase-<V>.zip` goes into OUR OWN reserved driver slot `linux_vulkan_drivers/Blobferry_PanVK`
+ * (release-perf-1111.md § 3.3, user 11-11: "our PanVK should be separate"); its meta.json says `owner: blobferry`. No other
+ * slot (PanVK_Kbase, Turnip, a hand import) is ever written, removed or renamed here; the hand-import path cannot take the
+ * reserved id (LinuxVulkanDriverManager.isReservedId). Install, roll back and reset write the slot only while it is absent
+ * or ours.
  *
  * Package (tools/make-panvk-component.py): one top folder `panvk-kbase-<V>/` with `libvulkan_panfrost.so` (AArch64
  * ELF, glibc), `meta.json` (kind linux-vulkan-icd, backend panvk-kbase), `SOURCE.txt`, `LICENSE` and `SHA256SUMS`
  * listing every other file (both ways, as Blobferry's MD5SUMS). Only the .so is installed.
  *
- * Store `files/panvk/`: `state.json` = the active package record (none = the slot holds a hand import, which is left
- * alone until an install), `previous/` = the .so before (+ its meta.json, icd.json, package.json), `applying` = the
- * journal. The live .so is replaced by one rename, so the slot never lacks a driver; recover() (every stage()) finishes
- * the bookkeeping of a switch a crash interrupted. Switches only while no session runs. [app, Claude Opus 5.5] 2026-11-06
+ * Store `files/panvk-blobferry/`: `state.json` = the active package record, `previous/` = the .so before (+ its
+ * meta.json, icd.json, package.json), `applying` = the journal. The live .so is replaced by one rename, so the slot never
+ * lacks a driver; recover() finishes the bookkeeping of a switch a crash interrupted. ensureCurrent() (every stage())
+ * creates the slot, copies a bundled PanVK_Kbase into it once (migration), and upgrades it when the APK bundles a newer
+ * one or its .so is a known-stale build. Nothing here changes a driver choice. Switches only while no session runs.
+ * [app, Claude Opus 5.5] 2026-11-06, own slot 2026-11-13
  */
 object PanvkPackage {
     private const val TAG = "PanvkPackage"
-    const val SLOT_ID = "PanVK_Kbase"
-    const val STORE = "panvk"
+    const val SLOT_ID = LinuxVulkanDriverManager.RESERVED_PANVK_ID
+    const val SLOT_NAME = "PanVK (Blobferry)"
+    const val OWNER = "blobferry"
+    const val STORE = "panvk-blobferry"
+    /** The slot the APK's bundled PanVK went into before 0.6.9-mali.2 (now someone else's; only read once, to migrate). */
+    const val LEGACY_SLOT_ID = "PanVK_Kbase"
+    const val LEGACY_STORE = "panvk"
     const val LIB = LinuxVulkanDriverManager.PANVK_LIB_NAME
     const val BUNDLED_ASSET = "panvk/panvk-kbase.zip"
     const val BUNDLED_META = "panvk/BUNDLE.json"
@@ -47,12 +57,24 @@ object PanvkPackage {
     private val HEX64 = Regex("(?i)[0-9a-f]{64}")
     private val TOP_FILES = listOf(LIB, "meta.json", "SOURCE.txt", "LICENSE", "SHA256SUMS")
 
-    class Layout(val store: File, val slot: File, val slotName: String = "PanVK Kbase")
+    /**
+     * .so md5s of PanVK builds that must not stay in our slot (docs/agents/global-regress-1106.md, release-perf-1111.md
+     * § 1 row 1): a3ead172 (sha256 735ec272dc27c9c2..., the pre-MSRTSS build the test phone ran 11-06..11-11) and
+     * 81ec6d60 (the 234-236 build before it). The fixed build is bda2be8e.
+     */
+    val STALE_MD5 = setOf("a3ead17274c7ab3d7eda5ade964a176e", "81ec6d602322309464b10c81dec5ff2b")
+
+    class Layout(val store: File, val slot: File, val slotName: String = SLOT_NAME)
+
+    /** The pre-0.6.9-mali.2 bundled slot and its store, read once by the migration. */
+    class Legacy(val store: File, val slot: File)
 
     interface Host {
         val sessionRunning: Boolean
         /** The PanVK package the APK bundles (version + zip sha256), null without one. */
         val bundled: Bundled?
+        /** The bundled zip (reset, ensureCurrent), null without one. */
+        fun openBundled(): InputStream? = null
     }
 
     class Bundled(val version: String, val sha256: String)
@@ -65,25 +87,40 @@ object PanvkPackage {
         val meta: ComponentMeta? = null,
     )
 
+    /** A PanVK slot that is not ours: listed read-only ("user-installed, not managed"), never touched. */
+    class Foreign(val id: String, val name: String, val driverVersion: String, val soMd5: String) {
+        fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("driverVersion", driverVersion).put("soMd5", soMd5)
+            .put("managed", false).put("note", "user-installed, not managed")
+    }
+
     class Status(
         val source: String, val version: String, val driverVersion: String, val commit: String, val soMd5: String,
         val previous: String?, val bundledVersion: String?, val installed: Boolean, val canSwitch: Boolean, val slot: String,
         val date: String = "", val changelog: String = "",
+        /** The slot exists but its meta.json does not say owner blobferry: nothing here writes it. */
+        val notOurs: Boolean = false,
+        val foreign: List<Foreign> = emptyList(),
     ) {
         fun json(): JSONObject = JSONObject().put("source", source).put("version", version).put("driverVersion", driverVersion)
             .put("commit", commit).put("soMd5", soMd5).put("hasPrevious", previous != null).put("previous", previous ?: JSONObject.NULL)
             .put("bundledVersion", bundledVersion ?: JSONObject.NULL).put("installed", installed).put("canSwitch", canSwitch)
-            .put("slot", slot).put("date", date).put("changelog", changelog)
+            .put("slot", slot).put("date", date).put("changelog", changelog).put("owner", if (notOurs) JSONObject.NULL else OWNER)
+            .put("notOurs", notOurs).put("foreign", org.json.JSONArray(foreign.map { it.json() }))
     }
 
     // ---- context entry points ----
 
     fun layout(context: Context) = Layout(File(context.filesDir, STORE), LinuxVulkanDriverManager(context).getDriverDir(SLOT_ID))
 
+    fun legacy(context: Context) = Legacy(File(context.filesDir, LEGACY_STORE), LinuxVulkanDriverManager(context).getDriverDir(LEGACY_SLOT_ID))
+
     fun host(context: Context): Host = object : Host {
         override val sessionRunning get() = BlobferryPackage.sessionBusy()
         override val bundled get() = bundled(context)
+        override fun openBundled(): InputStream? = openBundledAsset(context)
     }
+
+    private fun openBundledAsset(context: Context): InputStream? = runCatching { context.assets.open(BUNDLED_ASSET) }.getOrNull()
 
     fun bundled(context: Context): Bundled? = runCatching {
         context.assets.open(BUNDLED_META).use { JSONObject(it.readBytes().toString(Charsets.UTF_8)) }
@@ -92,25 +129,100 @@ object PanvkPackage {
     fun prepare(context: Context, input: InputStream, expectedSha256: String? = null) = prepare(layout(context), input, expectedSha256)
     fun install(context: Context, prepared: Prepared, source: String) = install(layout(context), host(context), prepared, source)
     fun rollback(context: Context) = rollback(layout(context), host(context))
+    fun reset(context: Context) = reset(layout(context), host(context))
     fun status(context: Context) = status(layout(context), host(context))
     fun recover(context: Context) = recover(layout(context))
 
-    /** Mali, at stage(): a phone without any PanVK gets the bundled one. An existing slot is never replaced here. */
-    @JvmStatic fun ensureBundled(context: Context): Boolean {
-        if (!com.droiddeck.launcher.core.DeviceSupport.mali()) return false
-        val layout = layout(context)
+    /** Mali, at stage(): our slot is created, migrated or upgraded (see the pure ensureCurrent). No driver choice changes. */
+    @JvmStatic fun ensureCurrent(context: Context): String {
+        if (!com.droiddeck.launcher.core.DeviceSupport.mali()) return "not-mali"
+        val bundled = bundled(context)
+        // stage() runs before the guest starts: nothing has loaded our slot's .so (the switch is one rename anyway)
+        val host = object : Host {
+            override val sessionRunning = false
+            override val bundled = bundled
+            override fun openBundled(): InputStream? = openBundledAsset(context)
+        }
+        return ensureCurrent(layout(context), host, legacy(context)).also { Log.i(TAG, "PanVK slot $SLOT_ID: $it") }
+    }
+
+    /**
+     * Our slot at stage(): finishes an interrupted switch; copies a bundled PanVK_Kbase into it while ours is missing
+     * (migration, the source stays); creates it from the APK's PanVK when still missing; upgrades it when the bundled
+     * version is newer than our managed one or its .so is on [STALE_MD5] (a hand-deployed unknown .so in our slot is left
+     * alone otherwise). previous/ keeps the .so before. Returns what it did. Never reads or writes a driver choice.
+     */
+    fun ensureCurrent(layout: Layout, host: Host, legacy: Legacy? = null, staleMd5: Set<String> = STALE_MD5): String = synchronized(BlobferryPackage.LOCK) {
         recover(layout)
-        if (File(layout.slot, LIB).isFile || LinuxVulkanDriverManager(context).hasPanvk()) return false
-        val bundled = bundled(context) ?: return false
-        return runCatching {
-            val prepared = context.assets.open(BUNDLED_ASSET).use { prepare(layout, it, bundled.sha256) }
-            install(layout, object : Host {
-                override val sessionRunning = false // a new slot: nothing has loaded it yet
-                override val bundled = bundled
-            }, prepared, SOURCE_BUNDLED)
-            Log.i(TAG, "installed the bundled PanVK ${bundled.version} into $SLOT_ID")
-            true
-        }.onFailure { Log.e(TAG, "bundled PanVK not installed", it) }.getOrDefault(false)
+        if (!ownedOrAbsent(layout)) {
+            log(layout, ComponentLog.REFUSED, currentVersion(layout), host.bundled?.version, null, SOURCE_BUNDLED, "NOT_OURS")
+            return@synchronized "not-ours"
+        }
+        val migrated = legacy != null && slotAbsent(layout) && migrate(layout, legacy)
+        val bundled = host.bundled ?: return@synchronized if (migrated) "migrated" else if (slotAbsent(layout)) "none" else "current"
+        val live = File(layout.slot, LIB)
+        val creating = !live.isFile
+        val liveMd5 = if (creating) "" else md5(live)
+        if (!creating) {
+            val state = readJson(File(layout.store, STATE))?.takeIf { it.optString("soMd5") == liveMd5 }
+            val stale = liveMd5 in staleMd5
+            val newer = state != null && compareVersions(bundled.version, state.optString("version")) > 0
+            if (!stale && !newer) return@synchronized if (migrated) "migrated" else "current"
+        }
+        val prepared = host.openBundled()?.use { prepare(layout, it, bundled.sha256) }
+            ?: return@synchronized if (migrated) "migrated" else "no-bundled-zip"
+        if (prepared.soMd5 == liveMd5) {
+            discard(prepared)
+            return@synchronized "current"
+        }
+        install(layout, host, prepared, SOURCE_BUNDLED, if (creating) ComponentLog.INSTALL else ComponentLog.UPGRADE_AT_START)
+        if (creating) (if (migrated) "migrated" else "created") else if (migrated) "migrated+upgraded" else "upgraded"
+    }
+
+    /**
+     * Copies a PanVK_Kbase slot whose package record says source bundled (ours, before the own slot) into our missing slot.
+     * The legacy slot, its store and every driver choice stay as they are; only its .so is read.
+     */
+    fun migrate(layout: Layout, legacy: Legacy): Boolean = synchronized(BlobferryPackage.LOCK) {
+        if (!slotAbsent(layout)) return@synchronized false
+        val record = readJson(File(legacy.store, STATE)) ?: return@synchronized false
+        if (record.optString("source") != SOURCE_BUNDLED) return@synchronized false
+        val so = File(legacy.slot, LIB)
+        if (!so.isFile || md5(so) != record.optString("soMd5")) return@synchronized false
+        val state = JSONObject(record.toString()).put("migratedFrom", legacy.slot.name).put("installedAt", System.currentTimeMillis())
+        switchTo(layout, so, state, null)
+        log(layout, ComponentLog.MIGRATE, legacy.slot.name, state.optString("version"), state.optString("zipSha256"), SOURCE_BUNDLED, ComponentLog.OK)
+        Log.i(TAG, "copied the bundled PanVK ${state.optString("version")} from ${legacy.slot.name} into ${layout.slot.name}")
+        true
+    }
+
+    /** The slot does not exist, or is an empty folder. */
+    private fun slotAbsent(layout: Layout): Boolean = !layout.slot.exists() || (layout.slot.isDirectory && layout.slot.list().isNullOrEmpty())
+
+    /** Absent, or a folder whose meta.json says owner blobferry: the only slot states anything here writes to. */
+    fun ownedOrAbsent(layout: Layout): Boolean = slotAbsent(layout) ||
+        (layout.slot.isDirectory && readJson(File(layout.slot, LinuxVulkanDriverManager.META_NAME))?.optString("owner") == OWNER)
+
+    private fun requireOurs(layout: Layout) {
+        if (!ownedOrAbsent(layout)) throw BlobferryException(
+            "NOT_OURS", "${layout.slot.name} exists but is not the Blobferry PanVK slot (meta.json has no owner $OWNER); it is left alone",
+        )
+    }
+
+    /** Version order: numbers numerically, letters as text ("v26.3.1-234-237" > "v26.3.1+234-236"). */
+    fun compareVersions(a: String, b: String): Int {
+        val ta = Regex("[0-9]+|[A-Za-z]+").findAll(a).map { it.value }.toList()
+        val tb = Regex("[0-9]+|[A-Za-z]+").findAll(b).map { it.value }.toList()
+        for (i in 0 until minOf(ta.size, tb.size)) {
+            val x = ta[i]
+            val y = tb[i]
+            val c = if (x[0].isDigit() && y[0].isDigit()) x.trimStart('0').padStart(1, '0').let { xs ->
+                val ys = y.trimStart('0').padStart(1, '0')
+                if (xs.length != ys.length) xs.length.compareTo(ys.length) else xs.compareTo(ys)
+            } else x.compareTo(y)
+            if (c != 0) return c
+        }
+        return ta.size.compareTo(tb.size)
     }
 
     // ---- verify ----
@@ -235,6 +347,7 @@ object PanvkPackage {
         val from = currentVersion(layout)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+            requireOurs(layout)
             val so = File(prepared.root, LIB)
             if (!so.isFile) throw BlobferryException("STALE", "the prepared package is gone; import it again")
             if (md5(so) != prepared.soMd5) throw BlobferryException("BAD_CHECKSUM", "the prepared $LIB changed")
@@ -258,6 +371,12 @@ object PanvkPackage {
     /** Swaps the live .so and previous/ (rolling back again goes forward again). */
     fun rollback(layout: Layout, host: Host): Status = synchronized(BlobferryPackage.LOCK) {
         if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+        try {
+            requireOurs(layout)
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, currentVersion(layout), null, null, null, e.code)
+            throw e
+        }
         val previous = File(layout.store, "previous")
         val so = File(previous, LIB)
         val state = readJson(File(previous, PACKAGE))
@@ -270,6 +389,15 @@ object PanvkPackage {
         status(layout, host)
     }
 
+    /** Back to the PanVK the APK bundles, in our slot only (the .so before is kept for a roll back). */
+    fun reset(layout: Layout, host: Host): Status = synchronized(BlobferryPackage.LOCK) {
+        if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+        val bundled = host.bundled ?: throw BlobferryException("NO_BUNDLED", "this app has no bundled PanVK")
+        val prepared = host.openBundled()?.use { prepare(layout, it, bundled.sha256) }
+            ?: throw BlobferryException("NO_BUNDLED", "this app has no bundled PanVK")
+        install(layout, host, prepared, SOURCE_BUNDLED, ComponentLog.RESET)
+    }
+
     /**
      * The live .so := [so]: journal, keep the live one as previous/, stage the new one beside the live one and rename it
      * over (atomic), then meta.json, icd.json and state.json. [meta] = the slot meta to restore (roll back), else built.
@@ -279,7 +407,9 @@ object PanvkPackage {
         slot.mkdirs()
         val live = File(slot, LIB)
         val liveMeta = readJson(File(slot, LinuxVulkanDriverManager.META_NAME))
-        val newMeta = meta ?: slotMeta(layout, liveMeta, state)
+        // our slot always says who owns it and which version it holds (a roll back restores the rest of its meta)
+        val newMeta = JSONObject((meta ?: slotMeta(state)).toString()).put("owner", OWNER)
+            .put("name", "${layout.slotName} ${state.optString("version")}".trim())
         writeAtomic(File(layout.store, JOURNAL), JSONObject().put("soMd5", state.getString("soMd5")).put("state", state).put("meta", newMeta).toString())
         val staged = File(slot, "$LIB.staged")
         try {
@@ -325,17 +455,14 @@ object PanvkPackage {
         File(layout.store, JOURNAL).delete()
     }
 
-    private fun slotMeta(layout: Layout, live: JSONObject?, state: JSONObject): JSONObject = JSONObject()
-        .put("schemaVersion", 1).put("kind", "linux-vulkan-icd")
-        // the name the user sees and picked stays; the slot id (the stored choice) never changes
-        .put("name", live?.optString("name").orEmpty().ifEmpty { layout.slotName })
+    private fun slotMeta(state: JSONObject): JSONObject = JSONObject()
+        .put("schemaVersion", 1).put("kind", "linux-vulkan-icd").put("owner", OWNER)
         .put("driverVersion", state.optString("driverVersion")).put("libc", "glibc").put("minGlibc", state.optString("minGlibc"))
         .put("sourceLibraryName", LIB).put("importedAt", System.currentTimeMillis())
         .put("source", state.optString("source")).put("packageVersion", state.optString("version")).put("commit", state.optString("commit"))
 
     /** At every stage(): finishes the bookkeeping of a switch a crash interrupted. The live .so is always one whole file. */
     fun recover(layout: Layout): Boolean = synchronized(BlobferryPackage.LOCK) {
-        File(layout.slot, "$LIB.staged").delete()
         File(layout.store, "previous.new").let { next ->
             if (File(next, PACKAGE).isFile && File(next, LIB).isFile) {
                 File(layout.store, "previous").deleteRecursively()
@@ -344,7 +471,13 @@ object PanvkPackage {
         }
         layout.store.listFiles()?.filter { it.name.startsWith("staging-") || it.name.startsWith("incoming-") }
             ?.filter { it.lastModified() < System.currentTimeMillis() - 3_600_000L }?.forEach { it.deleteRecursively() }
-        val journal = readJson(File(layout.store, JOURNAL)) ?: return@synchronized false
+        // the slot is touched only while it is ours, or our own journal says a switch into it was interrupted (no meta yet)
+        val journal = readJson(File(layout.store, JOURNAL))
+        if (journal == null) {
+            if (ownedOrAbsent(layout)) File(layout.slot, "$LIB.staged").delete()
+            return@synchronized false
+        }
+        File(layout.slot, "$LIB.staged").delete()
         val live = File(layout.slot, LIB)
         if (live.isFile && md5(live) == journal.optString("soMd5")) {
             Log.w(TAG, "an interrupted PanVK switch: finishing it")
@@ -379,8 +512,19 @@ object PanvkPackage {
             soMd5 = md5, previous = previous?.optString("version")?.ifEmpty { "?" }, bundledVersion = host.bundled?.version,
             installed = live.isFile, canSwitch = !host.sessionRunning, slot = layout.slot.name,
             date = if (managed) state!!.optString("date") else "", changelog = if (managed) state!!.optString("changelog") else "",
+            notOurs = !ownedOrAbsent(layout), foreign = foreign(layout),
         )
     }
+
+    /** The other PanVK slots next to ours, read only (name, version, .so md5) for the status and the components list. */
+    fun foreign(layout: Layout): List<Foreign> =
+        layout.slot.absoluteFile.parentFile?.listFiles().orEmpty().filter { it.isDirectory && it.name != layout.slot.name }
+            .filter { File(it, LIB).isFile && File(it, LinuxVulkanDriverManager.ICD_NAME).isFile }.sortedBy { it.name }
+            .map { dir ->
+                val meta = readJson(File(dir, LinuxVulkanDriverManager.META_NAME))
+                Foreign(dir.name, meta?.optString("name").orEmpty().ifEmpty { dir.name }, meta?.optString("driverVersion").orEmpty(),
+                    runCatching { md5(File(dir, LIB)) }.getOrDefault(""))
+            }
 
     // ---- helpers ----
 

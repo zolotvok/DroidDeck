@@ -266,8 +266,8 @@ fi
 
 # PanVK for Mali (session driver): DROIDDECK_PANVK = a panvk-kbase-<V>.zip from tools/make-panvk-component.py, by
 # default the release-1 build of a ../bridge checkout (PanVK 10a845b, .so md5 bda2be8e), accepted only with its pinned
-# sha256. The app installs it into the PanVK_Kbase driver slot only on a phone without any PanVK
-# (gpu/PanvkPackage.ensureBundled); an existing slot is updated by "Check for updates" or droiddeckctl panvk install.
+# sha256. The app keeps its own Blobferry_PanVK driver slot on it (gpu/PanvkPackage.ensureCurrent: created when missing,
+# upgraded when this one is newer); other PanVK slots are never touched. Later: "Check for updates" or droiddeckctl panvk.
 # DROIDDECK_PANVK=none builds without it; a release build refuses to go without one.
 panvk_default="${repo_root}/../bridge/build/release/panvk/panvk-kbase-v26.3.1-234-237.zip"
 panvk_default_sha256=a8a3e8b00b4aa5ab9b13b81362b5eb5bdedcc3edb81b56a547f5e8044bc6cf79

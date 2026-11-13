@@ -33,6 +33,13 @@ public class LinuxVulkanDriverManager {
     public static final String BRIDGE_LIB_NAME = "libvulkan_mali_bridge.so";
     public static final String ICD_NAME = "icd.json";
     public static final String META_NAME = "meta.json";
+    /** Our own PanVK slot (gpu/PanvkPackage): only PanvkPackage writes it; no import gets or replaces this id. */
+    public static final String RESERVED_PANVK_ID = "Blobferry_PanVK";
+
+    /** The reserved id in any letter case (a case-folding file system or a later rename must not reach our slot). */
+    public static boolean isReservedId(String id) {
+        return id != null && id.equalsIgnoreCase(RESERVED_PANVK_ID);
+    }
 
     private final Context context;
     private final File rootDir;
@@ -117,10 +124,16 @@ public class LinuxVulkanDriverManager {
         return m != null ? m.optString("minGlibc", "") : "";
     }
 
-    public void removeDriver(String id) {
-        if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return;
+    /** Deletes an imported driver; false (nothing deleted) for a bad id or our own PanVK slot (PanvkPackage manages it). */
+    public boolean removeDriver(String id) {
+        if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return false;
+        if (isReservedId(id)) {
+            Log.w(TAG, "not removing " + id + ": the Blobferry PanVK slot is managed by the PanVK updater (roll back / reset)");
+            return false;
+        }
         Log.d(TAG, "removing imported Linux Vulkan driver " + id);
         FileUtils.delete(getDriverDir(id));
+        return true;
     }
 
     /** The slot of the Mali system driver the APK bundles (Blobferry, staged by tools/build_local.sh). */
@@ -284,10 +297,11 @@ public class LinuxVulkanDriverManager {
         }
     }
 
-    private String uniqueId(String base) {
+    /** A free slot id for an import: never an existing slot, never the reserved Blobferry_PanVK in any case. */
+    String uniqueId(String base) {
         String id = base;
         int n = 2;
-        while (getDriverDir(id).exists()) id = base + "-" + (n++);
+        while (isReservedId(id) || getDriverDir(id).exists()) id = base + "-" + (n++);
         return id;
     }
 

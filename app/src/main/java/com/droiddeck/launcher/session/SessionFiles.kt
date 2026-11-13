@@ -73,8 +73,9 @@ object SessionFiles {
         runCatching { com.droiddeck.launcher.gpu.LinuxVulkanDriverManager(context).ensureBundledBridge() }
             .onFailure { Log.w(TAG, "bundled Mali system driver not installed", it) }
         if (com.droiddeck.launcher.core.DeviceSupport.mali()) {
-            // PanVK: a switch a crash interrupted is finished, and a phone without any PanVK gets the bundled one
-            runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureBundled(context) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
+            // PanVK, our own Blobferry_PanVK slot only: an interrupted switch is finished, the slot is created / migrated /
+            // upgraded to the bundled one (newer or a known-stale .so). Other PanVK slots and the driver choice stay.
+            runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureCurrent(context) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
             // env defaults: the installed manifest to the guest while it is newer than the bundled one
             MaliEnvDefaults.publish(context)
         }

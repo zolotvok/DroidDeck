@@ -35,7 +35,7 @@ class PanvkPackageTest {
 
     @Before fun setUp() {
         tmp = Files.createTempDirectory("panvk").toFile()
-        layout = PanvkPackage.Layout(File(tmp, "store"), File(tmp, "linux_vulkan_drivers/PanVK_Kbase"))
+        layout = PanvkPackage.Layout(File(tmp, "store"), File(tmp, "linux_vulkan_drivers/Blobferry_PanVK"))
     }
 
     @After fun tearDown() {
@@ -84,12 +84,13 @@ class PanvkPackageTest {
         assertTrue(layout.store.listFiles().orEmpty().none { it.name.startsWith("staging-") || it.name.startsWith("incoming-") })
     }
 
-    /** The phone today: a hand-imported PanVK in the slot (driver choice = the slot id). */
+    /** A hand-deployed .so in our slot (owner blobferry, no package record). */
     private fun handImported(tag: String = "81ec6d60"): ByteArray {
         val lib = so(tag)
         layout.slot.mkdirs()
         File(layout.slot, PanvkPackage.LIB).writeBytes(lib)
-        File(layout.slot, "meta.json").writeText(JSONObject().put("name", "PanVK Kbase").put("driverVersion", "v26.3.1+234-236").toString())
+        File(layout.slot, "meta.json").writeText(JSONObject().put("name", "PanVK (Blobferry)").put("owner", "blobferry")
+            .put("driverVersion", "v26.3.1+234-236").toString())
         File(layout.slot, "icd.json").writeText(JSONObject().put("ICD", JSONObject().put("library_path", "x").put("api_version", "1.4.363")).toString())
         return lib
     }
@@ -124,9 +125,10 @@ class PanvkPackageTest {
         assertEquals("v26.3.1-234-237", status.version)
         assertEquals(commit, status.commit)
         assertEquals(md5(so("237")), status.soMd5)
-        assertEquals("PanVK_Kbase", status.slot)
+        assertEquals("Blobferry_PanVK", status.slot)
         val meta = JSONObject(File(layout.slot, "meta.json").readText())
-        assertEquals("PanVK Kbase", meta.getString("name"))
+        assertEquals("PanVK (Blobferry) v26.3.1-234-237", meta.getString("name"))
+        assertEquals("blobferry", meta.getString("owner"))
         assertEquals("v26.3.1+237", meta.getString("driverVersion"))
         val icd = JSONObject(File(layout.slot, "icd.json").readText()).getJSONObject("ICD")
         assertEquals(File(layout.slot, PanvkPackage.LIB).absolutePath, icd.getString("library_path"))
@@ -141,6 +143,7 @@ class PanvkPackageTest {
         assertEquals(md5(old), back.soMd5)
         assertEquals("v26.3.1-234-237", back.previous)
         assertEquals("v26.3.1+234-236", JSONObject(File(layout.slot, "meta.json").readText()).getString("driverVersion"))
+        assertEquals("blobferry", JSONObject(File(layout.slot, "meta.json").readText()).getString("owner"))
         val forward = PanvkPackage.rollback(layout, host)
         assertEquals("adb", forward.source)
         assertEquals(md5(so("237")), forward.soMd5)
@@ -151,7 +154,7 @@ class PanvkPackageTest {
         assertEquals("bundled", status.source)
         assertTrue(status.installed)
         assertNull(status.previous)
-        assertEquals("PanVK Kbase", JSONObject(File(layout.slot, "meta.json").readText()).getString("name"))
+        assertEquals("PanVK (Blobferry) v2", JSONObject(File(layout.slot, "meta.json").readText()).getString("name"))
         try {
             PanvkPackage.rollback(layout, host)
             fail()

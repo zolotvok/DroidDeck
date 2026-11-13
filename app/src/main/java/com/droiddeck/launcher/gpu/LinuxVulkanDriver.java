@@ -46,13 +46,27 @@ public final class LinuxVulkanDriver {
             return value;
         }
         if (!com.droiddeck.launcher.core.DeviceSupport.INSTANCE.mali()) return "";
+        String id = sessionPanvk(context);
+        if (!id.isEmpty()) Log.i(TAG, "Mali GPU and no Linux driver chosen; using PanVK " + id);
+        return id;
+    }
+
+    /** The PanVK the session uses when no non-bridge Linux driver is chosen ("" without one), see [pickSessionPanvk]. */
+    public static String sessionPanvk(Context context) {
         LinuxVulkanDriverManager m = new LinuxVulkanDriverManager(context);
-        for (String id : m.enumerateInstalledDrivers()) {
-            if (m.isPanvk(id)) {
-                Log.i(TAG, "Mali GPU and no Linux driver chosen; using imported PanVK " + id);
-                return id;
-            }
-        }
+        List<String> panvk = new ArrayList<>();
+        for (String id : m.enumerateInstalledDrivers()) if (m.isPanvk(id)) panvk.add(id);
+        return pickSessionPanvk(panvk);
+    }
+
+    /**
+     * Decision D10 (b): a PanVK the user has (an import, or the PanVK_Kbase slot of an older app version) keeps being
+     * used, as before; our own Blobferry_PanVK is the session's PanVK only when it is the only one, i.e. on a new install.
+     * Nothing is stored, so no choice changes: an existing phone stays on its PanVK until the user picks ours.
+     */
+    static String pickSessionPanvk(List<String> sortedPanvkIds) {
+        for (String id : sortedPanvkIds) if (!LinuxVulkanDriverManager.isReservedId(id)) return id;
+        for (String id : sortedPanvkIds) if (LinuxVulkanDriverManager.isReservedId(id)) return id;
         return "";
     }
 
