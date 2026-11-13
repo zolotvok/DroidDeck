@@ -75,6 +75,7 @@ object CompositorHost {
         WaylandCompositor.nativeSetLayerFrameRate(if (fpsLimit > 0) fpsLimit.toFloat() else refreshHz)
         WaylandCompositor.nativeSetOutputRefreshRate(refreshHz)
         SessionState.refreshHz = refreshHz
+        SessionState.paceFpsLimit = fpsLimit
     }
 
     @Synchronized

@@ -320,8 +320,9 @@ object ReportBundle {
             else -> if (bridgeGame) "on (bridge game)" else "off"
         }
         val boost = runCatching {
-            "boost " + (if (SessionPrefs.performanceBoostActive(context)) "on" else "off") +
-                (shared["BL_GAME_BOOST"]?.let { " (BL_GAME_BOOST=$it)" } ?: "") + if (SessionPrefs.boostCheck(context)) ", check on" else ""
+            "boost " + (if (SessionPrefs.boostFor(config, appId, SessionPrefs.performanceBoost(context))) "on" else "off") +
+                (gameEnv[SessionPrefs.BOOST_KEY]?.let { " (game BL_GAME_BOOST=$it)" } ?: shared[SessionPrefs.BOOST_KEY]?.let { " (BL_GAME_BOOST=$it)" } ?: "") +
+                if (SessionPrefs.boostCheck(context)) ", check on" else ""
         }.getOrDefault("?")
         val gameName = appId?.toIntOrNull()?.let { id ->
             runCatching { com.droiddeck.launcher.frontend.Library.steamGames(context).firstOrNull { it.appId == id }?.name }.getOrNull()

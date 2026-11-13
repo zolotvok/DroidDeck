@@ -773,11 +773,29 @@ object SessionPrefs {
     /**
      * What a session runs with: `BL_GAME_BOOST=1` or `=0` in the shared game environment beats the
      * switch (the test lane's A/B path, no UI step); anything else leaves the switch. Default off on
-     * every phone but the Odin 3 ([GameThreadHints.measuredHere]).
+     * every phone but the Odin 3 ([GameThreadHints.measuredHere]). A game's own entry beats both once
+     * that game runs ([boostFor]); GameThreadHints decides that per running game.
      */
     fun performanceBoostActive(context: Context): Boolean =
-        boostOverride(runCatching { GameEnvironmentStore.read(context).shared["BL_GAME_BOOST"] }.getOrNull())
+        boostOverride(runCatching { GameEnvironmentStore.read(context).shared[BOOST_KEY] }.getOrNull())
             ?: performanceBoost(context)
+
+    const val BOOST_KEY = "BL_GAME_BOOST"
+
+    /** True when some game's own entry says `BL_GAME_BOOST=1`: the hints then watch even with the session-wide boost off. */
+    fun gameBoostWanted(context: Context): Boolean =
+        runCatching { GameEnvironmentStore.read(context).games.values.any { boostOverride(it[BOOST_KEY]) == true } }.getOrDefault(false)
+
+    /** Whether the boost's watchers start at all: the session-wide boost, or a game entry that asks for it. */
+    fun boostMayRun(context: Context): Boolean = performanceBoostActive(context) || gameBoostWanted(context)
+
+    /**
+     * The boost for game [scope] (a game environment id, null or empty for none): its own
+     * `BL_GAME_BOOST=1|0` beats the shared one, which beats [switchOn]; any other value falls through.
+     */
+    internal fun boostFor(config: GameEnvironment.Config, scope: String?, switchOn: Boolean): Boolean =
+        boostOverride(scope?.takeIf { it.isNotEmpty() }?.let { config.games[it]?.get(BOOST_KEY) })
+            ?: boostOverride(config.shared[BOOST_KEY]) ?: switchOn
 
     internal fun boostOverride(value: String?): Boolean? = when (value?.trim()) {
         "1" -> true

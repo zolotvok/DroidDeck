@@ -8,9 +8,11 @@ import android.os.Process
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
+import com.droiddeck.launcher.core.GameEnvironment
 import com.droiddeck.launcher.wayland.WaylandCompositor
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * The game's busiest threads named to Android's performance hint service (ADPF) for a session.
@@ -30,15 +32,24 @@ import kotlin.math.abs
  * carry no frame timing, the busy share is the signal (a capped game's frame interval looks the same
  * as a slow one's). Nothing is boosted while the device is critically hot or saves power.
  *
- * Nor while the game holds the panel's rate or a fraction of it ([holdsPace]): there is nothing to
- * gain, and it cost frame pacing - Serious Sam capped at 120 fps ran its boosted main thread on prime
- * cores the governor kept at 2.2 GHz, slower than a 3.5 GHz mid core, and 23-25% of its frames fell
- * under 90 fps against 2-7% unboosted. A game with no frames (Factorio's benchmark, a loading screen)
- * or one falling behind the panel is boosted; one holding pace keeps what it has for [PACE_LEAVE_S]
- * seconds and is then let go.
+ * Nor while the game holds its own target ([paceTarget]): the frame limit in force for the session
+ * if one is set below the panel ([SessionState.paceFpsLimit]), else the panel's active refresh rate,
+ * and also 60 fps on a panel above 60 (the common in-game cap). There is nothing to gain there, and it
+ * cost frame pacing - Serious Sam capped at 120 fps ran its boosted main thread on prime cores the
+ * governor kept at 2.2 GHz, slower than a 3.5 GHz mid core, and 23-25% of its frames fell under 90 fps
+ * against 2-7% unboosted. Lower fractions of the panel (refresh/3, /4: 40 and 30 at 120 Hz) are NOT a
+ * pace: Watch Dogs at 39-40 fps and Watch Dogs 2 at 28.5 on a 120 Hz panel were never boosted under
+ * that old rule. A game with no frames (Factorio's benchmark, a loading screen) or one falling behind
+ * its target is boosted; one holding pace keeps what it has for [PACE_LEAVE_S] seconds and is then let
+ * go. A game whose load is low gets nothing anyway: no thread is busy [ENTER] of the time ([pick]).
+ * There is no cheap always-on GPU load reading in the app (GpuStatsComponent feeds the HUD only), so
+ * "CPU and GPU both idle" is not a separate rule.
  *
  * Part of the Performance boost switch, on by default only where it was measured ([measuredHere]).
- * Another phone's HAL may boost differently, or not at all.
+ * Another phone's HAL may boost differently, or not at all. `BL_GAME_BOOST=1|0` in a game's own
+ * environment entry beats the shared one and the switch for that game ([SessionPrefs.boostFor]): the
+ * running game is the busiest process whose environment names a Steam compat prefix
+ * (STEAM_COMPAT_DATA_PATH, the id the game environment keys by), else the session's launch id.
  */
 object GameThreadHints {
     private const val TAG = "GameThreadHints"
@@ -52,6 +63,9 @@ object GameThreadHints {
     internal const val PACE_WINDOW_S = 3
     internal const val PACE_LEAVE_S = 10
     private const val PACE_TOLERANCE = 0.08
+    private const val COMMON_CAP = 60.0
+    private const val CONFIG_EVERY_S = 10
+    internal const val GAME_OFF = "off for this game"
 
     private val NOT_GAMES = setOf("steam", "steamwebhelper")
 
@@ -72,20 +86,22 @@ object GameThreadHints {
         offWhy = "starting"
         return begin(context).also {
             startLine = it
-            if (it != "game thread hints: watching") offWhy = it.removePrefix("game thread hints: ")
+            if (!it.startsWith("game thread hints: watching")) offWhy = it.removePrefix("game thread hints: ")
         }
     }
 
     private fun begin(context: Context): String {
         refused = 0
-        if (!SessionPrefs.performanceBoostActive(context)) return "game thread hints: off"
+        val sessionWide = SessionPrefs.performanceBoostActive(context)
+        if (!sessionWide && !SessionPrefs.gameBoostWanted(context)) return "game thread hints: off"
         if (Build.VERSION.SDK_INT < 31) return "game thread hints: needs Android 12"
         val hm = context.getSystemService(PerformanceHintManager::class.java)
             ?: return "game thread hints: no PerformanceHintManager"
         val pm = context.getSystemService(PowerManager::class.java)
         worker?.interrupt()
-        worker = Thread({ run(hm, pm) }, "game-thread-hints").apply { isDaemon = true; start() }
-        return "game thread hints: watching"
+        val app = context.applicationContext
+        worker = Thread({ run(app, hm, pm) }, "game-thread-hints").apply { isDaemon = true; start() }
+        return "game thread hints: watching" + if (sessionWide) "" else " (only games with BL_GAME_BOOST=1)"
     }
 
     @Synchronized
@@ -94,8 +110,11 @@ object GameThreadHints {
         worker = null
     }
 
-    private fun run(hm: PerformanceHintManager, pm: PowerManager) {
+    private fun run(context: Context, hm: PerformanceHintManager, pm: PowerManager) {
         val scanner = Scanner()
+        var config = GameEnvironment.Config()
+        var switchOn = false
+        var lastChoice: String? = null
         var session: PerformanceHintManager.Session? = null
         var boosted = emptySet<Int>()
         val frames = ArrayDeque<Long>()
@@ -103,14 +122,28 @@ object GameThreadHints {
         var tick = 0
         try {
             while (!Thread.currentThread().isInterrupted) {
+                if (tick % (SCAN_EVERY * CONFIG_EVERY_S) == 0) {
+                    config = runCatching { GameEnvironmentStore.read(context) }.getOrNull() ?: GameEnvironment.Config()
+                    switchOn = SessionPrefs.performanceBoost(context)
+                }
                 if (tick++ % SCAN_EVERY == 0) {
                     val busy = scanner.sample()
+                    val game = scanner.gameId() ?: SessionState.gameId?.takeIf { it.isNotEmpty() && GameEnvironment.validScope(it) }
+                    val wanted = SessionPrefs.boostFor(config, game, switchOn)
+                    val choice = "${game ?: "no game"} ${if (wanted) "on" else "off"}"
+                    if (choice != lastChoice) {
+                        lastChoice = choice
+                        Log.i(TAG, "game ${game ?: "not known"}: boost ${if (wanted) "on" else "off"}" +
+                            (game?.let { config.games[it]?.get(SessionPrefs.BOOST_KEY) }?.let { " (game BL_GAME_BOOST=$it)" } ?: ""))
+                    }
                     frames.addLast(WaylandCompositor.gameFrameCount())
                     if (frames.size > PACE_WINDOW_S + 1) frames.removeFirst()
                     val fps = (frames.last() - frames.first()).toDouble() / (frames.size - 1).coerceAtLeast(1)
-                    val paced = frames.size > PACE_WINDOW_S && holdsPace(fps, SessionState.refreshHz.toDouble())
+                    val target = if (frames.size > PACE_WINDOW_S) paceTarget(fps, SessionState.refreshHz.toDouble(), SessionState.paceFpsLimit) else null
+                    val paced = target != null
                     pacedFor = if (paced) pacedFor + 1 else 0
                     val spare = when {
+                        !wanted -> GAME_OFF
                         BoostReport.paused -> "check pause"
                         pm.isPowerSaveMode -> BoostReport.BATTERY_SAVER
                         // Not SEVERE: the Odin 3 reports it once its skin reaches 50 C, a couple of minutes into any game.
@@ -129,7 +162,7 @@ object GameThreadHints {
                         boostedThreads = boosted
                         Log.i(TAG, (if (session == null && next.isNotEmpty()) "no session for " else "boosting ") +
                             next.joinToString { "${readName("/proc/$it/comm")}/$it ${((busy[it] ?: 0.0) * 100).toInt()}%" }.ifEmpty { "nothing" } +
-                            " (game ${fps.toInt()} fps${if (paced) ", holding pace" else ""})")
+                            " (game ${fps.toInt()} fps${target?.let { ", holding pace at ${it.roundToInt()}" } ?: ""})")
                     }
                     offWhy = offReason(spare, boosted, paced, next)
                 }
@@ -167,8 +200,36 @@ object GameThreadHints {
         }
     }
 
-    internal fun holdsPace(fps: Double, refreshHz: Double): Boolean =
-        fps >= 10 && refreshHz > 0 && (1..4).any { k -> abs(fps - refreshHz / k) < PACE_TOLERANCE * refreshHz / k }
+    /**
+     * The target a game at [fps] holds, or null for none. The top target is [fpsLimit] when one is set
+     * (> 0) below [refreshHz], else [refreshHz]; it is held from (1 - tolerance) of it upwards. On a
+     * top above 60, 60 fps (the common in-game cap) is held within the tolerance either side. No other
+     * fraction of the panel counts: 40 or 30 fps at 120 Hz with no limit is falling behind.
+     */
+    internal fun paceTarget(fps: Double, refreshHz: Double, fpsLimit: Int = 0): Double? {
+        if (fps < 10) return null
+        val top = when {
+            fpsLimit > 0 && (refreshHz <= 0 || fpsLimit < refreshHz) -> fpsLimit.toDouble()
+            refreshHz > 0 -> refreshHz
+            else -> return null
+        }
+        return when {
+            fps >= top * (1 - PACE_TOLERANCE) -> top
+            top > COMMON_CAP && abs(fps - COMMON_CAP) < PACE_TOLERANCE * COMMON_CAP -> COMMON_CAP
+            else -> null
+        }
+    }
+
+    internal fun holdsPace(fps: Double, refreshHz: Double, fpsLimit: Int = 0): Boolean = paceTarget(fps, refreshHz, fpsLimit) != null
+
+    /** The game environment id of a Steam compat prefix path, as droiddeck-game-env's game_id() makes it; null for none. */
+    internal fun appIdOfCompatPath(path: String): String? {
+        val value = path.trimEnd('/').substringAfterLast('/')
+        if (!Regex("-?[0-9]+").matches(value)) return null
+        val number = value.toLongOrNull() ?: return null
+        if (number < -(1L shl 31) || number >= (1L shl 32) || number == 0L) return null
+        return Math.floorMod(number, 1L shl 32).toString()
+    }
 
     internal fun pick(boosted: Set<Int>, busy: Map<Int, Double>): Set<Int> =
         busy.entries
@@ -187,6 +248,9 @@ object GameThreadHints {
         private var lastProcess = HashMap<Int, Long>()
         private var lastThread = HashMap<Int, Long>()
         private var lastBusy = HashMap<Int, Double>()
+        private var topPids = emptyList<Int>()
+        private val appIds = HashMap<Int, String>()
+        private var gamePid = -1
 
         fun sample(): Map<Int, Double> {
             val now = System.nanoTime()
@@ -206,6 +270,8 @@ object GameThreadHints {
                 .take(TOP_PROCESSES)
                 .toList()
             lastProcess = process
+            topPids = top.map { it.first }
+            appIds.keys.retainAll(process.keys)
             val thread = HashMap<Int, Long>()
             val busy = HashMap<Int, Double>()
             for ((pid, _) in top) {
@@ -219,6 +285,28 @@ object GameThreadHints {
             lastThread = thread
             lastBusy = busy
             return busy
+        }
+
+        /**
+         * The running game's environment id: the busiest top process whose environment names a Steam
+         * compat prefix, else the last one found while it lives. Found ids are kept per pid (an
+         * environment is fixed at exec); others are read again, at most [TOP_PROCESSES] a second.
+         */
+        fun gameId(): String? {
+            for (pid in topPids) {
+                val id = appIds[pid] ?: appIdOf(pid)?.also { appIds[pid] = it } ?: continue
+                gamePid = pid
+                return id
+            }
+            return appIds[gamePid]
+        }
+
+        private fun appIdOf(pid: Int): String? = try {
+            File("/proc/$pid/environ").readBytes().toString(Charsets.UTF_8).split('\u0000')
+                .firstOrNull { it.startsWith("STEAM_COMPAT_DATA_PATH=") }
+                ?.let { appIdOfCompatPath(it.substringAfter('=')) }
+        } catch (_: Exception) {
+            null
         }
 
         private fun cpuTicks(path: String): Long? = try {

@@ -125,6 +125,10 @@ object SessionState {
     @Volatile
     var fpsLimit: Int = 0
 
+    /** The compositor's frame limit in force (CompositorHost.pace: session limit, glasses mirror, PiP); <= 0 for none. */
+    @Volatile
+    var paceFpsLimit: Int = 0
+
     @Volatile
     var firstFrameSeen = false
 
