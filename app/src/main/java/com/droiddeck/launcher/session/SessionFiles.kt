@@ -99,6 +99,10 @@ object SessionFiles {
             "usr/local/bin/droiddeck-session" to "usr/local/bin/droiddeck-session",
             "usr/local/bin/droiddeck-fonts" to "usr/local/bin/droiddeck-fonts",
             "usr/local/bin/droiddeck-agent" to "usr/local/bin/droiddeck-agent",
+            // guest-tools updater (gpu/GuestToolsPackage): the guest's check of an installed agent, and the APK's own agent
+            // it puts back when that check fails
+            "usr/local/bin/droiddeck-guest-tools-check" to "usr/local/bin/droiddeck-guest-tools-check",
+            "usr/local/bin/droiddeck-agent" to "${com.droiddeck.launcher.gpu.GuestToolsPackage.BUNDLED_COPY}/usr/local/bin/droiddeck-agent",
             "usr/local/bin/steam-compatibility" to "usr/local/bin/steam-compatibility",
             "usr/local/bin/droiddeck-clipboard" to "usr/local/bin/droiddeck-clipboard",
             "usr/local/bin/droiddeck-desktop-clipboard" to "usr/local/bin/droiddeck-desktop-clipboard",
@@ -256,6 +260,9 @@ object SessionFiles {
             if (installed) ledger.staged(relative, target) else Log.e(TAG, "$relative NOT staged")
         }
         com.droiddeck.launcher.gpu.FexArm64ecPackage.restage(context, root, fexArm64ecFiles)
+        // an installed guest-tools package (the agent) over the APK's files just staged: active wins over bundled, unless it
+        // is older than the APK's agent, corrupt or refused by the guest check (then the APK's files stay; never throws)
+        com.droiddeck.launcher.gpu.GuestToolsPackage.restage(context, root)
         File(root, "usr/local/bin/bannerlator-steam-compat").delete()
         LegacyNames.migrateRootfs(root)
         ComponentsManager.migrateLaunchDir(context)

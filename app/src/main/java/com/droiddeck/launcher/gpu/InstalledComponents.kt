@@ -44,6 +44,13 @@ object InstalledComponents {
             .put("guestTable", s.guestTable),
     )
 
+    fun guestTools(s: GuestToolsPackage.Status) = Row(
+        GuestToolsPackage.COMPONENT, s.version, s.source, s.commit, s.date, s.changelog, GuestToolsPackage.AGENT, s.agentMd5, s.previous,
+        s.previous != null && s.canSwitch,
+        JSONObject().put("liveAgentMd5", s.liveAgentMd5).put("bundledVersion", s.bundledVersion ?: JSONObject.NULL)
+            .put("shadowed", s.shadowed ?: JSONObject.NULL),
+    )
+
     fun envDefaults(s: MaliEnvDefaults.Status) = Row(
         MaliEnvDefaults.COMPONENT, s.version, s.source, "", "", "", "env-defaults.json", "", s.previous, s.previous != null,
         JSONObject().put("sha256", s.sha256).put("games", s.games),
@@ -58,6 +65,7 @@ object InstalledComponents {
         add(BlobferryPackage.COMPONENT) { blobferry(BlobferryPackage.status(context)) }
         add(PanvkPackage.COMPONENT) { panvk(PanvkPackage.status(context)) }
         add(FexArm64ecPackage.COMPONENT) { fexArm64ec(FexArm64ecPackage.status(context)) }
+        add(GuestToolsPackage.COMPONENT) { guestTools(GuestToolsPackage.status(context)) }
         add(MaliEnvDefaults.COMPONENT) { envDefaults(MaliEnvDefaults.status(context)) }
         return out
     }

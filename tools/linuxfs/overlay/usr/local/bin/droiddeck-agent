@@ -19,6 +19,9 @@ import urllib.parse
 from pathlib import Path
 
 VERSION = 1
+# The guest-tools package release of this file (gpu/GuestToolsPackage.kt): an installed package replaces the APK's agent
+# only while its release is not older than this one. Raise it with every change of this file.
+AGENT_RELEASE = "2026.11.13.1"
 OUTPUT_CAP = 256 * 1024
 REQUEST_CAP = 256 * 1024
 RESPONSE_CAP = 1024 * 1024
@@ -2776,6 +2779,11 @@ def serve(agent_dir, focus=True, poll=0.1):
 
 
 def main(argv):
+    if argv == ["--selftest"]:
+        # droiddeck-guest-tools-check runs this before an installed agent is used: the whole file compiled and its module
+        # code ran. Before BL_LAUNCH_DIR, so it never serves.
+        print("droiddeck-agent %s selftest ok" % AGENT_RELEASE)
+        return 0
     base = os.environ.get("BL_LAUNCH_DIR")
     if not base:
         print("BL_LAUNCH_DIR is not set", file=sys.stderr)

@@ -425,6 +425,8 @@ def stop_for_switch(adb: str, serial: str, force_stop: bool, timeout: float) -> 
 PANVK_ZIP = re.compile(r"panvk-kbase-[A-Za-z0-9._+-]{1,48}\.zip")
 FEX_ZIP = re.compile(r"fex-arm64ec-[A-Za-z0-9._+-]{1,48}\.zip")
 FEX_PACKAGE_TOOL = Path(__file__).resolve().parent / "make-fex-arm64ec-package.py"
+GUEST_TOOLS_ZIP = re.compile(r"guest-tools-[A-Za-z0-9._+-]{1,48}\.zip")
+GUEST_TOOLS_PACKAGE_TOOL = Path(__file__).resolve().parent / "make-guest-tools-package.py"
 ENV_DEFAULTS_JSON = re.compile(r"[A-Za-z0-9._+-]{1,96}\.json")
 MALI_DEFAULTS = Path(__file__).resolve().parent / "linuxfs/overlay/usr/local/bin/droiddeck-mali-defaults"
 
@@ -476,6 +478,44 @@ def fex(args: argparse.Namespace, adb: str, serial: str) -> dict:
     try:
         args.file = str(archive)
         result = component(args, adb, serial, "fex", "install", FEX_ZIP, "a fex-arm64ec-<version>.zip (tools/make-fex-arm64ec-package.py)", True)
+        result["package"] = summary
+        return result
+    finally:
+        if temp:
+            shutil.rmtree(temp, ignore_errors=True)
+
+
+def guest_tools_package(args: argparse.Namespace) -> tuple:
+    """A guest-tools package folder or zip, checked offline with the package tool's rules (allowlist, meta.json, agent
+    script, --selftest present); a folder is zipped (same bytes for the same files). Returns (zip, summary, temp or None)."""
+    import contextlib
+    import io
+    import runpy
+    tool = runpy.run_path(str(GUEST_TOOLS_PACKAGE_TOOL))
+    source = Path(args.file).expanduser()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            top, version = tool["check"](source)
+        _, files = tool["read_tree"](source)
+    except (tool["Refused"], OSError, ValueError) as exc:
+        raise ControlError(f"{source.name} is refused: {exc}", "BAD_PACKAGE") from exc
+    summary = {"version": version, "agentMd5": hashlib.md5(files["rootfs/" + tool["AGENT"]]).hexdigest()}
+    if not source.is_dir():
+        return source, summary, None
+    temp = tempfile.mkdtemp(prefix="droiddeckctl-guest-tools-")
+    return tool["write_zip"](top, files, Path(temp) / (top + ".zip")), summary, temp
+
+
+def guest_tools(args: argparse.Namespace, adb: str, serial: str) -> dict:
+    """guest-tools (agent updater) ops, as fex; install takes a package folder or zip (checked here, verified again on the
+    device; the guest runs droiddeck-agent --selftest at the next session start)."""
+    hint = "a guest-tools-<version>.zip (tools/make-guest-tools-package.py)"
+    if args.guest_tools_op != "install":
+        return component(args, adb, serial, "guesttools", args.guest_tools_op, GUEST_TOOLS_ZIP, hint, True)
+    archive, summary, temp = guest_tools_package(args)
+    try:
+        args.file = str(archive)
+        result = component(args, adb, serial, "guesttools", "install", GUEST_TOOLS_ZIP, hint, True)
         result["package"] = summary
         return result
     finally:
@@ -979,6 +1019,9 @@ def execute(args: argparse.Namespace, adb: str, serial: str) -> dict:
     if command == "fex":
         return add_serial(fex(args, adb, serial), serial)
 
+    if command == "guest-tools":
+        return add_serial(guest_tools(args, adb, serial), serial)
+
     if command == "env-defaults":
         return add_serial(component(args, adb, serial, "envdefaults", args.env_defaults_op, ENV_DEFAULTS_JSON,
                                     "an env defaults manifest .json", False), serial)
@@ -1242,7 +1285,22 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
         sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
 
-    comps = commands.add_parser("components", help="updater components (Blobferry, PanVK, FEX table, env defaults): status, install log")
+    gtp = commands.add_parser("guest-tools", help="the guest agent as an updater component (guest-tools): status, install, rollback, reset")
+    gt_ops = gtp.add_subparsers(dest="guest_tools_op", required=True)
+    gt_ops.add_parser("status", help="the agent in force: source, version, agent md5 (package and live), previous, shadowed")
+    gt_switches = [
+        gt_ops.add_parser("install", help="install a guest-tools-<V> package folder or zip (debugging tools; the one before is kept)"),
+        gt_ops.add_parser("rollback", help="swap the installed package and the previous one (debugging tools)"),
+        gt_ops.add_parser("reset", help="back to the agent the APK bundles, the installed one kept (debugging tools)"),
+    ]
+    gt_switches[0].add_argument("file", help="the package, e.g. ../bridge/build/release/guest-tools/guest-tools-2026.11.13.1.zip")
+    gt_switches[0].add_argument("--sha256", help="expected sha256 of a zip (default: <zip>.sha256 next to it, when it exists)")
+    for sub in gt_switches:
+        sub.add_argument("--force-stop", action="store_true", help="stop a running session first")
+        sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
+        sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
+
+    comps = commands.add_parser("components", help="updater components (Blobferry, PanVK, FEX table, guest tools, env defaults): status, install log")
     comps_ops = comps.add_subparsers(dest="components_op", required=True)
     comps_ops.add_parser("status", help="every component: version, source, commit, date, changelog, key file md5, previous")
     comps_log = comps_ops.add_parser("log", help="the last N install-log events (install, rollback, reset, refused, ...)")

@@ -98,6 +98,7 @@ class AgentBridgeProvider : ContentProvider() {
         "blobferry" -> blobferry(context, request)
         "panvk" -> panvk(context, request)
         "fex" -> fex(context, request)
+        "guesttools" -> guestTools(context, request)
         "envdefaults" -> envDefaults(context, request)
         "components" -> components(context, request)
         "report" -> report(context, request)
@@ -394,6 +395,32 @@ class AgentBridgeProvider : ContentProvider() {
                 else -> throw AgentException("INVALID_REQUEST", "Unknown fex op '$op'")
             }
             status.json().put("ok", true).put("command", "fex").put("op", op).apply { if (op != "status") put("appliesAt", "next game start") }
+        } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
+            error(e.code, e.message ?: e.code)
+        }
+    }
+
+    /** guest-tools ops (gpu/GuestToolsPackage, the agent updater), as fex: status always, install/rollback/reset behind Debugging tools. */
+    private fun guestTools(context: Context, request: JSONObject): JSONObject {
+        val gt = com.droiddeck.launcher.gpu.GuestToolsPackage
+        val op = request.optString("op", "status")
+        if (op != "status") AgentAccess.requireCommands(context)
+        return try {
+            val status = when (op) {
+                "status" -> gt.status(context)
+                "install" -> {
+                    val source = inboxFile(context, request)
+                    try {
+                        gt.install(context, gt.prepare(context, openInbox(source), request.optString("sha256").ifEmpty { null }), com.droiddeck.launcher.gpu.BlobferryPackage.SOURCE_ADB)
+                    } finally {
+                        source.delete()
+                    }
+                }
+                "rollback" -> gt.rollback(context)
+                "reset" -> gt.reset(context)
+                else -> throw AgentException("INVALID_REQUEST", "Unknown guesttools op '$op'")
+            }
+            status.json().put("ok", true).put("command", "guesttools").put("op", op).apply { if (op != "status") put("appliesAt", "next session start") }
         } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
             error(e.code, e.message ?: e.code)
         }

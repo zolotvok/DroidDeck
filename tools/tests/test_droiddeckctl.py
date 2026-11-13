@@ -695,6 +695,48 @@ class ComponentCtlTest(FakeAdbTest):
         self.assertEqual(0, code, out)
         self.assertEqual([], self.calls("access"))
 
+    def guest_tools_package(self, broken=False):
+        """A guest-tools package folder of this checkout's agent (tools/make-guest-tools-package.py)."""
+        import argparse
+        import runpy
+        tool = runpy.run_path(str(TOOLS / "make-guest-tools-package.py"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            folder = tool["build"](argparse.Namespace(agent=str(tool["DEFAULT_AGENT"]), commit="a" * 40, date="2026-11-13",
+                                                      changelog="t", out=str(self.dir / "release"), zip=False))
+        if broken:
+            (folder / "rootfs/usr/local/bin/droiddeck-extra").write_text("x")
+        return folder, tool
+
+    def test_guest_tools_install_zips_a_folder_checks_it_and_needs_a_stopped_session(self):
+        self.provider(guesttools={"ok": True, "command": "guesttools", "source": "adb", "version": "2026.11.13.1"})
+        folder, tool = self.guest_tools_package()
+        version = folder.name[len("guest-tools-"):]
+        code, out = self.run_ctl("guest-tools", "install", str(folder))
+        self.assertEqual(0, code, out)
+        request = self.calls("guesttools")[0]["request"]
+        self.assertEqual(("install", folder.name + ".zip"), (request["op"], request["name"]))
+        agent = (folder / "rootfs/usr/local/bin/droiddeck-agent").read_bytes()
+        self.assertEqual({"version": version, "agentMd5": hashlib.md5(agent).hexdigest()}, out["package"])
+        pushes = [c["args"] for c in self.calls() if c["args"][:1] == ["push"]]
+        self.assertEqual(self.INBOX + "/" + folder.name + ".zip", pushes[0][2])
+        self.assertFalse(Path(pushes[0][1]).exists())
+        code, out = self.run_ctl("guest-tools", "reset")
+        self.assertEqual({"op": "reset"}, self.calls("guesttools")[-1]["request"])
+        self.provider(session="READY")
+        code, out = self.run_ctl("guest-tools", "rollback")
+        self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
+
+    def test_guest_tools_refuses_an_unlisted_file_before_adb_and_status_needs_no_tools(self):
+        self.provider(guesttools={"ok": True, "command": "guesttools", "source": "bundled"})
+        folder, _ = self.guest_tools_package(broken=True)
+        code, out = self.run_ctl("guest-tools", "install", str(folder))
+        self.assertEqual("BAD_PACKAGE", out["error"]["code"])
+        self.assertEqual([], self.calls("guesttools"))
+        code, out = self.run_ctl("guest-tools", "status")
+        self.assertEqual(0, code, out)
+        self.assertEqual([{"op": "status"}], [c["request"] for c in self.calls("guesttools")])
+        self.assertEqual([], self.calls("access"))
+
     def test_env_defaults_check_runs_offline(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

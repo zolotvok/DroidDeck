@@ -329,9 +329,10 @@ object FexArm64ecPackage {
         }
     }
 
-    /** Moves the guest's fex-arm64ec events (droiddeck-mali-defaults) into the app's install log. */
+    /** Moves the guest's fex-arm64ec events (droiddeck-mali-defaults) and guest-tools events into the app's install log. */
     fun ingestGuestLog(layout: Layout): Int = ComponentLog.ingest(ComponentLog.forStore(layout.store), File(layout.rootfs, GUEST_LOG)) { f ->
-        f[1] == COMPONENT && f[2] in GUEST_OPS
+        // one guest log for every component: droiddeck-guest-tools-check writes its events there too
+        (f[1] == COMPONENT && f[2] in GUEST_OPS) || GuestToolsPackage.guestEvent(f)
     }
 
     /** [ACTIVE_DIR] := [pkg]'s files (copied beside it, checked, swapped in by rename), or removed for null. True when it changed. */

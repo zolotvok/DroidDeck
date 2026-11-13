@@ -1,0 +1,146 @@
+#!/usr/bin/python3 -I
+"""Guest side of the guest-tools updater (gpu/GuestToolsPackage.kt, release-perf-1111.md 3.2/3.3).
+
+droiddeck-session runs this before it starts droiddeck-agent. When the app restaged an installed guest-tools package over
+the APK's files (/usr/local/lib/droiddeck-guest-tools/active.json lists them with their md5s), each listed file must
+still have its md5 and the agent must compile and pass `droiddeck-agent --selftest`. Otherwise the APK's own copies
+(/usr/local/lib/droiddeck-guest-tools/bundled/) are put back, the refusal is written for the app
+(~/.local/share/droiddeck-components/guest-tools-refused.json: the app then keeps the bundled files until another package
+is installed) and logged (install.log there; the app moves it into its install log). A passed check is remembered by the
+md5s, so it runs once per installed package. Always exits 0: the session starts either way."""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+COMPONENT = "guest-tools"
+AGENT = "usr/local/bin/droiddeck-agent"
+# the rootfs files a guest-tools package may carry (GuestToolsPackage.ALLOWLIST)
+ALLOWLIST = (AGENT,)
+SELFTEST_SECONDS = 30
+
+
+def paths():
+    root = Path(os.environ.get("BL_GUEST_TOOLS_ROOT", "/"))
+    state = root / "usr/local/lib/droiddeck-guest-tools"
+    data = Path(os.environ.get("HOME", "/root")) / ".local/share/droiddeck-components"
+    return root, state, data
+
+
+def md5(path):
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def log(data, op, before, after, result, note):
+    fields = [time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), COMPONENT, op, before, after, "-", "guest", result, note]
+    line = "\t".join(" ".join(str(f).split())[:300] or "-" for f in fields)
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+        with open(data / "install.log", "a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+    except OSError:
+        pass
+
+
+def problem(root, files):
+    """None when every listed file has its md5 and the agent compiles and passes --selftest, else why not."""
+    if not isinstance(files, dict) or AGENT not in files:
+        return "active.json lists no %s" % AGENT
+    for rel, want in files.items():
+        if rel not in ALLOWLIST:
+            return "%s is not a guest-tools file" % rel
+        target = root / rel
+        if not target.is_file() or md5(target) != want:
+            return "%s changed since the app staged it" % rel
+    agent = root / AGENT
+    try:
+        compile(agent.read_bytes(), str(agent), "exec")
+    except (SyntaxError, ValueError) as error:
+        return "does not compile: %s" % error
+    env = {k: v for k, v in os.environ.items() if k != "BL_LAUNCH_DIR"}
+    try:
+        done = subprocess.run([sys.executable, "-I", str(agent), "--selftest"], env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=SELFTEST_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "--selftest took longer than %d s" % SELFTEST_SECONDS
+    if done.returncode != 0 or b"selftest ok" not in done.stdout:
+        return "--selftest failed (exit %d): %s" % (done.returncode, (done.stderr or done.stdout).decode(errors="replace")[-200:])
+    return None
+
+
+def put_back(root, state, files):
+    """The APK's own copies over the listed files; False when one is missing or cannot be written."""
+    ok = True
+    for rel in files if isinstance(files, dict) else ALLOWLIST:
+        if rel not in ALLOWLIST:
+            continue
+        source = state / "bundled" / rel
+        target = root / rel
+        staged = target.with_name(target.name + ".staged")
+        try:
+            staged.write_bytes(source.read_bytes())
+            staged.chmod(0o755)
+            os.replace(staged, target)
+        except OSError:
+            ok = False
+            try:
+                staged.unlink()
+            except OSError:
+                pass
+    return ok
+
+
+def main():
+    root, state, data = paths()
+    record = state / "active.json"
+    try:
+        active = json.loads(record.read_text())
+        files, version = active["files"], str(active["version"])
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError, KeyError, TypeError):
+        active, files, version = None, None, "?"
+    stamp = data / "guest-tools-checked"
+    key = json.dumps(files, sort_keys=True)
+    try:
+        if active is not None and stamp.read_text() == key:
+            return 0
+    except OSError:
+        pass
+    why = problem(root, files) if active is not None else "active.json is not readable"
+    if why is None:
+        try:
+            data.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(key)
+        except OSError:
+            pass
+        log(data, "selftest", version, version, "ok", "agent passed --selftest")
+        return 0
+    restored = put_back(root, state, files)
+    agent_md5 = files.get(AGENT, "") if isinstance(files, dict) else ""
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "guest-tools-refused.json").write_text(json.dumps(
+            {"version": version, "agentMd5": agent_md5, "reason": why, "restored": restored, "at": int(time.time())}))
+    except OSError:
+        pass
+    try:
+        record.unlink()
+    except OSError:
+        pass
+    log(data, "refused", version, "bundled" if restored else version, "SELFTEST_FAILED",
+        why if restored else why + "; the bundled agent could not be put back")
+    print("droiddeck-guest-tools-check: guest-tools %s refused (%s); %s" % (
+        version, why, "the bundled agent is back" if restored else "the bundled agent could NOT be put back"), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as error:  # the session starts either way
+        print("droiddeck-guest-tools-check: %s" % error, file=sys.stderr)
+        sys.exit(0)
