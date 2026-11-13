@@ -120,8 +120,10 @@ object PanvkPackage {
             val s = session ?: return null
             if (s.ours || !installed || notOurs) return null
             val uses = "the session uses ${label(s.driver)}"
-            return if (op == "status") "$uses, not $slot; run `droiddeckctl panvk use` to switch"
-            else "$uses; this changed $slot, which is not in use. Run `droiddeckctl panvk use` to switch"
+            // `panvk use` is accepted only while the session's driver is a PanVK slot (review L1)
+            val hint = if (s.panvk != null) "run `droiddeckctl panvk use` to switch" else "the session does not use a PanVK"
+            return if (op == "status") "$uses, not $slot; $hint"
+            else "$uses; this changed $slot, which is not in use. ${hint.replaceFirstChar { it.uppercase() }}"
         }
 
         fun json(): JSONObject = JSONObject().put("source", source).put("version", version).put("driverVersion", driverVersion)
@@ -445,6 +447,10 @@ object PanvkPackage {
      * stored choice changes: an explicit PanVK Linux driver choice is swapped for ours; otherwise (automatic, or the bridge
      * for the games, which stays) the session's PanVK pick [SessionPrefs.SESSION_PANVK]. Its value before goes into use.json
      * for [unuse]. No driver slot is written. Refused while a session runs and when the session's driver is not a PanVK.
+     *
+     * use.json holds a list of records (key, value before), one per key (review M2 a): a second use after the user chose
+     * another PanVK explicitly keeps the first record (sessionPanvk) next to the new one (linuxDriver), and [unuse] undoes
+     * both. A record whose key no longer holds our id is dead (the later choice wins, review L3) and is dropped here.
      */
     fun use(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): Choice = synchronized(BlobferryPackage.LOCK) {
         val layout = layout(context)
@@ -466,13 +472,23 @@ object PanvkPackage {
                 else -> throw BlobferryException("NOT_PANVK_SESSION", "the session uses ${label(before)}, not a PanVK; choose the Linux driver on the driver page")
             }
             val prior = SessionPrefs.storedChoice(context, key)
-            writeAtomic(File(layout.store, USE_RECORD), JSONObject().put("key", key).put("value", prior ?: JSONObject.NULL)
-                .put("session", before).put("at", System.currentTimeMillis()).toString(2))
-            if (!SessionPrefs.setStoredChoice(context, key, SLOT_ID)) throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
+            val recordFile = File(layout.store, USE_RECORD)
+            val oldText = recordFile.takeIf { it.isFile }?.readText()
+            // records still in force (their key holds our id) stay; the new one is added for its key
+            val kept = useRecords(layout).filter { it.key != key && SessionPrefs.storedChoice(context, it.key) == SLOT_ID }
+            val record = UseRecord(key, prior, before, System.currentTimeMillis(), applied = false)
+            writeAtomic(recordFile, useJson(kept + record))
+            if (!SessionPrefs.setStoredChoice(context, key, SLOT_ID)) {
+                restoreRecord(recordFile, oldText)
+                throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
+            }
+            // applied: a record without it is of a use a crash stopped before the pref was saved (review L3)
+            runCatching { writeAtomic(recordFile, useJson(kept + record.copy(applied = true))) }
             val after = LinuxVulkanDriver.sessionDriver(context, mali)
             if (after != SLOT_ID) {
-                SessionPrefs.setStoredChoice(context, key, prior)
-                File(layout.store, USE_RECORD).delete()
+                // the record stays when the choice could not be put back, so unuse can still undo it (review L3)
+                if (SessionPrefs.setStoredChoice(context, key, prior)) restoreRecord(recordFile, oldText)
+                else throw BlobferryException("APPLY_FAILED", "the session would still use ${label(after)}, and the choice before could not be put back; run `droiddeckctl panvk unuse`")
                 throw BlobferryException("APPLY_FAILED", "the session would still use ${label(after)}; the choice is back as it was")
             }
             log(layout, ComponentLog.USE, before, SLOT_ID, null, key, ComponentLog.OK)
@@ -484,33 +500,100 @@ object PanvkPackage {
     }
 
     /**
-     * Undoes the last [use]: the stored choice it changed gets back its exact value before ("not stored" included), unless
-     * it was changed again since (that later choice stays: CHANGED_SINCE). No driver slot is written.
+     * Undoes [use]: every stored choice it changed that still holds our id gets back its exact value before ("not stored"
+     * included), the newest record first. A record whose key was changed since is dead: that later choice stays and the
+     * record is removed (CHANGED_SINCE when nothing is left to undo, review L3); a record of a use that never took effect
+     * (not marked applied: a crash before the pref was saved, the key still holds the value before) is removed (NO_PRIOR). Refused with PRIOR_GONE,
+     * nothing changed, when the driver the session would go back to is no longer installed (review M1). No slot is written.
      */
     fun unuse(context: Context, mali: Boolean = com.droiddeck.launcher.core.DeviceSupport.mali()): Choice = synchronized(BlobferryPackage.LOCK) {
         val layout = layout(context)
         val host = host(context, mali)
         val before = LinuxVulkanDriver.sessionDriver(context, mali)
+        val recordFile = File(layout.store, USE_RECORD)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
-            val record = readJson(File(layout.store, USE_RECORD))
-                ?: throw BlobferryException("NO_PRIOR", "nothing to undo: no `droiddeckctl panvk use` is in force")
-            val key = record.optString("key").takeIf { it == SessionPrefs.LINUX_DRIVER || it == SessionPrefs.SESSION_PANVK }
-                ?: throw BlobferryException("NO_PRIOR", "the record of the last panvk use is not readable")
-            val prior = if (record.isNull("value")) null else record.optString("value")
-            val now = SessionPrefs.storedChoice(context, key)
-            if (now != SLOT_ID) {
-                throw BlobferryException("CHANGED_SINCE", "the driver choice changed since panvk use (now ${now ?: "not stored"}); it stays")
+            if (!recordFile.isFile) throw BlobferryException("NO_PRIOR", "nothing to undo: no `droiddeckctl panvk use` is in force")
+            val records = useRecords(layout)
+            if (records.isEmpty()) {
+                recordFile.delete()
+                throw BlobferryException("NO_PRIOR", "the record of the last panvk use is not readable; it was removed")
             }
-            if (!SessionPrefs.setStoredChoice(context, key, prior)) throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
-            File(layout.store, USE_RECORD).delete()
+            val live = records.filter { SessionPrefs.storedChoice(context, it.key) == SLOT_ID }
+            if (live.isEmpty()) {
+                recordFile.delete()
+                val changed = records.firstOrNull { it.applied || SessionPrefs.storedChoice(context, it.key) != it.value }
+                    ?: throw BlobferryException("NO_PRIOR", "nothing to undo: the last panvk use never took effect")
+                throw BlobferryException("CHANGED_SINCE",
+                    "the driver choice changed since panvk use (now ${SessionPrefs.storedChoice(context, changed.key) ?: "not stored"}); it stays")
+            }
+            val undone = mutableListOf<UseRecord>()
+            fun putBack(): Boolean = undone.all { SessionPrefs.setStoredChoice(context, it.key, SLOT_ID) }
+            for (r in live.asReversed()) {
+                if (!SessionPrefs.setStoredChoice(context, r.key, r.value)) {
+                    putBack()
+                    throw BlobferryException("APPLY_FAILED", "the driver choice was not saved")
+                }
+                undone += r
+            }
             val after = LinuxVulkanDriver.sessionDriver(context, mali)
-            log(layout, ComponentLog.UNUSE, before, after, null, key, ComponentLog.OK)
+            if (after.isNotEmpty() && LinuxVulkanDriverManager(context).getIcdPath(after) == null) {
+                if (!putBack()) throw BlobferryException("APPLY_FAILED", "the choice before ($after) is no longer installed and $SLOT_ID could not be put back; choose a driver on the driver page")
+                throw BlobferryException("PRIOR_GONE", "the choice before ($after) is no longer installed; choose a driver on the driver page")
+            }
+            recordFile.delete()
+            log(layout, ComponentLog.UNUSE, before, after, null, live.joinToString("+") { it.key }, ComponentLog.OK)
             Choice(status(layout, host), before, after, true, "the next session start uses ${label(after)} again")
         } catch (e: BlobferryException) {
             log(layout, ComponentLog.REFUSED, before, null, null, null, e.code, ComponentLog.UNUSE)
             throw e
         }
+    }
+
+    /** One stored choice [use] changed: [key] held [value] (null = not stored) before. */
+    data class UseRecord(val key: String, val value: String?, val session: String, val at: Long, val applied: Boolean = true)
+
+    /** The records in use.json, oldest first; the single-object form of the first 0.6.9-mali.2 build is read too. */
+    internal fun useRecords(layout: Layout): List<UseRecord> {
+        val json = readJson(File(layout.store, USE_RECORD)) ?: return emptyList()
+        val list = json.optJSONArray("records") ?: org.json.JSONArray().put(json)
+        return (0 until list.length()).mapNotNull { i ->
+            val o = list.optJSONObject(i) ?: return@mapNotNull null
+            val key = o.optString("key").takeIf { it == SessionPrefs.LINUX_DRIVER || it == SessionPrefs.SESSION_PANVK } ?: return@mapNotNull null
+            UseRecord(key, if (o.isNull("value")) null else o.optString("value"), o.optString("session"), o.optLong("at"), o.optBoolean("applied", true))
+        }
+    }
+
+    private fun useJson(records: List<UseRecord>): String = JSONObject().put("records", org.json.JSONArray(records.map {
+        JSONObject().put("key", it.key).put("value", it.value ?: JSONObject.NULL).put("session", it.session).put("at", it.at).put("applied", it.applied)
+    })).toString(2)
+
+    private fun restoreRecord(file: File, text: String?) {
+        if (text == null) file.delete() else writeAtomic(file, text)
+    }
+
+    /** Settings reset: the undo record goes with the sessionPanvk / linuxDriver prefs it describes (review M2 b). */
+    fun forgetUse(context: Context): Boolean = File(File(context.filesDir, STORE), USE_RECORD).let { !it.exists() || it.delete() }
+
+    /**
+     * At the session start's stage(), after ensureCurrent: when our slot is not installed (APK without a bundled PanVK, the
+     * slot removed by hand), no stored choice may point at it (review M2): sessionPanvk == our id is removed, linuxDriver ==
+     * our id becomes "" (automatic, as the driver page does on a delete), use.json goes. The session then takes the normal
+     * pick (LinuxVulkanDriver.pickSessionPanvk). Returns the keys it cleared.
+     */
+    @JvmStatic fun dropChoicesOfMissingSlot(context: Context): List<String> = synchronized(BlobferryPackage.LOCK) {
+        if (LinuxVulkanDriverManager(context).getIcdPath(SLOT_ID) != null) return@synchronized emptyList()
+        val cleared = mutableListOf<String>()
+        if (SessionPrefs.storedChoice(context, SessionPrefs.SESSION_PANVK) == SLOT_ID &&
+            SessionPrefs.setStoredChoice(context, SessionPrefs.SESSION_PANVK, null)) cleared += SessionPrefs.SESSION_PANVK
+        if (SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER) == SLOT_ID &&
+            SessionPrefs.setStoredChoice(context, SessionPrefs.LINUX_DRIVER, "")) cleared += SessionPrefs.LINUX_DRIVER
+        if (cleared.isNotEmpty()) {
+            forgetUse(context)
+            Log.w(TAG, "$SLOT_ID is not installed: cleared ${cleared.joinToString()} (the session takes the normal pick)")
+            log(layout(context), ComponentLog.UNUSE, SLOT_ID, null, null, cleared.joinToString("+"), ComponentLog.OK, "slot missing")
+        }
+        cleared
     }
 
     /**

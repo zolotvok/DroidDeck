@@ -299,8 +299,11 @@ class PanvkOwnSlotTest {
             assertEquals("not in use: session uses PanVK_Kbase", line[8])
             assertEquals("ok", line[7])
         }
-        assertEquals("the session uses the runtime's own driver, not Blobferry_PanVK; run `droiddeckctl panvk use` to switch",
+        // review L1: no `panvk use` hint where use would be refused (the session's driver is not a PanVK)
+        assertEquals("the session uses the runtime's own driver, not Blobferry_PanVK; the session does not use a PanVK",
             PanvkPackage.status(layout, FakeHost(sessionDriver = "")).note("status"))
+        assertEquals("the session uses Turnip; this changed Blobferry_PanVK, which is not in use. The session does not use a PanVK",
+            PanvkPackage.status(layout, FakeHost(sessionDriver = "Turnip")).note("install"))
 
         val here = PanvkPackage.status(layout, FakeHost(sessionDriver = PanvkPackage.SLOT_ID))
         assertEquals(true, here.inUse)
@@ -448,6 +451,80 @@ class PanvkOwnSlotTest {
         SessionPrefs.setLinuxDriver(context, "PanVK_Kbase")
         assertEquals("CHANGED_SINCE", code { PanvkPackage.unuse(context, mali = true) })
         assertEquals("PanVK_Kbase", SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER))
+        // review L3: the dead record is gone, so a newer explicit choice of ours is never "restored" over
+        assertFalse(File(PanvkPackage.layout(context).store, "use.json").exists())
+        SessionPrefs.setLinuxDriver(context, PanvkPackage.SLOT_ID)
+        assertEquals("NO_PRIOR", code { PanvkPackage.unuse(context, mali = true) })
+        assertEquals(PanvkPackage.SLOT_ID, SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER))
+    }
+
+    @Test fun unuseIsRefusedWhenThePriorDriverIsGone() = withPhone { context, m ->
+        installOurs(context)
+        SessionPrefs.setStoredChoice(context, SessionPrefs.LINUX_DRIVER, "PanVK_Kbase")
+        PanvkPackage.use(context, mali = true)
+        // the user deletes PanVK_Kbase on the driver page while ours is chosen (the choice is not reset there)
+        assertTrue(m.removeDriver("PanVK_Kbase"))
+        val prefs = prefsOf(context)
+        val record = File(PanvkPackage.layout(context).store, "use.json").readText()
+        assertEquals("PRIOR_GONE", code { PanvkPackage.unuse(context, mali = true) })
+        assertEquals(prefs, prefsOf(context))
+        assertEquals(record, File(PanvkPackage.layout(context).store, "use.json").readText())
+        assertEquals(PanvkPackage.SLOT_ID, LinuxVulkanDriver.sessionDriver(context, true))
+        assertEquals(listOf("refused", "PRIOR_GONE", "unuse"), phoneEvents(context).last().let { listOf(it[2], it[7], it[8]) })
+    }
+
+    @Test fun aSecondUseKeepsTheFirstRecordAndUnuseUndoesBoth() = withPhone { context, _ ->
+        installOurs(context)
+        val prefsBefore = prefsOf(context)
+        PanvkPackage.use(context, mali = true)
+        assertEquals(PanvkPackage.SLOT_ID, SessionPrefs.sessionPanvk(context))
+        // the user then picks PanVK_Kbase explicitly on the driver page, and runs use again
+        SessionPrefs.setLinuxDriver(context, "PanVK_Kbase")
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.sessionDriver(context, true))
+        PanvkPackage.use(context, mali = true)
+        assertEquals(listOf(SessionPrefs.SESSION_PANVK, SessionPrefs.LINUX_DRIVER), PanvkPackage.useRecords(PanvkPackage.layout(context)).map { it.key })
+        val back = PanvkPackage.unuse(context, mali = true)
+        assertEquals("PanVK_Kbase", back.to)
+        // both keys are back: the explicit choice the user made, and no sessionPanvk left without a record
+        assertEquals(prefsBefore + ("linuxDriver" to "PanVK_Kbase"), prefsOf(context))
+        assertEquals(null, SessionPrefs.sessionPanvk(context))
+        assertEquals(listOf("unuse", "sessionPanvk+linuxDriver"), phoneEvents(context).last().let { listOf(it[2], it[6]) })
+    }
+
+    @Test fun aRecordOfAUseThatNeverTookEffectIsDropped() = withPhone { context, _ ->
+        installOurs(context)
+        val record = File(PanvkPackage.layout(context).store, "use.json")
+        // the single-record form of the first 0.6.9-mali.2 build is read (as applied)
+        record.parentFile!!.mkdirs()
+        record.writeText("""{"key":"sessionPanvk","value":null,"session":"PanVK_Kbase","at":1}""")
+        assertEquals(listOf(PanvkPackage.UseRecord("sessionPanvk", null, "PanVK_Kbase", 1, applied = true)),
+            PanvkPackage.useRecords(PanvkPackage.layout(context)))
+        // crash between the use.json write and the pref commit: the record is not marked applied
+        record.writeText("""{"records":[{"key":"sessionPanvk","value":null,"session":"PanVK_Kbase","at":1,"applied":false}]}""")
+        val prefs = prefsOf(context)
+        assertEquals("NO_PRIOR", code { PanvkPackage.unuse(context, mali = true) })
+        assertFalse(record.exists())
+        assertEquals(prefs, prefsOf(context))
+        // a use after it writes a fresh record only for its own key
+        PanvkPackage.use(context, mali = true)
+        assertEquals(listOf(SessionPrefs.SESSION_PANVK to true), PanvkPackage.useRecords(PanvkPackage.layout(context)).map { it.key to it.applied })
+    }
+
+    @Test fun noStoredChoicePointsAtOurSlotWhileItIsMissing() = withPhone { context, m ->
+        installOurs(context)
+        PanvkPackage.use(context, mali = true)
+        assertEquals(emptyList<String>(), PanvkPackage.dropChoicesOfMissingSlot(context))
+        assertEquals(PanvkPackage.SLOT_ID, SessionPrefs.sessionPanvk(context))
+        // the slot disappears (removed by hand; an APK without a bundled PanVK cannot recreate it)
+        File(context.filesDir, LinuxVulkanDriverManager.DIR_NAME + "/" + PanvkPackage.SLOT_ID).deleteRecursively()
+        SessionPrefs.setStoredChoice(context, SessionPrefs.LINUX_DRIVER, PanvkPackage.SLOT_ID)
+        assertEquals(listOf(SessionPrefs.SESSION_PANVK, SessionPrefs.LINUX_DRIVER), PanvkPackage.dropChoicesOfMissingSlot(context))
+        assertEquals(null, SessionPrefs.sessionPanvk(context))
+        assertEquals("", SessionPrefs.storedChoice(context, SessionPrefs.LINUX_DRIVER))
+        assertFalse(File(PanvkPackage.layout(context).store, "use.json").exists())
+        assertEquals("PanVK_Kbase", LinuxVulkanDriver.sessionDriver(context, true))
+        assertEquals(emptyList<String>(), PanvkPackage.dropChoicesOfMissingSlot(context))
+        assertTrue(m.isPanvk("PanVK_Kbase"))
     }
 
     @Test fun useIsRefusedWithoutTouchingAnything() = withPhone { context, m ->

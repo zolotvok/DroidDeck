@@ -132,4 +132,14 @@ class SettingsResetTest {
         listOf("addedName:/x", "addedAppId:/x", "gpuAutoInstalled", "romsDir", "gameStorage", "micAsked", "gameTextureFiltering")
             .forEach { assertFalse(it, SettingsReset.isSessionSetting(it)) }
     }
+
+    @Test fun theSessionPanvkChoiceAndItsUndoRecordAreReset() {
+        val record = java.io.File(app.filesDir, com.droiddeck.launcher.gpu.PanvkPackage.STORE + "/use.json")
+        record.parentFile!!.mkdirs()
+        record.writeText("""{"records":[{"key":"sessionPanvk","value":null,"session":"PanVK_Kbase","at":1}]}""")
+        assertTrue(SessionPrefs.setStoredChoice(app, SessionPrefs.SESSION_PANVK, "Blobferry_PanVK"))
+        assertTrue(SettingsReset.resetAll(app, gameProfiles = false))
+        assertEquals(null, SessionPrefs.sessionPanvk(app))
+        assertFalse(record.exists())
+    }
 }

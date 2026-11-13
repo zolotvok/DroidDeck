@@ -77,6 +77,9 @@ object SessionFiles {
             // upgraded to the bundled one (newer or a known-stale .so). Other PanVK slots and the driver choice stay. Deferred
             // while a session runs (stage() from a guest command), never at the session start's own stage().
             runCatching { com.droiddeck.launcher.gpu.PanvkPackage.ensureCurrent(context, startsSession) }.onFailure { Log.w(TAG, "PanVK check failed", it) }
+            // no stored choice may point at our slot while it is not installed: the session takes the normal pick (review M2)
+            if (startsSession) runCatching { com.droiddeck.launcher.gpu.PanvkPackage.dropChoicesOfMissingSlot(context) }
+                .onFailure { Log.w(TAG, "PanVK choice check failed", it) }
             // env defaults: the installed manifest to the guest while it is newer than the bundled one
             MaliEnvDefaults.publish(context)
         }

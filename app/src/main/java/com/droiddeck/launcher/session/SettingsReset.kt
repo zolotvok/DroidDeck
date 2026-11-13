@@ -18,7 +18,7 @@ object SettingsReset {
         "hud", "hudDeck", "hudFps", "hudBattery", "hudGraph", "hudColor", "hudOpacity", "__KEEP_droidDeckHud__", "__KEEP_droidDeckHudPos__", "backHold", "backActionsInverted", "backDoubleTapMs", "touch", "osc", "shape", "steamController",
         "gamepadLeft", "gamepadRight", "pipAutoEnter", "unfoldedControls", "unfoldedControlsWithController",
         "stretch16x9", "picturePosition", "railLabels",
-        "gpuDriverMode", "androidDriver", "linuxDriver", "linuxDriver.steam", "linuxDriver.desktop",
+        "gpuDriverMode", "androidDriver", "linuxDriver", "linuxDriver.steam", "linuxDriver.desktop", "sessionPanvk",
         "tuSysmem", "glThread", "noGlError", "zinkLazy", "mangoapp", "gpuClockPin", "performanceBoost", "boostCheck", "gamescopeRealtime", "unlockFrameLimit", "rtVulkan", "rtDxr", "ramCapMb", "vramCapMb", "zramClient",
         "directAudio", "mic", "wifiDiscovery", "clientCpusOverride", "clientCpus", "gameCpus",
         "noXalia", "bridgeNoDescriptorBuffer", "bridgeNoPipelineLibrary", "bridgeDebugLogs", "bridgeFpsLog", "bridgeGpuTime", "bridgeSession", "fastSync", "fsyncFirst", "syncFallback", "prootNoSeccomp", "prootFastPath", "cursorComposite",
@@ -42,6 +42,8 @@ object SettingsReset {
         var ok = true
         val session = context.getSharedPreferences("session", Context.MODE_PRIVATE)
         session.edit().apply { session.all.keys.filter { isSessionSetting(it) }.forEach { remove(it) } }.commit()
+        // the panvk use undo record goes with the sessionPanvk / linuxDriver prefs it describes
+        if (!com.droiddeck.launcher.gpu.PanvkPackage.forgetUse(context)) { ok = false; Log.w(TAG, "Could not remove the panvk use record") }
         ControllerPrefs.resetAll(context)
         context.getSharedPreferences("app-ui", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("frame_gen", Context.MODE_PRIVATE).edit().clear().commit()
