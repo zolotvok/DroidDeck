@@ -737,6 +737,20 @@ class ComponentCtlTest(FakeAdbTest):
         self.assertEqual([{"op": "status"}], [c["request"] for c in self.calls("guesttools")])
         self.assertEqual([], self.calls("access"))
 
+    def test_guest_tools_refuses_a_corrupt_zip_and_a_malformed_meta_without_a_traceback(self):
+        self.provider(guesttools={"ok": True, "command": "guesttools", "source": "bundled"})
+        corrupt = self.dir / "guest-tools-2026.11.13.1.zip"
+        corrupt.write_bytes(b"PK\x03\x04 not a zip")
+        code, out = self.run_ctl("guest-tools", "install", str(corrupt))
+        self.assertEqual("BAD_PACKAGE", out["error"]["code"])
+        folder, _ = self.guest_tools_package()
+        meta = json.loads((folder / "meta.json").read_text())
+        meta["files"] = {rel: "not an object" for rel in meta["files"]}
+        (folder / "meta.json").write_text(json.dumps(meta))
+        code, out = self.run_ctl("guest-tools", "install", str(folder))
+        self.assertEqual("BAD_PACKAGE", out["error"]["code"])
+        self.assertEqual([], self.calls("guesttools"))
+
     def test_env_defaults_check_runs_offline(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

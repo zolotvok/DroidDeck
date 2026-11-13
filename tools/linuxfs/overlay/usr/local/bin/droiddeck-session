@@ -227,7 +227,10 @@ start_agent() {
   [ -n "${BL_LAUNCH_DIR:-}" ] && [ -x /usr/local/bin/droiddeck-agent ] || return 0
   mkdir -p "$BL_LAUNCH_DIR/agent"
   # an agent from an installed guest-tools package must pass --selftest, else the APK's own agent is put back
-  if [ -x /usr/local/bin/droiddeck-guest-tools-check ]; then timeout 60 /usr/local/bin/droiddeck-guest-tools-check || :; fi
+  # (only with an active.json: without an installed package no python3 starts here)
+  if [ -f /usr/local/lib/droiddeck-guest-tools/active.json ] && [ -x /usr/local/bin/droiddeck-guest-tools-check ]; then
+    timeout 60 /usr/local/bin/droiddeck-guest-tools-check || :
+  fi
   /usr/local/bin/droiddeck-agent "$@" 2>&1 &
 }
 nap() {

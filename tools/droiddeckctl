@@ -425,7 +425,7 @@ def stop_for_switch(adb: str, serial: str, force_stop: bool, timeout: float) -> 
 PANVK_ZIP = re.compile(r"panvk-kbase-[A-Za-z0-9._+-]{1,48}\.zip")
 FEX_ZIP = re.compile(r"fex-arm64ec-[A-Za-z0-9._+-]{1,48}\.zip")
 FEX_PACKAGE_TOOL = Path(__file__).resolve().parent / "make-fex-arm64ec-package.py"
-GUEST_TOOLS_ZIP = re.compile(r"guest-tools-[A-Za-z0-9._+-]{1,48}\.zip")
+GUEST_TOOLS_ZIP = re.compile(r"guest-tools-\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,3}\.zip")
 GUEST_TOOLS_PACKAGE_TOOL = Path(__file__).resolve().parent / "make-guest-tools-package.py"
 ENV_DEFAULTS_JSON = re.compile(r"[A-Za-z0-9._+-]{1,96}\.json")
 MALI_DEFAULTS = Path(__file__).resolve().parent / "linuxfs/overlay/usr/local/bin/droiddeck-mali-defaults"
@@ -497,7 +497,8 @@ def guest_tools_package(args: argparse.Namespace) -> tuple:
         with contextlib.redirect_stdout(io.StringIO()):
             top, version = tool["check"](source)
         _, files = tool["read_tree"](source)
-    except (tool["Refused"], OSError, ValueError) as exc:
+    except (tool["Refused"], OSError, ValueError, zipfile.BadZipFile, AttributeError, TypeError, KeyError) as exc:
+        # a corrupt zip or a malformed meta.json is a refusal, not a traceback
         raise ControlError(f"{source.name} is refused: {exc}", "BAD_PACKAGE") from exc
     summary = {"version": version, "agentMd5": hashlib.md5(files["rootfs/" + tool["AGENT"]]).hexdigest()}
     if not source.is_dir():

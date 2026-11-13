@@ -8,8 +8,9 @@ for gpu/GuestToolsPackage.kt.
 Package `guest-tools-<V>/`: meta.json (every other file with sha256 + md5), rootfs/usr/local/bin/droiddeck-agent,
 LICENSE (DroidDeck, GPL-3) and SOURCE. V is the agent's AGENT_RELEASE line. The same files always give the same bytes
 (sorted entries, fixed zip times and modes). check applies the app's rules: only the allowlisted rootfs files, LICENSE,
-SOURCE and meta.json; every file listed and matching; the agent a python3 script (shebang, size bound, UTF-8) whose
-AGENT_RELEASE is the version and which compiles and has --selftest. Prints the md5s."""
+SOURCE and meta.json; every file listed and matching; the version YYYY.M.D.N; the agent a python3 script (first line
+exactly `#!/usr/bin/python3` or `#!/usr/bin/env python3`, LF; size bound, UTF-8) whose AGENT_RELEASE is the version and
+which compiles and has --selftest. Prints the md5s."""
 import argparse
 import hashlib
 import json
@@ -24,9 +25,11 @@ PREFIX = COMPONENT + "-"
 AGENT = "usr/local/bin/droiddeck-agent"
 ALLOWLIST = (AGENT,)  # GuestToolsPackage.ALLOWLIST
 TOP_FILES = ("LICENSE", "SOURCE")
-VERSION = re.compile(r"[A-Za-z0-9._+-]{1,48}")
-RELEASE = re.compile(rb'^AGENT_RELEASE = "([A-Za-z0-9._+-]{1,48})"\s*$', re.M)
-SHEBANG = re.compile(rb"^#!\s*/usr/bin/(?:env\s+)?python3(?:\s+-[A-Za-z]+)*\s*\n")
+# the package version (= AGENT_RELEASE), GuestToolsPackage.VERSION: a date and a serial, compared numerically
+VERSION = re.compile(r"\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,3}")
+RELEASE = re.compile(rb'^AGENT_RELEASE = "([A-Za-z0-9._+-]{1,48})"[ \t]*$', re.M)
+# the session execs the agent through its shebang: exactly one of these first lines (no flags, no \r)
+SHEBANGS = (b"#!/usr/bin/python3\n", b"#!/usr/bin/env python3\n")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 REPO = "https://github.com/zolotvok/DroidDeck"
 TOOLS = Path(__file__).resolve().parent
@@ -53,12 +56,14 @@ def check_agent(data, version=None):
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
         raise Refused("the agent is not UTF-8: %s" % error) from error
-    if "\0" in text or not SHEBANG.match(data[:200]):
-        raise Refused("the agent does not start with a python3 shebang")
+    if "\0" in text or not data.startswith(SHEBANGS):
+        raise Refused("the agent's first line must be exactly #!/usr/bin/python3 or #!/usr/bin/env python3 (LF)")
     found = RELEASE.search(data)
     if not found:
         raise Refused("the agent has no AGENT_RELEASE line")
     release = found.group(1).decode()
+    if not VERSION.fullmatch(release):
+        raise Refused("AGENT_RELEASE %r is not YYYY.M.D.N" % release)
     if version is not None and release != version:
         raise Refused("the agent says AGENT_RELEASE %s, the package is %s" % (release, version))
     if '"--selftest"' not in text:
@@ -73,8 +78,6 @@ def check_agent(data, version=None):
 def build(args):
     agent = Path(args.agent).read_bytes()
     version = check_agent(agent)
-    if not VERSION.fullmatch(version):
-        raise Refused("bad version %r" % version)
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date) or not HEX40.fullmatch(args.commit):
         raise Refused("--date YYYY-MM-DD and --commit <40 hex> are required")
     md5 = digest(agent, "md5")
@@ -161,7 +164,9 @@ def check(source):
     meta = json.loads(files.get("meta.json", b"null"))
     if not isinstance(meta, dict) or meta.get("component") != COMPONENT or meta.get("version") != version:
         raise Refused("meta.json is not the %s meta of %s" % (COMPONENT, top))
-    listed = meta.get("files") or {}
+    listed = meta.get("files")
+    if not isinstance(listed, dict) or not all(isinstance(sums, dict) for sums in listed.values()):
+        raise Refused("meta.json files must map each path to {sha256, md5}")
     for rel in files:
         if rel != "meta.json" and rel not in listed:
             raise Refused("%s is not listed in meta.json" % rel)
@@ -196,7 +201,7 @@ def main(argv):
             build(args)
         else:
             check(args.package)
-    except (Refused, OSError, ValueError, zipfile.BadZipFile) as error:
+    except (Refused, OSError, ValueError, zipfile.BadZipFile, AttributeError, TypeError, KeyError) as error:
         print("refused: %s" % error, file=sys.stderr)
         return 1
     return 0

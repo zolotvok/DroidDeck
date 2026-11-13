@@ -25,6 +25,11 @@ import java.util.zip.ZipOutputStream
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE)
 class GuestToolsPackageTest {
+    companion object {
+        /** The bundled agent's AGENT_RELEASE and md5 (also PINNED_AGENT in tools/tests/test_guest_tools.py). */
+        val PINNED_AGENT = "2026.11.13.1" to "02372e72ff59e56d161a5d3e1629bc2e"
+    }
+
     private lateinit var tmp: File
     private lateinit var layout: GuestToolsPackage.Layout
     private val commit = "b9e89a427" + "0".repeat(31)
@@ -201,6 +206,18 @@ class GuestToolsPackageTest {
         refused("BAD_SCRIPT") { prepare(zip(v, files(v, "#!/usr/bin/python3\n".toByteArray() + ByteArray(GuestToolsPackage.MAX_SCRIPT_BYTES.toInt()) { 'a'.code.toByte() }))) }
         // env python3 is a python3 shebang too
         GuestToolsPackage.discard(prepare(zip(v, files(v, agent(v).toString(Charsets.UTF_8).replace("#!/usr/bin/python3", "#!/usr/bin/env python3").toByteArray()))))
+        // M1: the session execs the agent through its shebang: no \r, no flags, nothing else on that line
+        for (line in listOf("#!/usr/bin/python3\r", "#!/usr/bin/env python3 -I", "#! /usr/bin/python3", "#!/usr/bin/python3 -I")) {
+            refused("BAD_SCRIPT") { prepare(zip(v, files(v, agent(v).toString(Charsets.UTF_8).replace("#!/usr/bin/python3", line).toByteArray()))) }
+        }
+    }
+
+    @Test fun theVersionIsADateAndASerial() {
+        // M2: anything else would never be older than an APK release (a letter token sorts above digits)
+        for (v in listOf("dev", "20261.11.13.1", "2026.11.13.1-rc1", "2026.11.13", "2026.11.13.1000")) {
+            refused("BAD_META") { prepare(zip(v, files(v))) }
+        }
+        GuestToolsPackage.discard(prepare(zip("2026.1.2.3", files("2026.1.2.3"))))
     }
 
     @Test fun restageAfterTheApkFilesPutsTheActiveAgentBackEveryStart() {
@@ -222,10 +239,12 @@ class GuestToolsPackageTest {
     }
 
     @Test fun anOlderActivePackageNeverShadowsTheAgentOfANewerApk() {
-        // equal release: the installed package wins (it is the same release)
-        install("2026.11.13.1", agent("2026.11.13.1", "hand-built"))
+        // equal release: only the identical agent is accepted (and wins: it is the same file)
+        refused("SAME_VERSION_DIFFERENT") { install("2026.11.13.1", agent("2026.11.13.1", "hand-built")) }
+        install("2026.11.13.1", bundledAgent)
         assertEquals("active", GuestToolsPackage.restage(layout, host))
-        assertEquals(md5(agent("2026.11.13.1", "hand-built")), md5(live().readBytes()))
+        assertEquals(md5(bundledAgent), md5(live().readBytes()))
+        assertNull(GuestToolsPackage.status(layout, host).shadowed)
         install("2026.11.14.1")
         // the APK is upgraded: its agent is release 2026.11.20.1
         bundledRelease = "2026.11.20.1"
@@ -249,6 +268,22 @@ class GuestToolsPackageTest {
         install("2026.11.21.1")
         assertEquals("active", GuestToolsPackage.restage(layout, host))
         assertEquals(md5(agent("2026.11.21.1")), md5(live().readBytes()))
+    }
+
+    @Test fun anApkAgentEditedWithoutAReleaseBumpWinsOverAPackageOfThatRelease() {
+        // M3: the installed package is the APK's agent of 2026.11.13.1; the next APK edits its agent but keeps the release
+        install("2026.11.13.1", bundledAgent)
+        bundledAgent = agent("2026.11.13.1", "edited, no bump")
+        stageBundled()
+        assertEquals("same release as the bundled agent 2026.11.13.1 but another agent; the next session start keeps it as previous",
+            GuestToolsPackage.status(layout, host).shadowed)
+        assertEquals("upgrade-at-start", GuestToolsPackage.restage(layout, host))
+        assertEquals(md5(bundledAgent), md5(live().readBytes()))
+        assertFalse(activeJson().exists())
+        assertEquals("bundled", GuestToolsPackage.status(layout, host).source)
+        assertTrue(events().last().let { it[2] == "upgrade-at-start" && it[8].contains("same release 2026.11.13.1 with another agent md5") })
+        refused("SAME_VERSION_DIFFERENT") { GuestToolsPackage.rollback(layout, host) }
+        assertEquals("bundled", GuestToolsPackage.restage(layout, host))
     }
 
     @Test fun aCorruptActivePackageFallsBackToTheBundledAgentAndIsLogged() {
@@ -311,7 +346,22 @@ class GuestToolsPackageTest {
             "2026-11-13T12:00:00Z\tguest-tools\tinstall\tx\ty\t-\tguest\tok\n")
         assertEquals(1, FexArm64ecPackage.ingestGuestLog(FexArm64ecPackage.Layout(File(tmp, "files/fex-arm64ec"), layout.rootfs)))
         assertEquals(listOf("guest-tools", "refused", "SELFTEST_FAILED"), events().last().let { listOf(it[1], it[2], it[7]) })
+        // M4: a reset and a roll back try it afresh too (the refusal and the transient count go)
+        val attempts = File(layout.rootfs, GuestToolsPackage.GUEST_ATTEMPTS)
+        attempts.writeText("{\"key\": \"x\", \"count\": 2}")
+        GuestToolsPackage.reset(layout, host)
+        assertFalse(refusal.exists())
+        assertFalse(attempts.exists())
+        refusal.writeText(JSONObject().put("version", "2026.11.14.1").put("agentMd5", md5(bad)).put("reason", "x").toString())
+        attempts.writeText("{}")
+        GuestToolsPackage.rollback(layout, host)
+        assertFalse(refusal.exists())
+        assertFalse(attempts.exists())
+        stageBundled()
+        assertEquals("active", GuestToolsPackage.restage(layout, host))
+        assertEquals(md5(bad), md5(live().readBytes()))
         // a new package is tried again
+        refusal.writeText(JSONObject().put("version", "2026.11.14.1").put("agentMd5", md5(bad)).put("reason", "x").toString())
         install("2026.11.15.1")
         assertFalse(refusal.exists())
         stageBundled()
@@ -325,7 +375,12 @@ class GuestToolsPackageTest {
             .map { File(it, "tools/linuxfs/overlay/usr/local/bin/droiddeck-agent") }.first { it.isFile }
         assertEquals(GuestToolsPackage.release(repoAgent.readBytes()), bundled.release)
         assertEquals(md5(repoAgent.readBytes()), bundled.agentMd5)
-        assertTrue(bundled.release.matches(Regex("""\d{4}\.\d{2}\.\d{2}\.\d+""")))
+        assertTrue(bundled.release.matches(GuestToolsPackage.VERSION))
+        // M3 pin: a package of an equal release wins only with the identical md5, so every agent edit must raise
+        // AGENT_RELEASE. Changed the agent? Raise AGENT_RELEASE in tools/linuxfs/overlay/usr/local/bin/droiddeck-agent and
+        // update this pin and PINNED_AGENT in tools/tests/test_guest_tools.py.
+        assertEquals("the bundled agent changed without an AGENT_RELEASE bump (or the pin is stale): raise AGENT_RELEASE and update the pin",
+            PINNED_AGENT, bundled.release to bundled.agentMd5)
         assertTrue(context.assets.open("linuxfs/usr/local/bin/droiddeck-guest-tools-check").use { it.readBytes() }.isNotEmpty())
         assertNull(bundled.open("usr/local/bin/droiddeck-session"))
     }

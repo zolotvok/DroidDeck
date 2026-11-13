@@ -3,11 +3,14 @@
 
 droiddeck-session runs this before it starts droiddeck-agent. When the app restaged an installed guest-tools package over
 the APK's files (/usr/local/lib/droiddeck-guest-tools/active.json lists them with their md5s), each listed file must
-still have its md5 and the agent must compile and pass `droiddeck-agent --selftest`. Otherwise the APK's own copies
-(/usr/local/lib/droiddeck-guest-tools/bundled/) are put back, the refusal is written for the app
-(~/.local/share/droiddeck-components/guest-tools-refused.json: the app then keeps the bundled files until another package
-is installed) and logged (install.log there; the app moves it into its install log). A passed check is remembered by the
-md5s, so it runs once per installed package. Always exits 0: the session starts either way."""
+still have its md5 and the agent must compile and pass `droiddeck-agent --selftest`, run the way the session runs it (exec
+through its shebang). Otherwise the APK's own copies (/usr/local/lib/droiddeck-guest-tools/bundled/) are put back. A
+deterministic failure (a changed file, a compile error, the agent cannot be executed, a non-zero exit or no "selftest ok")
+is written for the app (~/.local/share/droiddeck-components/guest-tools-refused.json: the app then keeps the bundled files
+until the package is installed, rolled back or reset again) and logged (install.log there; the app moves it into its install
+log). A timeout or a signal kill (memory pressure) only puts the bundled agent back for this start and is counted
+(guest-tools-attempts.json); the next start tries again, the [MAX_TRANSIENT]th such failure in a row refuses. A passed
+check is remembered by the md5s, so it runs once per installed package. Always exits 0: the session starts either way."""
 import hashlib
 import json
 import os
@@ -21,6 +24,11 @@ AGENT = "usr/local/bin/droiddeck-agent"
 # the rootfs files a guest-tools package may carry (GuestToolsPackage.ALLOWLIST)
 ALLOWLIST = (AGENT,)
 SELFTEST_SECONDS = 30
+MAX_TRANSIENT = 3
+
+
+class Transient(str):
+    """A failure that may pass at the next start (timeout, signal kill): no refusal stamp below MAX_TRANSIENT."""
 
 
 def paths():
@@ -46,7 +54,8 @@ def log(data, op, before, after, result, note):
 
 
 def problem(root, files):
-    """None when every listed file has its md5 and the agent compiles and passes --selftest, else why not."""
+    """None when every listed file has its md5 and the agent compiles and passes --selftest, else why not (a [Transient]
+    when it may pass at the next start)."""
     if not isinstance(files, dict) or AGENT not in files:
         return "active.json lists no %s" % AGENT
     for rel, want in files.items():
@@ -62,10 +71,15 @@ def problem(root, files):
         return "does not compile: %s" % error
     env = {k: v for k, v in os.environ.items() if k != "BL_LAUNCH_DIR"}
     try:
-        done = subprocess.run([sys.executable, "-I", str(agent), "--selftest"], env=env, stdin=subprocess.DEVNULL,
+        # as droiddeck-session starts it: exec through the shebang (a bad interpreter line or a missing exec bit fails here)
+        done = subprocess.run([str(agent), "--selftest"], env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, timeout=SELFTEST_SECONDS)
     except subprocess.TimeoutExpired:
-        return "--selftest took longer than %d s" % SELFTEST_SECONDS
+        return Transient("--selftest took longer than %d s" % SELFTEST_SECONDS)
+    except OSError as error:
+        return "the agent cannot be executed: %s" % error
+    if done.returncode < 0:
+        return Transient("--selftest was killed by signal %d" % -done.returncode)
     if done.returncode != 0 or b"selftest ok" not in done.stdout:
         return "--selftest failed (exit %d): %s" % (done.returncode, (done.stderr or done.stdout).decode(errors="replace")[-200:])
     return None
@@ -111,15 +125,46 @@ def main():
     except OSError:
         pass
     why = problem(root, files) if active is not None else "active.json is not readable"
+    attempts_file = data / "guest-tools-attempts.json"
     if why is None:
         try:
             data.mkdir(parents=True, exist_ok=True)
             stamp.write_text(key)
+            attempts_file.unlink(missing_ok=True)
         except OSError:
             pass
         log(data, "selftest", version, version, "ok", "agent passed --selftest")
         return 0
     restored = put_back(root, state, files)
+    if isinstance(why, Transient):
+        try:
+            attempts = json.loads(attempts_file.read_text())
+            count = int(attempts["count"]) if attempts.get("key") == key else 0
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            count = 0
+        count += 1
+        if count < MAX_TRANSIENT:
+            try:
+                data.mkdir(parents=True, exist_ok=True)
+                attempts_file.write_text(json.dumps({"key": key, "count": count}))
+            except OSError:
+                pass
+            # no active.json for this start (the live agent is the bundled one); the app restages the package and writes
+            # it again at the next start, and this check runs again
+            try:
+                record.unlink()
+            except OSError:
+                pass
+            log(data, "selftest", version, "bundled" if restored else version, "RETRY",
+                "%s (%d of %d); bundled agent for this start" % (why, count, MAX_TRANSIENT))
+            print("droiddeck-guest-tools-check: guest-tools %s not used this start (%s, %d of %d)" % (
+                version, why, count, MAX_TRANSIENT), file=sys.stderr)
+            return 0
+        why = "%s (%d times in a row)" % (why, count)
+        try:
+            attempts_file.unlink(missing_ok=True)
+        except OSError:
+            pass
     agent_md5 = files.get(AGENT, "") if isinstance(files, dict) else ""
     try:
         data.mkdir(parents=True, exist_ok=True)

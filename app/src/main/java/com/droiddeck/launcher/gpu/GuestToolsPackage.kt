@@ -15,19 +15,23 @@ import java.security.MessageDigest
  * The guest-tools component (release-perf-1111.md § 3.3, the agent updater): `guest-tools-<V>/` with `meta.json` (§ 3.1,
  * lists every other file), `rootfs/<path>` for each file of [ALLOWLIST] it replaces (now exactly
  * `rootfs/usr/local/bin/droiddeck-agent`), `LICENSE` (GPL-3, DroidDeck) and `SOURCE` (tools/make-guest-tools-package.py).
- * Any other file, a link, an absolute or `..` path is refused. The agent must be a python3 script (shebang, size bound,
- * UTF-8) whose `AGENT_RELEASE` is the package version and which has `--selftest`.
+ * Any other file, a link, an absolute or `..` path is refused. The version is `YYYY.M.D.N` ([VERSION]). The agent must be
+ * a python3 script (first line exactly `#!/usr/bin/python3` or `#!/usr/bin/env python3`, LF: the session execs it through
+ * the shebang; size bound, UTF-8) whose `AGENT_RELEASE` is the package version and which has `--selftest`.
  *
  * Store `files/guest-tools/` (ComponentStore: active/, previous/, journal). SessionFiles.stage() stages the APK's files
  * first, then [restage] copies active/'s files over them ("active wins over bundled", so a session start no longer wipes
  * an updated agent) and writes `usr/local/lib/droiddeck-guest-tools/active.json`; droiddeck-guest-tools-check (guest,
- * before the agent starts) runs py-compile + `droiddeck-agent --selftest` on them and puts the APK's copy (staged to
- * [BUNDLED_COPY]) back when they fail, logged `refused`; the app then keeps the bundled files for that package.
+ * before the agent starts) runs py-compile + `droiddeck-agent --selftest` (exec'd) on them and puts the APK's copy (staged
+ * to [BUNDLED_COPY]) back when they fail, logged `refused`; the app then keeps the bundled files for that package until an
+ * install, roll back or reset clears [GUEST_REFUSED]. A timeout or kill is retried at the next start ([GUEST_ATTEMPTS]).
  *
- * APK-upgrade rule: an installed package is used only while its version is not older than the release of the agent the
- * APK bundles (its `AGENT_RELEASE` line, compared as PanvkPackage.compareVersions; equal = the package wins). At the
- * first stage() of a newer APK an older active package goes to previous/ (logged `upgrade-at-start`), the bundled agent
- * stays; install and roll back refuse a package older than the bundled agent (OLDER_THAN_BUNDLED). A corrupt or
+ * APK-upgrade rule: an installed package is used only while its version is newer than the release of the agent the APK
+ * bundles (its `AGENT_RELEASE` line, compared as PanvkPackage.compareVersions), or equal with the identical agent md5 (an
+ * agent edited without an AGENT_RELEASE bump must not be shadowed by an old package of that release). At the first
+ * stage() of a newer APK a losing active package goes to previous/ (logged `upgrade-at-start`), the bundled agent stays;
+ * install and roll back refuse an older package (OLDER_THAN_BUNDLED) and an equal one with another agent
+ * (SAME_VERSION_DIFFERENT). A corrupt or
  * unreadable active package never stops a session start: the bundled files stay, logged refused CORRUPT_ACTIVE.
  * Switches only while no session runs. [app, Claude Opus 5.5] 2026-11-13
  */
@@ -46,6 +50,8 @@ object GuestToolsPackage {
     const val BUNDLED_COPY = "$STATE_DIR/bundled"
     /** Written by droiddeck-guest-tools-check when an active package failed its check (rootfs-relative). */
     const val GUEST_REFUSED = "root/.local/share/droiddeck-components/guest-tools-refused.json"
+    /** The guest check's count of selftest timeouts / kills in a row (it refuses at the third); a switch clears it. */
+    const val GUEST_ATTEMPTS = "root/.local/share/droiddeck-components/guest-tools-attempts.json"
     /** The guest's guest-tools events in its install.log (moved into the app's log with the fex ones). */
     val GUEST_OPS = setOf("selftest", "refused")
     const val SOURCE_BUNDLED = "bundled"
@@ -55,8 +61,10 @@ object GuestToolsPackage {
     const val MAX_SCRIPT_BYTES = 2L shl 20
     private val TOP_FILES = setOf("LICENSE", "SOURCE")
     private val RELEASE = Regex("""(?m)^AGENT_RELEASE = "([A-Za-z0-9._+-]{1,48})"\s*$""")
-    private val SHEBANG = Regex("""^#!\s*/usr/bin/(?:env\s+)?python3(?:\s+-[A-Za-z]+)*\s*\n""")
-    private val VERSION = Regex("[A-Za-z0-9._+-]{1,48}")
+    /** The agent's first line, exactly (droiddeck-session execs it: no flags, no \r). */
+    private val SHEBANGS = listOf("#!/usr/bin/python3\n", "#!/usr/bin/env python3\n")
+    /** The package version = AGENT_RELEASE: a date and a serial, so it always compares numerically with the APK's release. */
+    val VERSION = Regex("""\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,3}""")
     private val HEX64 = Regex("(?i)[0-9a-f]{64}")
 
     class Layout(val store: File, val rootfs: File)
@@ -150,7 +158,7 @@ object GuestToolsPackage {
     }
 
     internal fun verify(u: ComponentStore.Unpacked, appVersionCode: Long = BuildConfig.VERSION_CODE.toLong()): Prepared {
-        if (!VERSION.matches(u.version)) throw BlobferryException("BAD_STRUCTURE", "invalid package version '${u.version}'")
+        if (!VERSION.matches(u.version)) throw BlobferryException("BAD_META", "package version '${u.version}' is not YYYY.M.D.N")
         val metaFile = u.files[ComponentMeta.NAME] ?: throw BlobferryException("BAD_META", "meta.json is missing")
         val meta = ComponentMeta.parse(metaFile.readText())
         if (meta.component != COMPONENT) throw BlobferryException("BAD_META", "meta.json is for '${meta.component}', not $COMPONENT")
@@ -177,7 +185,7 @@ object GuestToolsPackage {
         return Prepared(u.version, meta, files, u.zipSha256, u.staging, u.root)
     }
 
-    /** A python3 script: non-empty, at most [MAX_SCRIPT_BYTES], a python3 shebang, UTF-8 without NUL. */
+    /** A python3 script: non-empty, at most [MAX_SCRIPT_BYTES], one of [SHEBANGS] as its first line, UTF-8 without NUL. */
     private fun checkScript(file: File) {
         val size = file.length()
         if (size == 0L || size > MAX_SCRIPT_BYTES) throw BlobferryException("BAD_SCRIPT", "${file.name}: size $size is not 1..$MAX_SCRIPT_BYTES bytes")
@@ -186,8 +194,8 @@ object GuestToolsPackage {
         val text = runCatching { decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString() }.getOrNull()
             ?: throw BlobferryException("BAD_SCRIPT", "${file.name} is not UTF-8 text")
         if ('\u0000' in text) throw BlobferryException("BAD_SCRIPT", "${file.name} is not text")
-        if (!SHEBANG.containsMatchIn(text.substring(0, minOf(text.length, 200))) || !text.startsWith("#!")) {
-            throw BlobferryException("BAD_SCRIPT", "${file.name} does not start with a python3 shebang")
+        if (SHEBANGS.none { text.startsWith(it) }) {
+            throw BlobferryException("BAD_SCRIPT", "${file.name}: the first line must be exactly #!/usr/bin/python3 or #!/usr/bin/env python3")
         }
     }
 
@@ -199,12 +207,12 @@ object GuestToolsPackage {
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
             if (!prepared.root.isDirectory) throw BlobferryException("STALE", "the prepared package is gone; import it again")
-            requireNotOlder(prepared.version, host)
+            requireUsable(prepared.version, prepared.agentMd5, host)
             val record = JSONObject().put("version", prepared.version).put("commit", prepared.meta.commit).put("zipSha256", prepared.zipSha256)
                 .put("agentMd5", prepared.agentMd5).put("files", JSONObject(prepared.files)).put("source", source)
                 .put("installedAt", System.currentTimeMillis()).put("meta", prepared.meta.record())
             // a refusal by the guest check is for the package it named; a new install is tried again
-            File(layout.rootfs, GUEST_REFUSED).delete()
+            clearGuestCheck(layout)
             store.install(prepared.root, record, host.bundled?.release) { sync(layout, host, it) }
             Log.i(TAG, "guest-tools ${prepared.version} installed from $source (agent ${prepared.agentMd5})")
             log(layout, ComponentLog.INSTALL, from, prepared.version, prepared.zipSha256, source, ComponentLog.OK)
@@ -222,7 +230,8 @@ object GuestToolsPackage {
         val from = currentVersion(store, host)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
-            store.record(store.previous)?.let { requireNotOlder(it.optString("version"), host) }
+            store.record(store.previous)?.let { requireUsable(it.optString("version"), it.optString("agentMd5"), host) }
+            clearGuestCheck(layout)
             store.rollback(host.bundled?.release) { sync(layout, host, it) }
         } catch (e: BlobferryException) {
             log(layout, ComponentLog.REFUSED, from, null, null, null, e.code, ComponentLog.ROLLBACK)
@@ -238,6 +247,7 @@ object GuestToolsPackage {
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
             val bundled = host.bundled ?: throw BlobferryException("NO_BUNDLED", "this app has no bundled agent")
+            clearGuestCheck(layout)
             store.reset(bundled.release) { sync(layout, host, it) }
         } catch (e: BlobferryException) {
             log(layout, ComponentLog.REFUSED, from, null, null, null, e.code, ComponentLog.RESET)
@@ -247,8 +257,8 @@ object GuestToolsPackage {
     }
 
     /**
-     * At every stage(), after the APK's files are staged: finishes an interrupted switch; an active package older than the
-     * bundled agent goes to previous/ (`upgrade-at-start`); a corrupt one too (refused CORRUPT_ACTIVE); one the guest check
+     * At every stage(), after the APK's files are staged: finishes an interrupted switch; an active package that loses to
+     * the bundled agent ([losesTo]: older, or the same release with another agent) goes to previous/ (`upgrade-at-start`); a corrupt one too (refused CORRUPT_ACTIVE); one the guest check
      * refused stays in the store unused; otherwise active/'s files go over the APK's ones. Without a usable active package
      * the APK's files stay and active.json is removed. Returns what it did.
      */
@@ -264,9 +274,11 @@ object GuestToolsPackage {
             return@synchronized if (recovered) "recovered" else "bundled"
         }
         val version = record.optString("version")
-        if (bundled != null && store.upgradeAtStart(bundled.release) { sync(layout, host, it) } != null) {
+        val loses = bundled?.let { losesTo(version, record.optString("agentMd5"), it) }
+        if (bundled != null && loses != null) {
+            store.reset(bundled.release) { sync(layout, host, it) }
             log(layout, ComponentLog.UPGRADE_AT_START, version, "${bundled.release} (bundled)", null, SOURCE_BUNDLED, ComponentLog.OK,
-                "the APK's agent is newer; $version kept as previous")
+                "$loses; $version kept as previous")
             return@synchronized "upgrade-at-start"
         }
         if (guestRefused(layout, record) != null) {
@@ -289,11 +301,34 @@ object GuestToolsPackage {
     /** [version] is older than the bundled agent's release (a bundled agent without a release never wins). */
     private fun older(version: String, bundled: Bundled): Boolean = ComponentStore.olderThanBundled(version, bundled.release)
 
-    private fun requireNotOlder(version: String, host: Host) {
+    /** The same release as the bundled agent but another agent (an agent edit without an AGENT_RELEASE bump). */
+    private fun sameReleaseOtherAgent(version: String, agentMd5: String, bundled: Bundled): Boolean =
+        bundled.release.isNotEmpty() && PanvkPackage.compareVersions(version, bundled.release) == 0 && agentMd5 != bundled.agentMd5
+
+    /**
+     * Why a package of [version] with [agentMd5] loses to the APK's agent, null when it wins: it wins only when strictly
+     * newer than the bundled AGENT_RELEASE, or equal with the identical agent.
+     */
+    private fun losesTo(version: String, agentMd5: String, bundled: Bundled): String? = when {
+        older(version, bundled) -> "the APK's agent ${bundled.release} is newer"
+        sameReleaseOtherAgent(version, agentMd5, bundled) -> "the APK's agent is the same release ${bundled.release} with another agent md5"
+        else -> null
+    }
+
+    private fun requireUsable(version: String, agentMd5: String, host: Host) {
         val bundled = host.bundled ?: return
         if (older(version, bundled)) throw BlobferryException(
             "OLDER_THAN_BUNDLED", "guest-tools $version is older than the agent this app bundles (${bundled.release}); it would never be used",
         )
+        if (sameReleaseOtherAgent(version, agentMd5, bundled)) throw BlobferryException(
+            "SAME_VERSION_DIFFERENT", "guest-tools $version is the release of the agent this app bundles but another agent; raise its AGENT_RELEASE",
+        )
+    }
+
+    /** A switch is tried afresh by the guest check: its refusal and its count of transient failures go. */
+    private fun clearGuestCheck(layout: Layout) {
+        File(layout.rootfs, GUEST_REFUSED).delete()
+        File(layout.rootfs, GUEST_ATTEMPTS).delete()
     }
 
     /** The guest check's refusal of [record]'s agent (its reason), null when it did not refuse this one. */
@@ -359,6 +394,8 @@ object GuestToolsPackage {
             val v = r.optString("version")
             when {
                 bundled != null && older(v, bundled) -> "older than the bundled agent ${bundled.release}; the next session start keeps it as previous"
+                bundled != null && sameReleaseOtherAgent(v, r.optString("agentMd5"), bundled) ->
+                    "same release as the bundled agent ${bundled.release} but another agent; the next session start keeps it as previous"
                 else -> guestRefused(layout, r)?.let { "refused by the guest check: $it" }
             }
         }
