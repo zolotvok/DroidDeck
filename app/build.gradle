@@ -147,8 +147,10 @@ android {
     ndkVersion project.findProperty('ndkVersion') ?: '27.3.13750724'
 
     defaultConfig {
-        // Own id: installs next to the official DroidDeck (com.droiddeck.launcher), with its own data.
-        applicationId testApplicationId ?: "com.droiddeck.launcher.mali"
+        // Base id. The RELEASE variant adds ".mali" below (own id: installs next to the official DroidDeck, with
+        // its own data). The DEBUG variant keeps com.droiddeck.launcher (testkey): it updates the team's test
+        // phone install in place (`adb install -r`, same id and signer) and all phone tools use that id.
+        applicationId testApplicationId ?: "com.droiddeck.launcher"
         minSdkVersion 26
         targetSdkVersion 28
         versionCode 20
@@ -236,6 +238,8 @@ android {
             if (testApplicationId) {
                 debuggable true
                 manifestPlaceholders.appLabel = 'DroidDeck Mali (test)'
+            } else {
+                applicationIdSuffix '.mali'
             }
             if (maliReleaseKey && !testApplicationId) {
                 signingConfig signingConfigs.maliRelease
