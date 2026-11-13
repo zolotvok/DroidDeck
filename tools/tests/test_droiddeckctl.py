@@ -597,6 +597,21 @@ class ComponentCtlTest(FakeAdbTest):
         self.assertEqual("BAD_MANIFEST", out["error"]["code"])
         self.assertEqual(1, len(self.calls("envdefaults")))
 
+    def test_components_status_and_log_are_read_only(self):
+        self.provider(components={"ok": True, "command": "components", "components": []})
+        code, out = self.run_ctl("components", "status")
+        self.assertEqual(0, code, out)
+        code, out = self.run_ctl("components", "log", "20")
+        self.assertEqual(0, code, out)
+        code, out = self.run_ctl("components", "log")
+        self.assertEqual(0, code, out)
+        self.assertEqual([{"op": "status"}, {"op": "log", "lines": 20}, {"op": "log", "lines": 50}],
+                         [c["request"] for c in self.calls("components")])
+        self.assertEqual([], self.calls("access"))
+        code, out = self.run_ctl("components", "log", "0")
+        self.assertEqual("INVALID_REQUEST", out["error"]["code"])
+        self.assertEqual(3, len(self.calls("components")))
+
     def test_env_defaults_check_runs_offline(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

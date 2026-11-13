@@ -98,6 +98,7 @@ class AgentBridgeProvider : ContentProvider() {
         "blobferry" -> blobferry(context, request)
         "panvk" -> panvk(context, request)
         "envdefaults" -> envDefaults(context, request)
+        "components" -> components(context, request)
         "report" -> report(context, request)
         "glasses" -> glasses(context, request)
         "access" -> JSONObject().put("ok", true).put("commands", AgentAccess.commandsAllowed(context))
@@ -361,6 +362,22 @@ class AgentBridgeProvider : ContentProvider() {
             status.json().put("ok", true).put("command", "panvk").put("op", op).apply { if (op != "status") put("appliesAt", "next session start") }
         } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
             error(e.code, e.message ?: e.code)
+        }
+    }
+
+    /** The installed-components list and the install log (gpu/InstalledComponents, gpu/ComponentLog), both read-only. */
+    private fun components(context: Context, request: JSONObject): JSONObject {
+        val out = JSONObject().put("ok", true).put("command", "components")
+        return when (val op = request.optString("op", "status")) {
+            "status" -> out.put("op", op).put("components", com.droiddeck.launcher.gpu.InstalledComponents.status(context))
+            "log" -> {
+                val n = request.optInt("lines", 50)
+                if (n !in 1..2000) throw AgentException("INVALID_REQUEST", "lines must be 1..2000")
+                val log = com.droiddeck.launcher.gpu.ComponentLog
+                out.put("op", op).put("fields", JSONArray(log.FIELDS))
+                    .put("events", JSONArray(log.tail(log.file(context.filesDir), n).map { log.json(it) }))
+            }
+            else -> throw AgentException("INVALID_REQUEST", "Unknown components op '$op'")
         }
     }
 

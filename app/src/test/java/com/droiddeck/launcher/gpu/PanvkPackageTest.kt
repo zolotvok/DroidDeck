@@ -199,6 +199,31 @@ class PanvkPackageTest {
         assertFalse(PanvkPackage.recover(layout))
     }
 
+    private fun withComponentMeta(content: Map<String, ByteArray>, version: String, minApp: Int = 20, skip: String? = null): Map<String, ByteArray> {
+        val list = JSONObject()
+        for ((n, d) in content) if (n != "meta.json" && n != "LICENSE" && n != "SOURCE.txt" && n != skip) {
+            list.put(n, JSONObject().put("sha256", sha256(d)).put("md5", md5(d)))
+        }
+        val meta = JSONObject(String(content.getValue("meta.json"))).put("component", "panvk").put("version", version)
+            .put("date", "2026-11-13").put("changelog", "MSRTSS fix").put("minApp", minApp).put("files", list)
+            .put("source", JSONObject().put("repo", "https://github.com/zolotvok/blobferry").put("commit", commit))
+        return content + ("meta.json" to meta.toString().toByteArray())
+    }
+
+    @Test fun aComponentMetaIsEnforcedWhenPresentAndInstallsAreLogged() {
+        val good = withComponentMeta(files("237"), "v2")
+        val status = PanvkPackage.install(layout, host, prepare(zip("v2", good)), BlobferryPackage.SOURCE_ADB)
+        assertEquals("2026-11-13", status.date)
+        assertEquals("MSRTSS fix", status.changelog)
+        rejected("APP_TOO_OLD", zip("v3", withComponentMeta(files("3"), "v3", minApp = 10_000)))
+        rejected("BAD_META", zip("v3", withComponentMeta(files("3"), "v4")))
+        rejected("BAD_META", zip("v3", withComponentMeta(files("3"), "v3", skip = "patches/237.patch")))
+        val log = ComponentLog.tail(ComponentLog.forStore(layout.store), 10).map { it.split('\t') }
+        assertEquals(listOf("install", "refused", "refused", "refused"), log.map { it[2] })
+        assertEquals(listOf("panvk", "none", "v2", "adb", "ok"), log[0].let { listOf(it[1], it[3], it[4], it[6], it[7]) })
+        assertEquals(listOf("APP_TOO_OLD", "BAD_META", "BAD_META"), log.drop(1).map { it[7] })
+    }
+
     /** The release-1 artifact (PanVK 10a845b, .so md5 bda2be8e), when this checkout has it. */
     @Test fun theRelease1ComponentVerifies() {
         val zip = File("../../bridge/build/release/panvk/panvk-kbase-v26.3.1-234-237.zip")

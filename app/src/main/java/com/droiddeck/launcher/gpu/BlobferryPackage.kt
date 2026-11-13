@@ -2,6 +2,7 @@ package com.droiddeck.launcher.gpu
 
 import android.content.Context
 import android.util.Log
+import com.droiddeck.launcher.BuildConfig
 import com.droiddeck.launcher.R
 import com.droiddeck.launcher.core.ArchivePaths
 import com.droiddeck.launcher.runtime.LinuxRuntime
@@ -61,7 +62,7 @@ object BlobferryPackage {
     const val BRIDGE_DIR = "usr/lib/mali_bridge"
     private const val LAYERS = "usr/share/vulkan/implicit_layer.d"
     const val SHIM = "$BRIDGE_DIR/libvulkan_mali_bridge.so"
-    private const val COMPAT = "$BRIDGE_DIR/libVkLayer_droiddeck_mali_compat.so"
+    const val COMPAT = "$BRIDGE_DIR/libVkLayer_droiddeck_mali_compat.so"
     private const val WSI = "$BRIDGE_DIR/libVkLayer_window_system_integration.so"
     const val HYBRIS = "usr/lib/hybris/libhybris-common.so.1"
     private const val LINKER = "usr/lib/hybris/libhybris/linker/q.so"
@@ -119,6 +120,8 @@ object BlobferryPackage {
     class Prepared internal constructor(
         val version: String, val commit: String, val dirty: Boolean, val zipMd5: String, val zipSha256: String,
         internal val staging: File, internal val root: File, internal val files: Map<String, String>, internal val links: Map<String, String>,
+        /** The § 3.1 meta.json, when the package carries one (date, changelog, repo for the components list). */
+        val meta: ComponentMeta? = null,
     )
 
     class Status(
@@ -129,6 +132,8 @@ object BlobferryPackage {
         val devFiles: List<String>? = null,
         /** Hand-deployed (.dev) only: the bundled package's commit, which the files outside [devFiles] come from. */
         val baseCommit: String = "",
+        /** The installed package's meta.json record (date, changelog, repo), empty without one. */
+        val date: String = "", val changelog: String = "",
     ) {
         /**
          * The commit as people read it: the short commit (+ "-dirty"), "dev build (no commit)" for a hand-deployed build whose
@@ -148,6 +153,7 @@ object BlobferryPackage {
             .put("bundledVersion", bundledVersion ?: JSONObject.NULL).put("devMarker", devMarker).put("userMarker", userMarker)
             .put("changed", JSONArray(changed)).put("canSwitch", canSwitch).put("files", JSONObject(files as Map<*, *>))
             .put("devFiles", devFiles?.let { JSONArray(it) } ?: JSONObject.NULL).put("baseCommit", baseCommit)
+            .put("date", date).put("changelog", changelog)
     }
 
     // ---- context entry points (UI, agent provider, SessionFiles) ----
@@ -226,6 +232,9 @@ object BlobferryPackage {
             val prepared = verify(zip, staging, zipMd5, zipSha)
             ok = true
             return prepared
+        } catch (e: BlobferryException) {
+            ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, ComponentLog.REFUSED, null, null, null, null, e.code)
+            throw e
         } finally {
             zip.delete()
             if (!ok) staging.deleteRecursively()
@@ -236,7 +245,7 @@ object BlobferryPackage {
         prepared.staging.deleteRecursively()
     }
 
-    internal fun verify(zip: File, staging: File, zipMd5: String, zipSha: String): Prepared {
+    internal fun verify(zip: File, staging: File, zipMd5: String, zipSha: String, appVersionCode: Long = BuildConfig.VERSION_CODE.toLong()): Prepared {
         val entries = centralDirectory(zip)
         val names = HashSet<String>()
         for (e in entries) if (!names.add(e.name)) throw BlobferryException("BAD_STRUCTURE", "duplicate zip entry ${e.name}")
@@ -341,7 +350,14 @@ object BlobferryPackage {
         val inner = innerShimMd5(regular.getValue("Mali_Bridge.zip"))
             ?: throw BlobferryException("BAD_STRUCTURE", "Mali_Bridge.zip has no libvulkan_mali_bridge.so")
         if (inner != files.getValue(SHIM)) throw BlobferryException("BAD_CHECKSUM", "Mali_Bridge.zip's shim differs from rootfs/$SHIM")
-        return Prepared(version, commit, dirty, zipMd5, zipSha, staging, root, files, resolved)
+        // the § 3.1 meta.json is optional; when there, it must describe exactly this package
+        val meta = regular[ComponentMeta.NAME]?.let { ComponentMeta.parse(it.readText()) }?.also { m ->
+            if (m.component != COMPONENT) throw BlobferryException("BAD_META", "meta.json is for '${m.component}', not $COMPONENT")
+            if (m.version != version) throw BlobferryException("BAD_META", "meta.json says version ${m.version}, the package is $version")
+            if (m.commit != commit) throw BlobferryException("BAD_META", "meta.json says commit ${m.commit}, SOURCE.txt says $commit")
+            m.verifyTree(root, appVersionCode)
+        }
+        return Prepared(version, commit, dirty, zipMd5, zipSha, staging, root, files, resolved, meta)
     }
 
     internal class Entry(val name: String, val symlink: Boolean, val directory: Boolean)
@@ -414,6 +430,7 @@ object BlobferryPackage {
 
     /** Makes the prepared package the active one: the old active becomes previous/, live files follow at once. */
     fun install(layout: Layout, host: Host, prepared: Prepared, source: String): Status = synchronized(LOCK) {
+        val from = currentVersion(layout, host)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
             if (!prepared.root.isDirectory) throw BlobferryException("STALE", "the prepared package is gone; import it again")
@@ -427,6 +444,7 @@ object BlobferryPackage {
             val meta = JSONObject().put("version", prepared.version).put("commit", prepared.commit).put("dirty", prepared.dirty)
                 .put("zipMd5", prepared.zipMd5).put("zipSha256", prepared.zipSha256).put("source", source)
                 .put("installedAt", System.currentTimeMillis()).put("files", JSONObject(prepared.files as Map<*, *>))
+            prepared.meta?.let { meta.put("meta", it.record()) }
             writeAtomic(File(next, META), meta.toString(2))
             journal(layout)
             previous.deleteRecursively()
@@ -451,7 +469,11 @@ object BlobferryPackage {
             }
             endJournal(layout)
             Log.i(TAG, "Blobferry ${prepared.version} (${prepared.commit.take(7)}) installed from $source")
+            log(layout, ComponentLog.INSTALL, from, prepared.version, prepared.zipSha256, source, ComponentLog.OK)
             status(layout, host)
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, from, prepared.version, prepared.zipSha256, source, e.code)
+            throw e
         } finally {
             prepared.staging.deleteRecursively()
         }
@@ -460,6 +482,7 @@ object BlobferryPackage {
     /** Swaps active and previous (previous can be the bundled package; rolling back again goes forward again). */
     fun rollback(layout: Layout, host: Host): Status = synchronized(LOCK) {
         if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
+        val from = currentVersion(layout, host)
         val active = File(layout.store, "active")
         val previous = File(layout.store, "previous")
         val previousBundled = File(previous, BUNDLED_MARK).isFile
@@ -479,19 +502,20 @@ object BlobferryPackage {
         if (File(active, BUNDLED_MARK).isFile) active.deleteRecursively()
         sync(layout, host)
         endJournal(layout)
-        status(layout, host)
+        status(layout, host).also { log(layout, ComponentLog.ROLLBACK, from, it.version, packageMeta(active)?.optString("zipSha256"), it.source, ComponentLog.OK) }
     }
 
     /** Back to what the APK bundles: drops active/, previous/ and both markers (.user and .dev). */
     fun reset(layout: Layout, host: Host): Status = synchronized(LOCK) {
         if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
         if (host.bundled == null) throw BlobferryException("NO_BUNDLED", "this app has no bundled Blobferry")
+        val from = currentVersion(layout, host)
         journal(layout)
         File(layout.store, "active").deleteRecursively()
         File(layout.store, "previous").deleteRecursively()
         sync(layout, host)
         endJournal(layout)
-        status(layout, host)
+        status(layout, host).also { log(layout, ComponentLog.RESET, from, it.version, null, it.source, ComponentLog.OK) }
     }
 
     /** At every stage(): finishes a switch a crash interrupted (the journal), so the live files match active/ again. */
@@ -509,6 +533,7 @@ object BlobferryPackage {
             sync(layout, host)
         }
         endJournal(layout)
+        log(layout, ComponentLog.RESTAGE, null, currentVersion(layout, host), null, null, ComponentLog.OK)
         true
     }
 
@@ -609,6 +634,8 @@ object BlobferryPackage {
             // a hand-deployed tree shows what is on disk (the details dialog, the report's known hashes)
             files = if (source == SOURCE_DEV) liveFiles(layout) else expected,
             devFiles = devFiles, baseCommit = if (source == SOURCE_DEV) bundled?.commit.orEmpty() else "",
+            date = meta?.optJSONObject("meta")?.optString("date").orEmpty(),
+            changelog = meta?.optJSONObject("meta")?.optString("changelog").orEmpty(),
         )
     }
 
@@ -619,6 +646,15 @@ object BlobferryPackage {
     }
 
     // ---- helpers ----
+
+    const val COMPONENT = "blobferry"
+
+    /** The version in force without hashing anything: the active package's, else the bundled one's. */
+    private fun currentVersion(layout: Layout, host: Host): String =
+        packageMeta(File(layout.store, "active"))?.optString("version") ?: host.bundled?.version?.let { "$it (bundled)" } ?: "none"
+
+    private fun log(layout: Layout, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String) =
+        ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, op, from, to, sha256, source, result)
 
     private fun journal(layout: Layout) {
         layout.store.mkdirs()

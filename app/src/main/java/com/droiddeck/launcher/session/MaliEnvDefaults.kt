@@ -3,6 +3,7 @@ package com.droiddeck.launcher.session
 import android.content.Context
 import android.util.Log
 import com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException
+import com.droiddeck.launcher.gpu.ComponentLog
 import com.droiddeck.launcher.runtime.LinuxRuntime
 import org.json.JSONArray
 import org.json.JSONObject
@@ -176,7 +177,13 @@ object MaliEnvDefaults {
 
     @Synchronized
     fun install(layout: Layout, host: Host, manifest: Manifest, source: String): Status {
-        parse(manifest.bytes) // re-checked: what is written is exactly what was verified
+        val from = status(layout, host).version
+        try {
+            parse(manifest.bytes) // re-checked: what is written is exactly what was verified
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, from, manifest.version, manifest.sha256, source, e.code)
+            throw e
+        }
         layout.store.mkdirs()
         val active = File(layout.store, "active.json")
         if (active.isFile) {
@@ -189,6 +196,7 @@ object MaliEnvDefaults {
         writeAtomic(active, manifest.bytes)
         Log.i(TAG, "env defaults ${manifest.version} installed from $source (${manifest.games.size} games)")
         publish(layout, host)
+        log(layout, ComponentLog.INSTALL, from, manifest.version, manifest.sha256, source, ComponentLog.OK)
         return status(layout, host)
     }
 
@@ -199,6 +207,7 @@ object MaliEnvDefaults {
         val previous = File(layout.store, "previous.json")
         if (!previous.isFile) throw BlobferryException("NO_PREVIOUS", "there are no previous env defaults")
         parse(previous.readBytes())
+        val from = status(layout, host).version
         val swap = File(layout.store, "swap.json")
         val swapMeta = File(layout.store, "swap.meta.json")
         copyAtomic(previous, swap)
@@ -210,16 +219,22 @@ object MaliEnvDefaults {
         if (swapMeta.isFile) swapMeta.renameTo(File(layout.store, "active.meta.json")) else File(layout.store, "active.meta.json").delete()
         if (!swap.renameTo(active)) throw IOException("cannot activate the previous env defaults")
         publish(layout, host)
-        return status(layout, host)
+        return status(layout, host).also { log(layout, ComponentLog.ROLLBACK, from, it.version, it.sha256, it.source, ComponentLog.OK) }
     }
 
     /** Back to the manifest the APK bundles: the installed ones are removed. */
     @Synchronized
     fun reset(layout: Layout, host: Host): Status {
+        val from = status(layout, host).version
         for (name in listOf("active.json", "active.meta.json", "previous.json", "previous.meta.json")) File(layout.store, name).delete()
         publish(layout, host)
-        return status(layout, host)
+        return status(layout, host).also { log(layout, ComponentLog.RESET, from, it.version, it.sha256, it.source, ComponentLog.OK) }
     }
+
+    private fun log(layout: Layout, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String) =
+        ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, op, from, to, sha256, source, result)
+
+    const val COMPONENT = "env-defaults"
 
     /** The guest copy := the installed manifest while it is valid and newer than the bundled one, else none. */
     @Synchronized

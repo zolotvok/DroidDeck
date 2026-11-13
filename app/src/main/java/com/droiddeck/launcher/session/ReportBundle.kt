@@ -133,6 +133,9 @@ object ReportBundle {
         val appId = SessionState.gameId?.takeIf { GameEnvironment.validScope(it) && it.isNotEmpty() } ?: proton.firstOrNull()?.let { appIdOf(it) }
         val env = envText(context, appId)
         parts += Part("env/game-env.txt", Kind.ENV, env.length.toLong(), text = { env })
+        // the updater's install log (gpu/ComponentLog): what was installed, rolled back or refused, and when
+        com.droiddeck.launcher.gpu.ComponentLog.file(context.filesDir).takeIf { it.isFile }
+            ?.let { parts += Part("components/install.log", Kind.ENV, it.length(), file = it) }
         val info = info(context, appId, proton.firstOrNull(), latest)
         if (info.vulkanError) notes += "The logs show a Vulkan/driver error."
         parts.add(0, Part("summary.md", Kind.SUMMARY, -1, text = { ReportSummary.markdown(info) }))

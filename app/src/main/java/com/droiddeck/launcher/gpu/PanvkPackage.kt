@@ -2,6 +2,7 @@ package com.droiddeck.launcher.gpu
 
 import android.content.Context
 import android.util.Log
+import com.droiddeck.launcher.BuildConfig
 import com.droiddeck.launcher.core.ArchivePaths
 import com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException
 import org.json.JSONObject
@@ -60,16 +61,19 @@ object PanvkPackage {
         val version: String, val driverVersion: String, val commit: String, val zipSha256: String,
         val soMd5: String, val soSha256: String, val minGlibc: String,
         internal val staging: File, internal val root: File,
+        /** The § 3.1 meta fields (component/date/changelog/repo), when the package's meta.json carries them. */
+        val meta: ComponentMeta? = null,
     )
 
     class Status(
         val source: String, val version: String, val driverVersion: String, val commit: String, val soMd5: String,
         val previous: String?, val bundledVersion: String?, val installed: Boolean, val canSwitch: Boolean, val slot: String,
+        val date: String = "", val changelog: String = "",
     ) {
         fun json(): JSONObject = JSONObject().put("source", source).put("version", version).put("driverVersion", driverVersion)
             .put("commit", commit).put("soMd5", soMd5).put("hasPrevious", previous != null).put("previous", previous ?: JSONObject.NULL)
             .put("bundledVersion", bundledVersion ?: JSONObject.NULL).put("installed", installed).put("canSwitch", canSwitch)
-            .put("slot", slot)
+            .put("slot", slot).put("date", date).put("changelog", changelog)
     }
 
     // ---- context entry points ----
@@ -138,6 +142,9 @@ object PanvkPackage {
                 throw BlobferryException("BAD_CHECKSUM", "sha256 $zipSha does not match the expected $expectedSha256")
             }
             return verify(zip, staging, zipSha).also { ok = true }
+        } catch (e: BlobferryException) {
+            ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, ComponentLog.REFUSED, null, null, null, null, e.code)
+            throw e
         } finally {
             zip.delete()
             if (!ok) staging.deleteRecursively()
@@ -148,7 +155,7 @@ object PanvkPackage {
         prepared.staging.deleteRecursively()
     }
 
-    internal fun verify(zip: File, staging: File, zipSha: String): Prepared {
+    internal fun verify(zip: File, staging: File, zipSha: String, appVersionCode: Long = BuildConfig.VERSION_CODE.toLong()): Prepared {
         val entries = BlobferryPackage.centralDirectory(zip)
         if (entries.size > MAX_ENTRIES) throw BlobferryException("TOO_LARGE", "the package has more than $MAX_ENTRIES entries")
         if (entries.map { it.name }.toSet().size != entries.size) throw BlobferryException("BAD_STRUCTURE", "duplicate zip entries")
@@ -209,15 +216,23 @@ object PanvkPackage {
             throw BlobferryException("NOT_A_PACKAGE", "meta.json is not a panvk-kbase linux-vulkan-icd")
         }
         val commit = COMMIT.find(regular.getValue("SOURCE.txt").readText())?.groupValues?.get(1).orEmpty()
+        // the § 3.1 fields are optional (older packages lack them); when there, they must describe exactly this package
+        val component = if (!ComponentMeta.isComponentMeta(meta)) null else ComponentMeta.parse(meta).also { m ->
+            if (m.component != COMPONENT) throw BlobferryException("BAD_META", "meta.json is for '${m.component}', not $COMPONENT")
+            if (m.version != version) throw BlobferryException("BAD_META", "meta.json says version ${m.version}, the package is $version")
+            if (commit.isNotEmpty() && m.commit != commit) throw BlobferryException("BAD_META", "meta.json says commit ${m.commit}, SOURCE.txt says $commit")
+            m.verifyTree(root, appVersionCode)
+        }
         return Prepared(
-            version, meta.optString("driverVersion").ifEmpty { version }, commit, zipSha, md5(so), sums.getValue(LIB),
-            meta.optString("minGlibc"), staging, root,
+            version, meta.optString("driverVersion").ifEmpty { version }, commit.ifEmpty { component?.commit.orEmpty() }, zipSha, md5(so),
+            sums.getValue(LIB), meta.optString("minGlibc"), staging, root, component,
         )
     }
 
     // ---- switch ----
 
-    fun install(layout: Layout, host: Host, prepared: Prepared, source: String): Status = synchronized(BlobferryPackage.LOCK) {
+    fun install(layout: Layout, host: Host, prepared: Prepared, source: String, op: String = ComponentLog.INSTALL): Status = synchronized(BlobferryPackage.LOCK) {
+        val from = currentVersion(layout)
         try {
             if (host.sessionRunning) throw BlobferryException("SESSION_RUNNING", "Stop the session first")
             val so = File(prepared.root, LIB)
@@ -227,9 +242,14 @@ object PanvkPackage {
                 .put("commit", prepared.commit).put("zipSha256", prepared.zipSha256).put("soMd5", prepared.soMd5)
                 .put("soSha256", prepared.soSha256).put("minGlibc", prepared.minGlibc).put("source", source)
                 .put("installedAt", System.currentTimeMillis())
+            prepared.meta?.let { m -> state.put("date", m.date).put("changelog", m.changelog).put("repo", m.repo) }
             switchTo(layout, so, state, null)
             Log.i(TAG, "PanVK ${prepared.version} installed from $source into ${layout.slot}")
+            log(layout, op, from, prepared.version, prepared.zipSha256, source, ComponentLog.OK)
             status(layout, host)
+        } catch (e: BlobferryException) {
+            log(layout, ComponentLog.REFUSED, from, prepared.version, prepared.zipSha256, source, e.code)
+            throw e
         } finally {
             prepared.staging.deleteRecursively()
         }
@@ -244,7 +264,9 @@ object PanvkPackage {
         if (!so.isFile || state == null) throw BlobferryException("NO_PREVIOUS", "there is no previous PanVK")
         if (md5(so) != state.optString("soMd5")) throw BlobferryException("BAD_CHECKSUM", "the previous $LIB changed on disk")
         // switchTo stages a copy of previous/'s .so before it rewrites previous/ with the live one
+        val from = currentVersion(layout)
         switchTo(layout, so, state, readJson(File(previous, LinuxVulkanDriverManager.META_NAME)))
+        log(layout, ComponentLog.ROLLBACK, from, state.optString("version"), state.optString("zipSha256"), state.optString("source"), ComponentLog.OK)
         status(layout, host)
     }
 
@@ -327,6 +349,7 @@ object PanvkPackage {
         if (live.isFile && md5(live) == journal.optString("soMd5")) {
             Log.w(TAG, "an interrupted PanVK switch: finishing it")
             finish(layout, journal.getJSONObject("state"), journal.getJSONObject("meta"))
+            log(layout, ComponentLog.RESTAGE, null, journal.getJSONObject("state").optString("version"), null, null, ComponentLog.OK)
         } else {
             Log.w(TAG, "an interrupted PanVK switch: the old driver stayed")
             File(layout.store, JOURNAL).delete()
@@ -355,10 +378,23 @@ object PanvkPackage {
             commit = if (managed) state!!.optString("commit") else meta?.optString("commit").orEmpty(),
             soMd5 = md5, previous = previous?.optString("version")?.ifEmpty { "?" }, bundledVersion = host.bundled?.version,
             installed = live.isFile, canSwitch = !host.sessionRunning, slot = layout.slot.name,
+            date = if (managed) state!!.optString("date") else "", changelog = if (managed) state!!.optString("changelog") else "",
         )
     }
 
     // ---- helpers ----
+
+    const val COMPONENT = "panvk"
+
+    /** The slot's version without hashing: the package record's, else the slot meta's driver version. */
+    private fun currentVersion(layout: Layout): String = when {
+        !File(layout.slot, LIB).isFile -> "none"
+        else -> readJson(File(layout.store, STATE))?.optString("version")?.ifEmpty { null }
+            ?: readJson(File(layout.slot, LinuxVulkanDriverManager.META_NAME))?.optString("driverVersion")?.ifEmpty { null } ?: "hand-imported"
+    }
+
+    private fun log(layout: Layout, op: String, from: String?, to: String?, sha256: String?, source: String?, result: String) =
+        ComponentLog.append(ComponentLog.forStore(layout.store), COMPONENT, op, from, to, sha256, source, result)
 
     private fun readJson(file: File): JSONObject? = runCatching { JSONObject(file.readText()) }.getOrNull()
 

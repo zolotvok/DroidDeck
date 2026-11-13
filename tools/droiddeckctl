@@ -941,6 +941,14 @@ def execute(args: argparse.Namespace, adb: str, serial: str) -> dict:
         return add_serial(component(args, adb, serial, "envdefaults", args.env_defaults_op, ENV_DEFAULTS_JSON,
                                     "an env defaults manifest .json", False), serial)
 
+    if command == "components":
+        request = {"op": args.components_op}
+        if args.components_op == "log":
+            if not 1 <= args.lines <= 2000:
+                raise ControlError("N must be 1..2000", "INVALID_REQUEST")
+            request["lines"] = args.lines
+        return add_serial(checked(provider_call(adb, serial, "components", request=request), "COMPONENTS_FAILED"), serial)
+
     if command == "report":
         return add_serial(report(args, adb, serial), serial)
 
@@ -1173,6 +1181,12 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--force-stop", action="store_true", help="stop a running session first")
         sub.add_argument("--restart", action="store_true", help="start Steam afterwards")
         sub.add_argument("--timeout", type=float, default=120, help="seconds to wait for the session to stop")
+
+    comps = commands.add_parser("components", help="updater components (Blobferry, PanVK, env defaults): status, install log")
+    comps_ops = comps.add_subparsers(dest="components_op", required=True)
+    comps_ops.add_parser("status", help="every component: version, source, commit, date, changelog, key file md5, previous")
+    comps_log = comps_ops.add_parser("log", help="the last N install-log events (install, rollback, reset, refused, ...)")
+    comps_log.add_argument("lines", nargs="?", type=int, default=50, help="how many events (default 50)")
 
     envd = commands.add_parser("env-defaults", help="per-game env defaults for Mali bridge games: status, check, install, rollback, reset")
     envd_ops = envd.add_subparsers(dest="env_defaults_op", required=True)
