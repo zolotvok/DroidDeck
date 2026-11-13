@@ -774,17 +774,17 @@ object SessionPrefs {
      * What a session runs with: `BL_GAME_BOOST=1` or `=0` in the shared game environment beats the
      * switch (the test lane's A/B path, no UI step); anything else leaves the switch. Default off on
      * every phone but the Odin 3 ([GameThreadHints.measuredHere]). A game's own entry beats both once
-     * that game runs ([boostFor]); GameThreadHints decides that per running game.
+     * that game runs ([boostFor]); GameThreadHints decides that per running game. Read leniently: a bad
+     * key elsewhere in the store does not hide this one.
      */
     fun performanceBoostActive(context: Context): Boolean =
-        boostOverride(runCatching { GameEnvironmentStore.read(context).shared[BOOST_KEY] }.getOrNull())
-            ?: performanceBoost(context)
+        boostOverride(GameEnvironmentStore.readLenient(context).shared[BOOST_KEY]) ?: performanceBoost(context)
 
     const val BOOST_KEY = "BL_GAME_BOOST"
 
     /** True when some game's own entry says `BL_GAME_BOOST=1`: the hints then watch even with the session-wide boost off. */
     fun gameBoostWanted(context: Context): Boolean =
-        runCatching { GameEnvironmentStore.read(context).games.values.any { boostOverride(it[BOOST_KEY]) == true } }.getOrDefault(false)
+        GameEnvironmentStore.readLenient(context).games.values.any { boostOverride(it[BOOST_KEY]) == true }
 
     /** Whether the boost's watchers start at all: the session-wide boost, or a game entry that asks for it. */
     fun boostMayRun(context: Context): Boolean = performanceBoostActive(context) || gameBoostWanted(context)
@@ -792,6 +792,8 @@ object SessionPrefs {
     /**
      * The boost for game [scope] (a game environment id, null or empty for none): its own
      * `BL_GAME_BOOST=1|0` beats the shared one, which beats [switchOn]; any other value falls through.
+     * The id is the numeric store scope (Steam app id / compat prefix): all Epic titles run under one
+     * Steam shortcut and so share one entry.
      */
     internal fun boostFor(config: GameEnvironment.Config, scope: String?, switchOn: Boolean): Boolean =
         boostOverride(scope?.takeIf { it.isNotEmpty() }?.let { config.games[it]?.get(BOOST_KEY) })

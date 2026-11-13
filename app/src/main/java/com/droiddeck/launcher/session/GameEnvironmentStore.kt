@@ -22,6 +22,44 @@ object GameEnvironmentStore {
         return decode(JSONObject(bytes.toString(Charsets.UTF_8)))
     }
 
+    /**
+     * [read] that never throws and skips what [decode] would refuse (a game id outside the numeric
+     * store scope such as `epic:Jasper`, a bad name or value) entry by entry, so one bad key cannot
+     * hide every other override. For the performance boost's lookups; an empty Config if unreadable.
+     */
+    fun readLenient(context: Context): GameEnvironment.Config = readLenientOrNull(context) ?: GameEnvironment.Config()
+
+    /** [readLenient], but null when the file exists and cannot be read or parsed (a caller keeps its last good copy). */
+    fun readLenientOrNull(context: Context): GameEnvironment.Config? {
+        val bytes = try {
+            AtomicFile(File(context.filesDir, SETTINGS)).readFully()
+        } catch (_: java.io.FileNotFoundException) {
+            return GameEnvironment.Config()
+        } catch (_: Exception) {
+            return null
+        }
+        return try { decodeLenient(JSONObject(bytes.toString(Charsets.UTF_8))) } catch (_: Exception) { null }
+    }
+
+    /** Null for a document that is not version 1. */
+    internal fun decodeLenient(json: JSONObject): GameEnvironment.Config? {
+        if (json.optInt("version") != 1) return null
+        fun entries(value: JSONObject?): Map<String, String?> = buildMap {
+            value?.keys()?.forEach { name ->
+                val entry = value.opt(name)
+                if (!GameEnvironment.validName(name)) return@forEach
+                if (entry == JSONObject.NULL) put(name, null)
+                else if (entry is String && GameEnvironment.validValue(entry)) put(name, entry)
+            }
+        }
+        val games = json.optJSONObject("games")
+        return GameEnvironment.Config(entries(json.optJSONObject("shared")), buildMap {
+            games?.keys()?.forEach { id ->
+                if (id.isNotEmpty() && GameEnvironment.validScope(id)) games.optJSONObject(id)?.let { put(id, entries(it)) }
+            }
+        })
+    }
+
     fun decode(json: JSONObject): GameEnvironment.Config {
         require(json.getInt("version") == 1)
         fun entries(value: JSONObject?): Map<String, String?> = buildMap {

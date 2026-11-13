@@ -321,7 +321,7 @@ object ReportBundle {
         }
         val boost = runCatching {
             "boost " + (if (SessionPrefs.boostFor(config, appId, SessionPrefs.performanceBoost(context))) "on" else "off") +
-                (gameEnv[SessionPrefs.BOOST_KEY]?.let { " (game BL_GAME_BOOST=$it)" } ?: shared[SessionPrefs.BOOST_KEY]?.let { " (BL_GAME_BOOST=$it)" } ?: "") +
+                (gameEnv[SessionPrefs.BOOST_KEY]?.let { " (game BL_GAME_BOOST=$it; Epic titles share one entry)" } ?: shared[SessionPrefs.BOOST_KEY]?.let { " (BL_GAME_BOOST=$it)" } ?: "") +
                 if (SessionPrefs.boostCheck(context)) ", check on" else ""
         }.getOrDefault("?")
         val gameName = appId?.toIntOrNull()?.let { id ->

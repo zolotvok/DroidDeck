@@ -1,5 +1,6 @@
 package com.droiddeck.launcher.session
 
+import com.droiddeck.launcher.core.GameEnvironment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,5 +74,26 @@ class GameThreadHintsTest {
         assertEquals(null, GameThreadHints.appIdOfCompatPath("/x/compatdata/pfx"))
         assertEquals(null, GameThreadHints.appIdOfCompatPath(""))
         assertEquals(null, GameThreadHints.appIdOfCompatPath("/x/4294967296"))
+    }
+
+    @Test fun `a frame cap in the game's environment is a limit in force`() {
+        fun cfg(shared: Map<String, String?> = emptyMap(), game: Map<String, String?>? = null) =
+            GameEnvironment.Config(shared, if (game == null) emptyMap() else mapOf("292030" to game))
+        assertEquals(0, GameThreadHints.frameCap(cfg(), "292030"))
+        assertEquals(40, GameThreadHints.frameCap(cfg(game = mapOf("VKD3D_FRAME_RATE" to "40")), "292030"))
+        assertEquals(0, GameThreadHints.frameCap(cfg(game = mapOf("VKD3D_FRAME_RATE" to "40")), "447040"))
+        assertEquals(30, GameThreadHints.frameCap(cfg(mapOf("DXVK_FRAME_RATE" to "30")), null))
+        assertEquals(45, GameThreadHints.frameCap(cfg(game = mapOf("DXVK_CONFIG" to "dxgi.syncInterval = 1; dxvk.maxFrameRate = 45")), "292030"))
+        assertEquals(50, GameThreadHints.frameCap(cfg(game = mapOf("DXVK_CONFIG" to "d3d9.maxFrameRate=50", "DXVK_FRAME_RATE" to "0")), "292030"))
+        assertEquals(30, GameThreadHints.frameCap(cfg(mapOf("VKD3D_FRAME_RATE" to "60"), mapOf("DXVK_FRAME_RATE" to "30")), "292030"))
+        // the game's own value beats the shared one, a null unsets it, garbage is no cap
+        assertEquals(60, GameThreadHints.frameCap(cfg(mapOf("VKD3D_FRAME_RATE" to "30"), mapOf("VKD3D_FRAME_RATE" to "60")), "292030"))
+        assertEquals(0, GameThreadHints.frameCap(cfg(mapOf("VKD3D_FRAME_RATE" to "30"), mapOf("VKD3D_FRAME_RATE" to null)), "292030"))
+        assertEquals(0, GameThreadHints.frameCap(cfg(game = mapOf("VKD3D_FRAME_RATE" to "sixty", "DXVK_CONFIG" to "dxvk.maxFrameRate = 0")), "292030"))
+        assertEquals(40, GameThreadHints.lowestLimit(SessionPrefs.FPS_UNPACED, 40))
+        assertEquals(30, GameThreadHints.lowestLimit(30, 40))
+        assertEquals(0, GameThreadHints.lowestLimit(0, -1))
+        // VKD3D_FRAME_RATE=40 on a 120 Hz panel: 40 fps keeps pace
+        assertTrue(GameThreadHints.holdsPace(40.0, 120.0, GameThreadHints.lowestLimit(0, 40)))
     }
 }

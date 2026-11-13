@@ -4,8 +4,12 @@ import com.droiddeck.launcher.core.GameEnvironment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.json.JSONObject
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class BoostOverrideTest {
     @Test fun `BL_GAME_BOOST 1 or 0 beats the switch, anything else leaves it`() {
         assertEquals(true, SessionPrefs.boostOverride("1"))
@@ -40,5 +44,16 @@ class BoostOverrideTest {
         assertFalse(SessionPrefs.boostFor(config(null, "1"), "447040", false))
         assertFalse(SessionPrefs.boostFor(config(null, "1"), null, false))
         assertFalse(SessionPrefs.boostFor(config(null, "1"), "", false))
+    }
+
+    @Test fun `a bad game key in the store does not hide the other overrides`() {
+        val json = JSONObject("""{"version":1,"shared":{"BL_GAME_BOOST":"0"},"games":{
+            "epic:Jasper":{"BL_GAME_BOOST":"1"},"292030":{"BL_GAME_BOOST":"1","bad name":"x"}}}""")
+        val config = GameEnvironmentStore.decodeLenient(json)!!
+        assertEquals(setOf("292030"), config.games.keys)
+        assertEquals(mapOf("BL_GAME_BOOST" to "1"), config.games["292030"])
+        assertTrue(SessionPrefs.boostFor(config, "292030", false))
+        assertFalse(SessionPrefs.boostFor(config, "447040", true))
+        assertEquals(null, GameEnvironmentStore.decodeLenient(JSONObject("""{"version":2}""")))
     }
 }

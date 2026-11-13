@@ -265,7 +265,7 @@ object SamsungPerf {
                 frames.addLast(WaylandCompositor.gameFrameCount())
                 if (frames.size > GameThreadHints.PACE_WINDOW_S + 1) frames.removeFirst()
                 val fps = (frames.last() - frames.first()).toDouble() / (frames.size - 1).coerceAtLeast(1)
-                val paced = frames.size > GameThreadHints.PACE_WINDOW_S && GameThreadHints.holdsPace(fps, SessionState.refreshHz.toDouble(), SessionState.paceFpsLimit)
+                val paced = frames.size > GameThreadHints.PACE_WINDOW_S && GameThreadHints.holdsPace(fps, SessionState.refreshHz.toDouble(), GameThreadHints.lowestLimit(SessionState.paceFpsLimit, GameThreadHints.gameFrameCap))
                 pacedFor = if (paced) pacedFor + 1 else 0
                 val hot = Build.VERSION.SDK_INT >= 29 && pm.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
                 val why = when {

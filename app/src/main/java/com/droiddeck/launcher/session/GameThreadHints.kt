@@ -32,8 +32,10 @@ import kotlin.math.roundToInt
  * carry no frame timing, the busy share is the signal (a capped game's frame interval looks the same
  * as a slow one's). Nothing is boosted while the device is critically hot or saves power.
  *
- * Nor while the game holds its own target ([paceTarget]): the frame limit in force for the session
- * if one is set below the panel ([SessionState.paceFpsLimit]), else the panel's active refresh rate,
+ * Nor while the game holds its own target ([paceTarget]): the lowest frame limit in force if one is
+ * set below the panel - the compositor's ([SessionState.paceFpsLimit]) or a frame cap in the game's
+ * environment ([frameCap]: VKD3D_FRAME_RATE, DXVK_FRAME_RATE, DXVK_CONFIG maxFrameRate) - else the
+ * panel's active refresh rate,
  * and also 60 fps on a panel above 60 (the common in-game cap). There is nothing to gain there, and it
  * cost frame pacing - Serious Sam capped at 120 fps ran its boosted main thread on prime cores the
  * governor kept at 2.2 GHz, slower than a 3.5 GHz mid core, and 23-25% of its frames fell under 90 fps
@@ -49,7 +51,13 @@ import kotlin.math.roundToInt
  * Another phone's HAL may boost differently, or not at all. `BL_GAME_BOOST=1|0` in a game's own
  * environment entry beats the shared one and the switch for that game ([SessionPrefs.boostFor]): the
  * running game is the busiest process whose environment names a Steam compat prefix
- * (STEAM_COMPAT_DATA_PATH, the id the game environment keys by), else the session's launch id.
+ * (STEAM_COMPAT_DATA_PATH, the id the game environment keys by), else the session's launch id. All
+ * Epic titles run under one Steam shortcut, so they share one entry. Whether this thread runs at all
+ * is decided once at the session's start (the boost on, or some game entry with `=1`): a `=1` added
+ * mid-session takes a session restart; inside a running thread the store and the switch are re-read
+ * every [CONFIG_EVERY_S] seconds (a failed read keeps the last good one). While nothing is boosted
+ * the thread wakes once a second only. SamsungPerf (Samsung phones) still follows the session-wide
+ * boost only, not a game's own entry.
  */
 object GameThreadHints {
     private const val TAG = "GameThreadHints"
@@ -79,6 +87,8 @@ object GameThreadHints {
     @Volatile internal var boostedThreads = emptySet<Int>()
     @Volatile internal var offWhy: String? = null
     @Volatile internal var refused = 0
+    /** The running game's frame cap from its environment ([frameCap]), 0 for none; SamsungPerf's pace target uses it too. */
+    @Volatile internal var gameFrameCap = 0
 
     /** At a session's start. The line is for the log. */
     @Synchronized
@@ -115,31 +125,39 @@ object GameThreadHints {
         var config = GameEnvironment.Config()
         var switchOn = false
         var lastChoice: String? = null
+        var readFailed = false
         var session: PerformanceHintManager.Session? = null
         var boosted = emptySet<Int>()
         val frames = ArrayDeque<Long>()
         var pacedFor = 0
         var tick = 0
+        var scans = 0
         try {
             while (!Thread.currentThread().isInterrupted) {
-                if (tick % (SCAN_EVERY * CONFIG_EVERY_S) == 0) {
-                    config = runCatching { GameEnvironmentStore.read(context) }.getOrNull() ?: GameEnvironment.Config()
-                    switchOn = SessionPrefs.performanceBoost(context)
-                }
                 if (tick++ % SCAN_EVERY == 0) {
+                    if (scans++ % CONFIG_EVERY_S == 0) {
+                        val read = GameEnvironmentStore.readLenientOrNull(context)
+                        if (read == null && !readFailed) Log.w(TAG, "game environment unreadable; keeping the last good copy")
+                        readFailed = read == null
+                        config = read ?: config
+                        switchOn = SessionPrefs.performanceBoost(context)
+                    }
                     val busy = scanner.sample()
                     val game = scanner.gameId() ?: SessionState.gameId?.takeIf { it.isNotEmpty() && GameEnvironment.validScope(it) }
                     val wanted = SessionPrefs.boostFor(config, game, switchOn)
-                    val choice = "${game ?: "no game"} ${if (wanted) "on" else "off"}"
+                    val cap = frameCap(config, game)
+                    gameFrameCap = cap
+                    val choice = "${game ?: "no game"} ${if (wanted) "on" else "off"} $cap"
                     if (choice != lastChoice) {
                         lastChoice = choice
                         Log.i(TAG, "game ${game ?: "not known"}: boost ${if (wanted) "on" else "off"}" +
-                            (game?.let { config.games[it]?.get(SessionPrefs.BOOST_KEY) }?.let { " (game BL_GAME_BOOST=$it)" } ?: ""))
+                            (game?.let { config.games[it]?.get(SessionPrefs.BOOST_KEY) }?.let { " (game BL_GAME_BOOST=$it)" } ?: "") +
+                            (if (cap > 0) ", frame cap $cap" else ""))
                     }
                     frames.addLast(WaylandCompositor.gameFrameCount())
                     if (frames.size > PACE_WINDOW_S + 1) frames.removeFirst()
                     val fps = (frames.last() - frames.first()).toDouble() / (frames.size - 1).coerceAtLeast(1)
-                    val target = if (frames.size > PACE_WINDOW_S) paceTarget(fps, SessionState.refreshHz.toDouble(), SessionState.paceFpsLimit) else null
+                    val target = if (frames.size > PACE_WINDOW_S) paceTarget(fps, SessionState.refreshHz.toDouble(), lowestLimit(SessionState.paceFpsLimit, cap)) else null
                     val paced = target != null
                     pacedFor = if (paced) pacedFor + 1 else 0
                     val spare = when {
@@ -167,7 +185,10 @@ object GameThreadHints {
                     offWhy = offReason(spare, boosted, paced, next)
                 }
                 session?.reportActualWorkDuration(TARGET_NS * 3 / 2)
-                Thread.sleep(REPORT_MS)
+                // Nothing to report while no hint session exists: sleep to the next scan (once a second).
+                val wait = if (session == null) ((SCAN_EVERY - tick % SCAN_EVERY) % SCAN_EVERY).coerceAtLeast(1) else 1
+                tick += wait - 1
+                Thread.sleep(REPORT_MS * wait)
             }
         } catch (_: InterruptedException) {
         } catch (t: Throwable) {
@@ -222,6 +243,25 @@ object GameThreadHints {
 
     internal fun holdsPace(fps: Double, refreshHz: Double, fpsLimit: Int = 0): Boolean = paceTarget(fps, refreshHz, fpsLimit) != null
 
+    /** The lowest positive of [limits], 0 for none. */
+    internal fun lowestLimit(vararg limits: Int): Int = limits.filter { it > 0 }.minOrNull() ?: 0
+
+    private val CAP_KEYS = listOf("VKD3D_FRAME_RATE", "DXVK_FRAME_RATE")
+    private val DXVK_MAX_FRAME_RATE = Regex("""^\s*(?:dxvk|d3d9)\.maxFrameRate\s*=\s*(-?[0-9]+)\s*$""")
+
+    /**
+     * The frame cap game [scope]'s environment sets (its own entry over the shared one, as
+     * droiddeck-game-env merges them; a null value unsets): the lowest positive of VKD3D_FRAME_RATE,
+     * DXVK_FRAME_RATE and DXVK_CONFIG's dxvk./d3d9.maxFrameRate; 0 for none.
+     */
+    internal fun frameCap(config: GameEnvironment.Config, scope: String?): Int {
+        val game = scope?.takeIf { it.isNotEmpty() }?.let { config.games[it] }.orEmpty()
+        fun value(name: String) = if (name in game) game[name] else config.shared[name]
+        val caps = CAP_KEYS.mapNotNull { value(it)?.trim()?.toIntOrNull() } +
+            value("DXVK_CONFIG").orEmpty().split(';').mapNotNull { DXVK_MAX_FRAME_RATE.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        return lowestLimit(*caps.toIntArray())
+    }
+
     /** The game environment id of a Steam compat prefix path, as droiddeck-game-env's game_id() makes it; null for none. */
     internal fun appIdOfCompatPath(path: String): String? {
         val value = path.trimEnd('/').substringAfterLast('/')
@@ -249,7 +289,7 @@ object GameThreadHints {
         private var lastThread = HashMap<Int, Long>()
         private var lastBusy = HashMap<Int, Double>()
         private var topPids = emptyList<Int>()
-        private val appIds = HashMap<Int, String>()
+        private val appIds = HashMap<Int, String?>()
         private var gamePid = -1
 
         fun sample(): Map<Int, Double> {
@@ -289,22 +329,24 @@ object GameThreadHints {
 
         /**
          * The running game's environment id: the busiest top process whose environment names a Steam
-         * compat prefix, else the last one found while it lives. Found ids are kept per pid (an
-         * environment is fixed at exec); others are read again, at most [TOP_PROCESSES] a second.
+         * compat prefix, else the last one found while it lives. Each pid's environ is read once (it
+         * is fixed at exec), hit or miss, until the pid dies; an unreadable one is tried again.
          */
         fun gameId(): String? {
             for (pid in topPids) {
-                val id = appIds[pid] ?: appIdOf(pid)?.also { appIds[pid] = it } ?: continue
+                if (pid !in appIds) appIdOf(pid)?.let { appIds[pid] = it.getOrNull() }
+                val id = appIds[pid] ?: continue
                 gamePid = pid
                 return id
             }
             return appIds[gamePid]
         }
 
-        private fun appIdOf(pid: Int): String? = try {
-            File("/proc/$pid/environ").readBytes().toString(Charsets.UTF_8).split('\u0000')
+        /** The pid's id (a miss is a success with null, kept until the pid dies); null if environ was unreadable, to retry. */
+        private fun appIdOf(pid: Int): Result<String?>? = try {
+            Result.success(File("/proc/$pid/environ").readBytes().toString(Charsets.UTF_8).split('\u0000')
                 .firstOrNull { it.startsWith("STEAM_COMPAT_DATA_PATH=") }
-                ?.let { appIdOfCompatPath(it.substringAfter('=')) }
+                ?.let { appIdOfCompatPath(it.substringAfter('=')) })
         } catch (_: Exception) {
             null
         }
