@@ -2003,6 +2003,7 @@ class FrontEndActivity : ComponentActivity() {
                     onPanvkRollback = { drivers.rollbackPanvk() },
                     onEnvRollback = { drivers.rollbackEnvDefaults() },
                 ),
+                onComponent = { component, op -> drivers.componentAction(component, op) },
             ),
             protons = com.droiddeck.launcher.ui.ProtonsState(
                 rows = protons.protonRows, busyId = protons.protonBusyId, stage = protons.protonStage, percent = protons.protonPercent,

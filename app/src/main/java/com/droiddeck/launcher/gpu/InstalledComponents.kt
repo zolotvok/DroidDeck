@@ -24,7 +24,7 @@ object InstalledComponents {
     fun blobferry(s: BlobferryPackage.Status) = Row(
         BlobferryPackage.COMPONENT, s.version, s.source, s.commit, s.date, s.changelog,
         BlobferryPackage.COMPAT, s.files[BlobferryPackage.COMPAT].orEmpty(), s.previous, s.previous != null && s.canSwitch,
-        JSONObject().put("shimMd5", s.shimMd5),
+        JSONObject().put("shimMd5", s.shimMd5).put("bundledVersion", s.bundledVersion ?: JSONObject.NULL),
     )
 
     fun panvk(s: PanvkPackage.Status) = Row(
@@ -34,7 +34,8 @@ object InstalledComponents {
         // say which PanVK the session actually runs (review M1)
         JSONObject().put("slot", s.slot).put("notOurs", s.notOurs).put("foreign", JSONArray(s.foreign.map { it.json() }))
             .put("inUse", s.inUse ?: JSONObject.NULL).put("sessionDriver", s.session?.driver?.ifEmpty { null } ?: JSONObject.NULL)
-            .put("sessionPanvk", s.session?.panvk ?: JSONObject.NULL).put("note", s.note("status") ?: JSONObject.NULL),
+            .put("sessionPanvk", s.session?.panvk ?: JSONObject.NULL).put("note", s.note("status") ?: JSONObject.NULL)
+            .put("bundledVersion", s.bundledVersion ?: JSONObject.NULL).put("useBack", s.useBack ?: JSONObject.NULL),
     )
 
     fun fexArm64ec(s: FexArm64ecPackage.Status) = Row(

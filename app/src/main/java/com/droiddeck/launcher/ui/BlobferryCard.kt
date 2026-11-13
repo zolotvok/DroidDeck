@@ -194,7 +194,7 @@ internal fun BlobferryCard(state: BlobferryCardState, actions: BlobferryActions)
 }
 
 @Composable
-private fun DialogCancel(onClick: () -> Unit) {
+internal fun DialogCancel(onClick: () -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     FocusText(stringResource(R.string.common_cancel), MaterialTheme.colorScheme.onBackground, modifier = Modifier.focusRequester(focus), onClick = onClick)

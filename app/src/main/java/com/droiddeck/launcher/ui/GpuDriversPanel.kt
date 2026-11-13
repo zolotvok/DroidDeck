@@ -134,6 +134,8 @@ class GpuDriversState(
     val tpUbwcRestartRequired: Boolean = false,
     /** Mali only: the Blobferry package card. */
     val blobferry: BlobferryCardState? = null,
+    /** Mali only: the Components card (gpu/InstalledComponents, as `droiddeckctl components status`). */
+    val components: ComponentsCardState? = null,
 ) {
     val activePair: PairRow? get() = pairs.firstOrNull { it.active }
 }
@@ -155,6 +157,7 @@ class GpuDriversActions(
     val onRestart: () -> Unit = {},
     val onTpUbwcMode: (String) -> Unit = {},
     val blobferry: BlobferryActions = BlobferryActions(),
+    val onComponent: (String, ComponentOp) -> Unit = { _, _ -> },
 )
 
 @Composable
@@ -243,6 +246,7 @@ internal fun GpuDriversBody(
     ) {
         InUseCard(gpu, actions, first)
         gpu.blobferry?.let { BlobferryCard(it, actions.blobferry) }
+        gpu.components?.let { ComponentsCard(it, actions.onComponent) }
         PanelHeading(stringResource(R.string.gpu_mode_title))
         val modes = listOf(
             Triple(GPU_MODE_AUTO, R.string.common_auto, R.string.gpu_mode_auto_detail),

@@ -16,6 +16,11 @@ import com.droiddeck.launcher.gpu.BlobferryPackage
 import com.droiddeck.launcher.gpu.BlobferryReleases
 import com.droiddeck.launcher.gpu.ComponentReleases
 import com.droiddeck.launcher.gpu.PanvkPackage
+import com.droiddeck.launcher.gpu.FexArm64ecPackage
+import com.droiddeck.launcher.gpu.GuestToolsPackage
+import com.droiddeck.launcher.gpu.InstalledComponents
+import com.droiddeck.launcher.ui.ComponentOp
+import com.droiddeck.launcher.ui.componentRows
 import com.droiddeck.launcher.gpu.UpdateSources
 import com.droiddeck.launcher.session.MaliEnvDefaults
 import com.droiddeck.launcher.gpu.AutoPicks
@@ -85,6 +90,7 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
         tpUbwcMode = tpUbwcMode.takeIf { gpu.model == 740 },
         tpUbwcRestartRequired = com.droiddeck.launcher.gpu.TpUbwcHint.restartRequired(activity),
         blobferry = blobferryState(),
+        components = componentsState(),
     )
 
     fun chooseTpUbwcMode(mode: String) {
@@ -216,6 +222,8 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
     private var edStatus by mutableStateOf<MaliEnvDefaults.Status?>(null)
     private var edPending by mutableStateOf<Pair<MaliEnvDefaults.Manifest, String>?>(null)
     private var edOffer by mutableStateOf<BlobferryReleases.Release?>(null)
+    // the Components card: the same list `droiddeckctl components status` returns
+    private var compStatus by mutableStateOf<org.json.JSONArray?>(null)
 
     fun refreshBlobferry() {
         if (!com.droiddeck.launcher.core.DeviceSupport.mali() || bfRefreshing) return
@@ -224,7 +232,8 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
             val status = runCatching { BlobferryPackage.status(activity) }.onFailure { Log.w(TAG, "Blobferry status", it) }.getOrNull()
             val panvk = runCatching { PanvkPackage.status(activity) }.onFailure { Log.w(TAG, "PanVK status", it) }.getOrNull()
             val env = runCatching { MaliEnvDefaults.status(activity) }.onFailure { Log.w(TAG, "env defaults status", it) }.getOrNull()
-            ui.post { bfStatus = status; pvStatus = panvk; edStatus = env; bfRefreshing = false }
+            val components = runCatching { InstalledComponents.status(activity) }.onFailure { Log.w(TAG, "components status", it) }.getOrNull()
+            ui.post { bfStatus = status; pvStatus = panvk; edStatus = env; compStatus = components; bfRefreshing = false }
         }, "blobferry-status").start()
     }
 
@@ -321,6 +330,61 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
             envRollback = edStatus?.previous?.let { activity.getString(R.string.envdefaults_rollback, it) },
         )
     }
+
+    private fun componentsState(): com.droiddeck.launcher.ui.ComponentsCardState? {
+        val list = compStatus ?: return null
+        val running = BlobferryPackage.sessionBusy()
+        return com.droiddeck.launcher.ui.ComponentsCardState(componentRows(list, running, bfBusy != null), bfBusy != null, running)
+    }
+
+    /** A Components card button: the package function the matching droiddeckctl op calls; its result or refusal as a toast. */
+    fun componentAction(component: String, op: ComponentOp) {
+        if (bfBusy != null) return
+        bfBusy = ""
+        Thread({
+            val result = runCatching { activity.getString(R.string.components_done, component, runComponentOp(component, op)) }
+            ui.post {
+                bfBusy = null
+                bfToast(result.getOrElse { e ->
+                    if (e !is BlobferryPackage.BlobferryException) Log.w(TAG, "components $component $op", e)
+                    val code = (e as? BlobferryPackage.BlobferryException)?.code ?: e.javaClass.simpleName
+                    activity.getString(R.string.components_failed, component, e.message ?: code, code)
+                })
+                refreshDrivers()
+            }
+        }, "components-switch").start()
+    }
+
+    /** What the component is on after [op] (a PanVK use / unuse: the session's driver). */
+    private fun runComponentOp(component: String, op: ComponentOp): String = when (component) {
+        BlobferryPackage.COMPONENT -> when (op) {
+            ComponentOp.ROLLBACK -> BlobferryPackage.rollback(activity).version
+            ComponentOp.RESET -> BlobferryPackage.reset(activity).version
+            else -> null
+        }
+        PanvkPackage.COMPONENT -> when (op) {
+            ComponentOp.ROLLBACK -> PanvkPackage.rollback(activity).version
+            ComponentOp.RESET -> PanvkPackage.reset(activity).version
+            ComponentOp.USE -> PanvkPackage.use(activity).to.let(PanvkPackage::label)
+            ComponentOp.UNUSE -> PanvkPackage.unuse(activity).to.let(PanvkPackage::label)
+        }
+        FexArm64ecPackage.COMPONENT -> when (op) {
+            ComponentOp.ROLLBACK -> FexArm64ecPackage.rollback(activity).version
+            ComponentOp.RESET -> FexArm64ecPackage.reset(activity).version
+            else -> null
+        }
+        GuestToolsPackage.COMPONENT -> when (op) {
+            ComponentOp.ROLLBACK -> GuestToolsPackage.rollback(activity).version
+            ComponentOp.RESET -> GuestToolsPackage.reset(activity).version
+            else -> null
+        }
+        MaliEnvDefaults.COMPONENT -> when (op) {
+            ComponentOp.ROLLBACK -> MaliEnvDefaults.rollback(activity).label
+            ComponentOp.RESET -> MaliEnvDefaults.reset(activity).label
+            else -> null
+        }
+        else -> null
+    }?.ifEmpty { "?" } ?: throw BlobferryPackage.BlobferryException("INVALID_REQUEST", "$component has no $op")
 
     private fun bfProblem(e: Throwable): String {
         if (e !is BlobferryPackage.BlobferryException) Log.w(TAG, "Blobferry", e)

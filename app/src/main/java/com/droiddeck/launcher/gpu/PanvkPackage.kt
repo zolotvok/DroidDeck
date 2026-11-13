@@ -111,6 +111,8 @@ object PanvkPackage {
         val foreign: List<Foreign> = emptyList(),
         /** null when the caller does not know the session's driver (the pure entry points' hosts). */
         val session: SessionUse? = null,
+        /** While a [use] record exists: the session driver before the first use ("" = the runtime's own), what [unuse] goes back to. */
+        val useBack: String? = null,
     ) {
         /** Our slot is the session's PanVK; null = unknown. */
         val inUse: Boolean? get() = session?.ours
@@ -134,6 +136,7 @@ object PanvkPackage {
             .put("inUse", inUse ?: JSONObject.NULL).put("sessionDriver", session?.driver?.ifEmpty { null } ?: JSONObject.NULL)
             .put("sessionPanvk", session?.panvk ?: JSONObject.NULL)
             .put("sessionFrom", session?.let { if (it.running) "running session" else "next session start" } ?: JSONObject.NULL)
+            .put("useBack", useBack ?: JSONObject.NULL)
     }
 
     /** The result of [use] / [unuse]: the session driver before and after, and whether a stored choice changed. */
@@ -724,6 +727,7 @@ object PanvkPackage {
             installed = live.isFile, canSwitch = !host.sessionRunning, slot = layout.slot.name,
             date = if (managed) state!!.optString("date") else "", changelog = if (managed) state!!.optString("changelog") else "",
             notOurs = notOurs, foreign = foreign, session = session,
+            useBack = runCatching { useRecords(layout).firstOrNull()?.session }.getOrNull(),
         )
     }
 
