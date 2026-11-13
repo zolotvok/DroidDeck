@@ -229,10 +229,10 @@ object SessionFiles {
             listOf("usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv", "usr/share/droiddeck-mali/mali-debug-wd2.config",
                 "usr/share/droiddeck-mali/env-defaults.json")
                 .map { it to it }
-        // The patched FEX arm64ec DLL with its MIT notice; droiddeck-mali-defaults puts it into ARM64 Protons at game start.
-        val fexArm64ec = listOf("libarm64ecfex.dll", "LICENSE", "NOTICE").map {
-            "usr/local/lib/droiddeck-fex-arm64ec/$it" to "usr/local/lib/droiddeck-fex-arm64ec/$it"
-        }
+        // The bundled fex-arm64ec table package (patched FEX arm64ec DLLs, one per FEX build; gpu/FexArm64ecPackage): the files
+        // its meta.json lists. droiddeck-mali-defaults reads an installed table (restaged below) first, else this one.
+        val fexArm64ecFiles = com.droiddeck.launcher.gpu.FexArm64ecPackage.bundledFiles(context)
+        val fexArm64ec = fexArm64ecFiles.map { it to it }
         val optional = (arrayOf(
             "usr/local/bin/gamescope" to "usr/local/bin/gamescope",
             "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so" to "usr/lib/libVkLayer_FROG_gamescope_wsi_aarch64.so",
@@ -252,6 +252,7 @@ object SessionFiles {
             val installed = stageAsset(context, asset, target)
             if (installed) ledger.staged(relative, target) else Log.e(TAG, "$relative NOT staged")
         }
+        com.droiddeck.launcher.gpu.FexArm64ecPackage.restage(context, root, fexArm64ecFiles)
         File(root, "usr/local/bin/bannerlator-steam-compat").delete()
         LegacyNames.migrateRootfs(root)
         ComponentsManager.migrateLaunchDir(context)

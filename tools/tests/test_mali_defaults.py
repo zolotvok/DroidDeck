@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,8 @@ class WpadTest(unittest.TestCase):
 class FexPatchTest(unittest.TestCase):
     STOCK = b"MZ stock FEX-2610-101-g1c4f04b"
     PATCHED = b"MZ patched FEX-2610-101-g1c4f04b uafb"
+    STOCK175 = b"MZ stock FEX-2610-175-geff9f45"
+    PATCHED175 = b"MZ patched FEX-2610-175-geff9f45 uafb"
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -161,28 +164,45 @@ class FexPatchTest(unittest.TestCase):
         self.target.parent.mkdir(parents=True)
         self.target.write_bytes(self.STOCK)
         (self.tool / "version").write_text("1761000000 experimental-11.0-20261027b\n")
-        self.bundled = root / "usr/local/lib/droiddeck-fex-arm64ec/libarm64ecfex.dll"
-        self.bundled.parent.mkdir(parents=True)
-        self.bundled.write_bytes(self.PATCHED)
+        self.bundled = root / "usr/local/lib/droiddeck-fex-arm64ec"
+        self.active = root / "usr/local/lib/droiddeck-fex-arm64ec-active"
+        self.table(self.bundled, "2026.11.13.1", [("101", self.STOCK, self.PATCHED), ("175", self.STOCK175, self.PATCHED175)])
         self.components = root / "components"
         self.components.mkdir()
-        self.patch = mock.patch.dict(MALI["fex_patch"].__globals__, {
-            "FEX_PATCHED_MD5": md5(self.PATCHED), "FEX_BASE_MD5": (md5(self.STOCK),)})
-        self.patch.start()
-        self.addCleanup(self.patch.stop)
+        self.tables = ((str(self.active), "installed"), (str(self.bundled), "bundled"))
+
+    def table(self, folder, version, rows):
+        entries = []
+        for build, stock, patched in rows:
+            rel = "dll/libarm64ecfex-%s.dll" % build
+            (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+            (folder / rel).write_bytes(patched)
+            entries.append({"stock_md5": md5(stock), "fex_version": MALI["fex_version"].__globals__["FEX_VERSION"].search(stock)
+                            .group().decode(), "patched": rel, "patched_md5": md5(patched),
+                            "patch": "patches/%s.patch" % build, "patch_md5": md5(b"")})
+        (folder / "table.json").write_text(json.dumps(entries))
+        (folder / "meta.json").write_text(json.dumps({"component": "fex-arm64ec", "version": version}))
 
     def run_patch(self, verb="waitforexitandrun", app="2274579123", **env):
-        return MALI["fex_patch"]([str(self.tool / "proton"), verb, "game.exe"], env, app, self.components, str(self.bundled))
+        return MALI["fex_patch"]([str(self.tool / "proton"), verb, "game.exe"], env, app, self.components, self.tables)
+
+    def events(self):
+        log = self.components / "install.log"
+        return [line.split("\t") for line in log.read_text().splitlines()] if log.exists() else []
 
     def test_stock_is_replaced_saved_and_put_back_after_a_proton_update(self):
-        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertIn("patched DLL for FEX-2610-101-g1c4f04b put in", self.run_patch())
         self.assertEqual(self.target.read_bytes(), self.PATCHED)
         self.assertEqual((self.components / "fex-arm64ec" / (md5(self.STOCK) + ".dll")).read_bytes(), self.STOCK)
         self.assertIn("Proton Experimental (ARM64)", (self.components / "reapplied.log").read_text())
         self.assertIsNone(self.run_patch())
         self.target.write_bytes(self.STOCK)
-        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertIn("patched DLL for", self.run_patch())
         self.assertEqual(self.target.read_bytes(), self.PATCHED)
+        apply = [e for e in self.events() if e[2] == "fex-apply"]
+        self.assertEqual(len(apply), 2)
+        self.assertEqual(apply[0][1:9], ["fex-arm64ec", "fex-apply", md5(self.STOCK), md5(self.PATCHED), "-", "guest", "ok",
+                                         "Proton Experimental (ARM64) FEX-2610-101-g1c4f04b (bundled table 2026.11.13.1)"])
 
     def test_a_game_can_opt_out_and_back_in(self):
         self.run_patch()
@@ -191,18 +211,26 @@ class FexPatchTest(unittest.TestCase):
         self.assertIsNone(self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
         self.run_patch(BL_FEX_ARM64EC_PATCH="1")
         self.assertEqual(self.target.read_bytes(), self.PATCHED)
+        self.assertIn("fex-stock", [e[2] for e in self.events()])
 
-    def test_another_fex_build_is_never_replaced(self):
+    def test_an_unknown_fex_build_is_left_alone_and_logged_once(self):
         self.target.write_bytes(b"MZ FEX-2611-3-gabcdef0")
-        self.assertIn("FEX-2611-3-gabcdef0, not the patched DLL's base", self.run_patch())
+        note = self.run_patch()
+        self.assertIn("has FEX-2611-3-gabcdef0 (md5 %s), no row of the bundled table" % md5(b"MZ FEX-2611-3-gabcdef0"), note)
         self.assertEqual(self.target.read_bytes(), b"MZ FEX-2611-3-gabcdef0")
+        self.run_patch()
+        unmatched = [e for e in self.events() if e[2] == "fex-unmatched"]
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0][8], "fex-unmatched FEX-2611-3-gabcdef0 %s (Proton Experimental (ARM64))" % md5(b"MZ FEX-2611-3-gabcdef0"))
 
-    def test_same_fex_build_with_another_checksum_counts_as_stock(self):
+    def test_same_fex_build_with_another_checksum_is_left_alone(self):
+        # a rebuild or a hand-deployed test DLL of a known FEX version: only the exact stock md5 is replaced
         self.target.write_bytes(b"MZ rebuilt FEX-2610-101-g1c4f04b")
-        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertIn("left as it is", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), b"MZ rebuilt FEX-2610-101-g1c4f04b")
 
-    def test_a_damaged_bundle_keeps_stock(self):
-        self.bundled.write_bytes(b"MZ truncated")
+    def test_a_damaged_dll_keeps_stock(self):
+        (self.bundled / "dll/libarm64ecfex-101.dll").write_bytes(b"MZ truncated")
         self.assertIn("missing or damaged", self.run_patch())
         self.assertEqual(self.target.read_bytes(), self.STOCK)
 
@@ -212,12 +240,92 @@ class FexPatchTest(unittest.TestCase):
         self.assertIn("Components choice", self.run_patch())
         self.assertEqual(self.target.read_bytes(), self.STOCK)
         (self.components / "desired.tsv").write_text(row.replace("*", "123", 1) + "\n")
-        self.assertIn("patched DLL put in", self.run_patch())
+        self.assertIn("patched DLL for", self.run_patch())
 
     def test_only_game_launches_of_an_arm64_proton(self):
         self.assertIsNone(self.run_patch(verb="run"))
         self.target.unlink()
         self.assertIsNone(self.run_patch())
+
+    def test_upgrade_keeps_a_hand_pushed_175_dll_and_patches_after_a_proton_self_update(self):
+        # the phone before the APK update: Proton 175 with the hand-pushed patched DLL, the 0.6.9-mali.1 script's 101 stock copy
+        # and its record (which names the 101 stock) in the components folder
+        stock_dir = self.components / "fex-arm64ec"
+        stock_dir.mkdir()
+        (stock_dir / (md5(self.STOCK) + ".dll")).write_bytes(self.STOCK)
+        (stock_dir / "Proton_Experimental_ARM64_.stock").write_text(md5(self.STOCK) + "\n")
+        self.target.write_bytes(self.PATCHED175)
+        before = self.target.stat()
+        self.assertIsNone(self.run_patch())
+        after = self.target.stat()
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+        self.assertFalse((stock_dir / (md5(self.STOCK175) + ".dll")).exists())
+        # opting out without a 175 stock copy keeps the patched 175 DLL (never the 101 stock the old record names)
+        self.assertIn("no stock copy", self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
+        self.assertEqual(self.target.read_bytes(), self.PATCHED175)
+        # Proton updates itself back to its stock 175 DLL: the 175 row applies, its stock copy is kept
+        self.target.write_bytes(self.STOCK175)
+        self.assertIn("patched DLL for FEX-2610-175-geff9f45 put in", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED175)
+        self.assertEqual((stock_dir / (md5(self.STOCK175) + ".dll")).read_bytes(), self.STOCK175)
+        self.assertIn("stock DLL for this game", self.run_patch(BL_FEX_ARM64EC_PATCH="0"))
+        self.assertEqual(self.target.read_bytes(), self.STOCK175)
+        self.assertNotIn("fex-unmatched", [e[2] for e in self.events()])
+
+    def test_the_installed_table_wins_and_a_broken_one_falls_back_to_the_bundled(self):
+        other = b"MZ other patched FEX-2610-101-g1c4f04b"
+        self.table(self.active, "2026.11.20.1", [("101", self.STOCK, other)])
+        self.assertIn("installed table 2026.11.20.1", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), other)
+        # the bundled table's patched DLL is not "already patched" while the installed table is in force
+        (self.active / "table.json").write_text("[{]")
+        self.target.write_bytes(self.STOCK)
+        self.assertIn("bundled table", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.PATCHED)
+
+    def test_a_refused_table_changes_nothing(self):
+        rows = json.loads((self.bundled / "table.json").read_text())
+        rows[1]["stock_md5"] = rows[0]["stock_md5"]
+        (self.bundled / "table.json").write_text(json.dumps(rows))
+        self.assertIn("bundled fex-arm64ec table ignored", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+        (self.bundled / "table.json").unlink()
+        self.assertIsNone(self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+
+    def test_a_table_row_cannot_point_outside_its_package(self):
+        rows = json.loads((self.bundled / "table.json").read_text())
+        rows[0]["patched"] = "dll/../../../../steamapps/x.dll"
+        (self.bundled / "table.json").write_text(json.dumps(rows))
+        self.assertIn("bad patched path", self.run_patch())
+        self.assertEqual(self.target.read_bytes(), self.STOCK)
+
+
+RELEASE = Path(__file__).resolve().parents[2] / "../release/fex-arm64ec/fex-arm64ec-2026.11.13.1"
+PHONE_STOCK_175 = Path(__file__).resolve().parents[2] / "../fex-175-1111/S0/stock-phone.dll"
+
+
+@unittest.skipUnless(RELEASE.is_dir() and PHONE_STOCK_175.is_file(), "needs the Blobferry checkout's release package")
+class FexReleaseTableTest(unittest.TestCase):
+    """The bundled 2026.11.13.1 package with the phone's real Proton 175 DLLs."""
+
+    def test_phone_175_hand_pushed_dll_is_patched_and_its_stock_gets_the_175_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = Path(tmp) / "Proton Experimental (ARM64)"
+            target = tool / MALI["FEX_DLL"]
+            target.parent.mkdir(parents=True)
+            shutil.copyfile(RELEASE / "dll/libarm64ecfex-FEX-2610-175-geff9f45-ae8473da.dll", target)
+            components = Path(tmp) / "components"
+            components.mkdir()
+            tables = ((str(Path(tmp) / "none"), "installed"), (str(RELEASE), "bundled"))
+            run = lambda **env: MALI["fex_patch"]([str(tool / "proton"), "waitforexitandrun", "x.exe"], env, "1", components, tables)
+            self.assertIsNone(run())
+            self.assertEqual(md5(target.read_bytes()), "ae8473da3f0976911ef82c0ca6abd96b")
+            shutil.copyfile(PHONE_STOCK_175, target)
+            self.assertEqual(md5(target.read_bytes()), "cdab6135bbbcd10e284c5ca332583fc0")
+            self.assertIn("FEX-2610-175-geff9f45 put in", run())
+            self.assertEqual(md5(target.read_bytes()), "ae8473da3f0976911ef82c0ca6abd96b")
+            self.assertTrue((components / "fex-arm64ec/cdab6135bbbcd10e284c5ca332583fc0.dll").is_file())
 
 
 class GameEnvMaliDefaultsTest(unittest.TestCase):
@@ -260,8 +368,13 @@ class GameEnvMaliDefaultsTest(unittest.TestCase):
         source = (Path(__file__).resolve().parents[2] / "app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt").read_text()
         for name in ("usr/local/bin/droiddeck-mali-defaults", "usr/share/droiddeck-mali/mali-debug-wd2.config",
                      "usr/share/droiddeck-mali/vkd3d-override/control/bf125ef61cc75d97.spv",
-                     "usr/local/lib/droiddeck-fex-arm64ec/$it"):
+                     ):
             self.assertIn('"%s"' % name, source)
+        self.assertIn("FexArm64ecPackage.bundledFiles(context)", source)
+        self.assertIn("FexArm64ecPackage.restage(context, root, fexArm64ecFiles)", source)
+        package = (Path(__file__).resolve().parents[2] / "app/src/main/java/com/droiddeck/launcher/gpu/FexArm64ecPackage.kt").read_text()
+        for folder, _ in MALI["FEX_TABLES"]:
+            self.assertIn('"%s"' % folder.lstrip("/"), package)
 
 
 class SessionMaliDefaultsTest(unittest.TestCase):

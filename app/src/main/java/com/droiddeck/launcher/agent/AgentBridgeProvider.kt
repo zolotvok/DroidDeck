@@ -97,6 +97,7 @@ class AgentBridgeProvider : ContentProvider() {
         "prefs" -> prefs(context, request)
         "blobferry" -> blobferry(context, request)
         "panvk" -> panvk(context, request)
+        "fex" -> fex(context, request)
         "envdefaults" -> envDefaults(context, request)
         "components" -> components(context, request)
         "report" -> report(context, request)
@@ -372,6 +373,32 @@ class AgentBridgeProvider : ContentProvider() {
         }
     }
 
+    /** fex-arm64ec table ops (gpu/FexArm64ecPackage), as panvk: status always, install/rollback/reset behind Debugging tools. */
+    private fun fex(context: Context, request: JSONObject): JSONObject {
+        val fx = com.droiddeck.launcher.gpu.FexArm64ecPackage
+        val op = request.optString("op", "status")
+        if (op != "status") AgentAccess.requireCommands(context)
+        return try {
+            val status = when (op) {
+                "status" -> fx.status(context)
+                "install" -> {
+                    val source = inboxFile(context, request)
+                    try {
+                        fx.install(context, fx.prepare(context, openInbox(source), request.optString("sha256").ifEmpty { null }), com.droiddeck.launcher.gpu.BlobferryPackage.SOURCE_ADB)
+                    } finally {
+                        source.delete()
+                    }
+                }
+                "rollback" -> fx.rollback(context)
+                "reset" -> fx.reset(context)
+                else -> throw AgentException("INVALID_REQUEST", "Unknown fex op '$op'")
+            }
+            status.json().put("ok", true).put("command", "fex").put("op", op).apply { if (op != "status") put("appliesAt", "next game start") }
+        } catch (e: com.droiddeck.launcher.gpu.BlobferryPackage.BlobferryException) {
+            error(e.code, e.message ?: e.code)
+        }
+    }
+
     /** The installed-components list and the install log (gpu/InstalledComponents, gpu/ComponentLog), both read-only. */
     private fun components(context: Context, request: JSONObject): JSONObject {
         val out = JSONObject().put("ok", true).put("command", "components")
@@ -380,6 +407,8 @@ class AgentBridgeProvider : ContentProvider() {
             "log" -> {
                 val n = request.optInt("lines", 50)
                 if (n !in 1..2000) throw AgentException("INVALID_REQUEST", "lines must be 1..2000")
+                // the guest's fex events (fex-unmatched, fex-apply, fex-stock) since the last session start
+                runCatching { com.droiddeck.launcher.gpu.FexArm64ecPackage.ingestGuestLog(com.droiddeck.launcher.gpu.FexArm64ecPackage.layout(context)) }
                 val log = com.droiddeck.launcher.gpu.ComponentLog
                 out.put("op", op).put("fields", JSONArray(log.FIELDS))
                     .put("events", JSONArray(log.tail(log.file(context.filesDir), n).map { log.json(it) }))

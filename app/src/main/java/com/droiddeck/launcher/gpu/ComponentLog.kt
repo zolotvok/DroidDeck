@@ -34,6 +34,7 @@ object ComponentLog {
 
     val FIELDS = listOf("time", "component", "op", "from", "to", "sha256", "source", "result", "note")
     private val LOCK = Any()
+    private val INGEST_LOCK = Any()
 
     /** The log of the app whose files dir is [filesDir]. */
     fun file(filesDir: File) = File(filesDir, "$DIR/$FILE")
@@ -54,18 +55,46 @@ object ComponentLog {
         try {
             val time = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(now))
             val fields = listOf(time, component, op, from, to, sha256, source, result) + listOfNotNull(note)
-            val line = fields.joinToString("\t") { clean(it) } + "\n"
-            synchronized(LOCK) {
-                log.parentFile?.mkdirs()
-                if (log.isFile && log.length() + line.length > MAX_BYTES) {
-                    val old = File(log.parentFile, log.name + ".1")
-                    old.delete()
-                    if (!log.renameTo(old)) log.delete()
-                }
-                log.appendText(line)
-            }
+            appendLine(log, fields.joinToString("\t") { clean(it) } + "\n")
         } catch (e: Throwable) {
             Log.w(TAG, "install log not written ($component $op)", e)
+        }
+    }
+
+    private fun appendLine(log: File, line: String) = synchronized(LOCK) {
+        log.parentFile?.mkdirs()
+        if (log.isFile && log.length() + line.length > MAX_BYTES) {
+            val old = File(log.parentFile, log.name + ".1")
+            old.delete()
+            if (!log.renameTo(old)) log.delete()
+        }
+        log.appendText(line)
+    }
+
+    private val TIME = Regex("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z""")
+
+    /**
+     * Moves the events another writer left in [guest] (the guest's own TSV of the same 8 or 9 fields, e.g.
+     * droiddeck-mali-defaults' fex events) into [log], keeping their time. Only lines [accept] takes (fields split) are
+     * copied; the guest file is renamed away first, so a writer that appends meanwhile starts a new one. Returns the count.
+     */
+    fun ingest(log: File, guest: File, accept: (List<String>) -> Boolean): Int = synchronized(INGEST_LOCK) {
+        val taken = File(guest.parentFile, guest.name + ".ingest")
+        try {
+            if (!taken.isFile && (!guest.isFile || !guest.renameTo(taken))) return@synchronized 0
+            var count = 0
+            val lines = taken.bufferedReader().use { r -> generateSequence { r.readLine() }.take(10_000).toList() }
+            for (line in lines) {
+                val fields = line.split('\t')
+                if (fields.size !in 8..9 || !TIME.matches(fields[0]) || !accept(fields)) continue
+                appendLine(log, fields.joinToString("\t") { clean(it) } + "\n")
+                count++
+            }
+            taken.delete()
+            count
+        } catch (e: Throwable) {
+            Log.w(TAG, "guest log ${guest.path} not ingested", e)
+            0
         }
     }
 

@@ -301,23 +301,40 @@ else
     echo "No PanVK package (DROIDDECK_PANVK=${panvk}); the APK bundles no PanVK" >&2
 fi
 
-# The patched FEX arm64ec DLL (tools/linuxfs/fex-arm64ec/NOTICE): DROIDDECK_FEX_ARM64EC, by default the build of a
-# ../bridge checkout. Only the exact build droiddeck-mali-defaults expects is bundled.
-fex_arm64ec=${DROIDDECK_FEX_ARM64EC:-${repo_root}/../bridge/build/fex-build/patched-arm64ec/Bin/libarm64ecfex.dll}
-fex_arm64ec_md5=a2448b03b9ca32b6a641d687e9773074
+# The patched FEX arm64ec DLLs, one per FEX build, as a fex-arm64ec table package (gpu/FexArm64ecPackage.kt, read by
+# droiddeck-mali-defaults): DROIDDECK_FEX_TABLE = a fex-arm64ec-<V> folder or zip (tools/make-fex-arm64ec-release.sh).
+# Without it, DROIDDECK_FEX_ARM64EC (by default the FEX-2610-101 build of a ../bridge checkout) becomes a one-row table.
 fex_arm64ec_out="${linuxfs_dir}/usr/local/lib/droiddeck-fex-arm64ec"
+fex_tool="${repo_root}/tools/make-fex-arm64ec-package.py"
 rm -rf "${fex_arm64ec_out}"
-if [[ -f "${fex_arm64ec}" ]]; then
-    if [[ "$(python3 -c 'import hashlib, sys; print(hashlib.md5(open(sys.argv[1], "rb").read()).hexdigest())' "${fex_arm64ec}")" != "${fex_arm64ec_md5}" ]]; then
-        echo "${fex_arm64ec} is not the patched FEX arm64ec DLL (md5 ${fex_arm64ec_md5})" >&2
-        exit 1
+fex_table=${DROIDDECK_FEX_TABLE:-}
+fex_tmp=
+if [[ -z "${fex_table}" ]]; then
+    fex_arm64ec=${DROIDDECK_FEX_ARM64EC:-${repo_root}/../bridge/build/fex-build/patched-arm64ec/Bin/libarm64ecfex.dll}
+    fex_arm64ec_md5=a2448b03b9ca32b6a641d687e9773074
+    fex_arm64ec_patch=${DROIDDECK_FEX_PATCH:-${repo_root}/../bridge/patches/fex/0001-arm64ec-recompile-blocks-that-keep-trapping-on-unaligned-atomics.patch}
+    if [[ -f "${fex_arm64ec}" ]]; then
+        if [[ "$(python3 -c 'import hashlib, sys; print(hashlib.md5(open(sys.argv[1], "rb").read()).hexdigest())' "${fex_arm64ec}")" != "${fex_arm64ec_md5}" ]]; then
+            echo "${fex_arm64ec} is not the patched FEX arm64ec DLL (md5 ${fex_arm64ec_md5})" >&2
+            exit 1
+        fi
+        if [[ ! -f "${fex_arm64ec_patch}" ]]; then
+            echo "${fex_arm64ec_patch} is missing (DROIDDECK_FEX_PATCH, the FEX patch of ${fex_arm64ec})" >&2
+            exit 1
+        fi
+        fex_tmp=$(mktemp -d)
+        python3 "${fex_tool}" build --version 2026.11.04.1 --date 2026-11-04 --commit ab9f7d7148006dfc0027111aeffd8ab43bf0c5b6 \
+            --out "${fex_tmp}" --row "stock_md5=863695500852d6df6a7b6b971893b4c1,fex_version=FEX-2610-101-g1c4f04b,fex_commit=1c4f04b71a4d,dll=${fex_arm64ec},patch=${fex_arm64ec_patch}" >/dev/null
+        fex_table="${fex_tmp}/fex-arm64ec-2026.11.04.1"
     fi
-    install -D -m644 "${fex_arm64ec}" "${fex_arm64ec_out}/libarm64ecfex.dll"
-    install -m644 "${repo_root}/tools/linuxfs/fex-arm64ec/LICENSE" "${repo_root}/tools/linuxfs/fex-arm64ec/NOTICE" "${fex_arm64ec_out}/"
-    echo "Bundled the patched FEX arm64ec DLL from ${fex_arm64ec}"
-else
-    echo "No patched FEX arm64ec DLL (DROIDDECK_FEX_ARM64EC); games keep Proton's own" >&2
 fi
+if [[ -n "${fex_table}" ]]; then
+    python3 "${fex_tool}" unpack "${fex_table}" "${fex_arm64ec_out}"
+    echo "Bundled the fex-arm64ec table from ${fex_table}"
+else
+    echo "No fex-arm64ec table (DROIDDECK_FEX_TABLE / DROIDDECK_FEX_ARM64EC); games keep Proton's own FEX DLL" >&2
+fi
+if [[ -n "${fex_tmp}" ]]; then rm -rf "${fex_tmp}"; fi
 
 github_repo=${DROIDDECK_GITHUB_REPOSITORY:-}
 if [[ -z "${github_repo}" ]]; then

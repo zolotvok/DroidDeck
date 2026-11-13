@@ -302,8 +302,6 @@ object ReportBundle {
         d.digest().joinToString("") { "%02x".format(it) }
     }.getOrDefault("")
 
-    const val FEX_DLL = "usr/local/lib/droiddeck-fex-arm64ec/libarm64ecfex.dll"
-
     private fun info(context: Context, appId: String?, protonLog: File?, latest: File?): ReportSummary.Info {
         val pm = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
         val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -355,7 +353,8 @@ object ReportBundle {
             blobferryCommit = bf?.let { b -> b.commit.takeIf { it.isNotEmpty() }?.let { it + if (b.dirty) "-dirty" else "" } }.orEmpty(),
             blobferrySource = bf?.source ?: "none",
             blobferryShimMd5 = bf?.shimMd5.orEmpty(),
-            fexDllMd5 = File(root, FEX_DLL).takeIf { it.isFile }?.let { md5(it) }.orEmpty(),
+            // the patched DLLs of the fex-arm64ec table the guest reads (one per FEX build)
+            fexDllMd5 = runCatching { com.droiddeck.launcher.gpu.FexArm64ecPackage.guestPatchedMd5s(root).joinToString(", ") }.getOrDefault(""),
             proton = proton ?: "?",
             displayDriver = SessionPrefs.androidDriver(context).ifEmpty { "auto" },
             runtimeDriver = runCatching { SessionPrefs.linuxDriver(context) }.getOrDefault("").ifEmpty { "runtime default" },
@@ -394,7 +393,7 @@ object ReportBundle {
         runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.bundled(context) }.getOrNull()?.let { hashes += it.files.values; hashes += it.zipMd5 }
         runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.liveFiles(com.droiddeck.launcher.gpu.BlobferryPackage.layout(context)) }
             .getOrNull()?.let { hashes += it.values }
-        hashes += info.fexDllMd5
+        hashes += info.fexDllMd5.split(", ")
         if (info.panvk.isNotEmpty()) runCatching { hashes += com.droiddeck.launcher.gpu.PanvkPackage.status(context).soMd5 }
         ReportRedactor.allowHashes(hashes.filter { it.isNotEmpty() })
     }

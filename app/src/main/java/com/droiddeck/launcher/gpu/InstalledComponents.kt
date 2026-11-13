@@ -37,6 +37,13 @@ object InstalledComponents {
             .put("sessionPanvk", s.session?.panvk ?: JSONObject.NULL).put("note", s.note("status") ?: JSONObject.NULL),
     )
 
+    fun fexArm64ec(s: FexArm64ecPackage.Status) = Row(
+        FexArm64ecPackage.COMPONENT, s.version, s.source, s.commit, s.date, s.changelog, FexArm64ecPackage.TABLE, s.tableMd5, s.previous,
+        s.previous != null && s.canSwitch,
+        JSONObject().put("rows", JSONArray(s.rows.map { it.json() })).put("bundledVersion", s.bundledVersion ?: JSONObject.NULL)
+            .put("guestTable", s.guestTable),
+    )
+
     fun envDefaults(s: MaliEnvDefaults.Status) = Row(
         MaliEnvDefaults.COMPONENT, s.version, s.source, "", "", "", "env-defaults.json", "", s.previous, s.previous != null,
         JSONObject().put("sha256", s.sha256).put("games", s.games),
@@ -50,6 +57,7 @@ object InstalledComponents {
         }
         add(BlobferryPackage.COMPONENT) { blobferry(BlobferryPackage.status(context)) }
         add(PanvkPackage.COMPONENT) { panvk(PanvkPackage.status(context)) }
+        add(FexArm64ecPackage.COMPONENT) { fexArm64ec(FexArm64ecPackage.status(context)) }
         add(MaliEnvDefaults.COMPONENT) { envDefaults(MaliEnvDefaults.status(context)) }
         return out
     }

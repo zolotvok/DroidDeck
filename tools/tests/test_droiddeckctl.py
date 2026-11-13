@@ -106,6 +106,24 @@ TIMESTATS_SURFACEVIEW = "SurfaceFlinger TimeStats:\n" + "".join([
 ])
 
 
+def fake_arm64ec(tag=b""):
+    """A minimal PE32+ DLL of machine AMD64 whose load config has a CHPE metadata pointer (how ARM64EC images look)."""
+    import struct
+    data = bytearray(0x600)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x40)
+    data[0x40:0x44] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", data, 0x44, 0x8664, 1, 0, 0, 0, 0xF0, 0x2022)
+    opt = 0x58
+    struct.pack_into("<H", data, opt, 0x20B)
+    struct.pack_into("<Q", data, opt + 24, 0x180000000)
+    struct.pack_into("<II", data, opt + 112 + 80, 0x1000, 0x138)
+    struct.pack_into("<8sIIII", data, opt + 0xF0, b".rdata", 0x400, 0x1000, 0x400, 0x200)
+    struct.pack_into("<I", data, 0x200, 0x138)
+    struct.pack_into("<Q", data, 0x200 + 0xC8, 0x180000000 + 0x1100)
+    return bytes(data) + tag
+
+
 def state(phase="READY", focused=None, focusable=()):
     focus = None if focused is None else {"focusedApp": focused, "focusableApps": list(focusable),
                                           "baselayerAppIds": [], "seq": 1, "t": 0}
@@ -627,6 +645,55 @@ class ComponentCtlTest(FakeAdbTest):
         code, out = self.run_ctl("components", "log", "0")
         self.assertEqual("INVALID_REQUEST", out["error"]["code"])
         self.assertEqual(3, len(self.calls("components")))
+
+    def fex_package(self, broken=False):
+        """A fex-arm64ec package folder with two rows of synthetic ARM64EC DLLs (tools/make-fex-arm64ec-package.py)."""
+        import argparse
+        import runpy
+        tool = runpy.run_path(str(TOOLS / "make-fex-arm64ec-package.py"))
+        rows = []
+        for build, stock in (("FEX-2610-101-g1c4f04b", "1" * 32), ("FEX-2610-175-geff9f45", "2" * 32)):
+            dll = self.dir / (build + ".dll")
+            dll.write_bytes(fake_arm64ec(build.encode()))
+            patch = self.dir / (build + ".patch")
+            patch.write_text("diff " + build)
+            rows.append("stock_md5=%s,fex_version=%s,dll=%s,patch=%s" % (stock, build, dll, patch))
+        out = self.dir / "release"
+        with contextlib.redirect_stdout(io.StringIO()):
+            folder = tool["build"](argparse.Namespace(version="2026.11.13.1", date="2026-11-13", commit="a" * 40, changelog="t",
+                                                      row=rows, out=str(out), zip=False))
+        if broken:
+            table = json.loads((folder / "table.json").read_text())
+            table[1]["stock_md5"] = table[0]["stock_md5"]
+            (folder / "table.json").write_text(json.dumps(table))
+        return folder
+
+    def test_fex_install_zips_a_folder_checks_it_and_needs_a_stopped_session(self):
+        self.provider(fex={"ok": True, "command": "fex", "source": "adb", "version": "2026.11.13.1"})
+        folder = self.fex_package()
+        code, out = self.run_ctl("fex", "install", str(folder))
+        self.assertEqual(0, code, out)
+        request = self.calls("fex")[0]["request"]
+        self.assertEqual(("install", "fex-arm64ec-2026.11.13.1.zip"), (request["op"], request["name"]))
+        self.assertEqual(["FEX-2610-101-g1c4f04b", "FEX-2610-175-geff9f45"], [r["fex_version"] for r in out["package"]["rows"]])
+        pushes = [c["args"] for c in self.calls() if c["args"][:1] == ["push"]]
+        self.assertEqual(self.INBOX + "/fex-arm64ec-2026.11.13.1.zip", pushes[0][2])
+        self.assertFalse(Path(pushes[0][1]).exists())
+        self.assertEqual(request["sha256"], out["sha256"])
+        code, out = self.run_ctl("fex", "reset")
+        self.assertEqual({"op": "reset"}, self.calls("fex")[-1]["request"])
+        self.provider(session="READY")
+        code, out = self.run_ctl("fex", "rollback")
+        self.assertEqual("SESSION_ACTIVE", out["error"]["code"])
+
+    def test_fex_refuses_a_bad_table_before_adb_and_status_needs_no_tools(self):
+        self.provider(fex={"ok": True, "command": "fex", "source": "bundled"})
+        code, out = self.run_ctl("fex", "install", str(self.fex_package(broken=True)))
+        self.assertEqual("BAD_PACKAGE", out["error"]["code"])
+        self.assertEqual([], self.calls("fex"))
+        code, out = self.run_ctl("fex", "status")
+        self.assertEqual(0, code, out)
+        self.assertEqual([], self.calls("access"))
 
     def test_env_defaults_check_runs_offline(self):
         out = io.StringIO()
