@@ -2,6 +2,7 @@ import base64
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -517,6 +518,48 @@ class AgentTest(unittest.TestCase):
             with patch.object(agent, "steam_shortcut_state", side_effect=agent.AgentError("CDP_EXCEPTION", "boom")):
                 self.assertEqual(1, agent.main(["--steam-shortcut-state", game_id]))
             self.assertEqual(2, agent.main(["--steam-shortcut-state"]))
+
+    def test_steam_ready_needs_the_initialized_store_and_an_old_enough_ui(self):
+        def answer(**fields):
+            state = dict(initialized=True, continueAction=True, apps=12, age=75)
+            state.update(fields)
+            return {"value": json.dumps(state)}
+        with patch.object(agent, "cdp_eval", return_value=answer()) as evaluate:
+            ready, state = agent.steam_ready(self.dir, 60)
+        self.assertTrue(ready)
+        self.assertEqual(75, state["age"])
+        expression = evaluate.call_args.args[1]
+        for word in ("m_bIsInitialized", "ContinueGameAction", "performance", "allApps"):
+            self.assertIn(word, expression)
+        self.assertEqual(3, evaluate.call_args.kwargs["timeout"])
+        self.assertFalse(evaluate.call_args.kwargs["await_promise"])
+        for fields in ({"age": 59}, {"initialized": False}, {"continueAction": False}, {"age": "old"}):
+            with self.subTest(fields=fields), patch.object(agent, "cdp_eval", return_value=answer(**fields)):
+                self.assertFalse(agent.steam_ready(self.dir, 60)[0])
+        with patch.object(agent, "cdp_eval", return_value=answer(age=5)):
+            self.assertTrue(agent.steam_ready(self.dir)[0])
+        for value in (None, "[]", 7):
+            with self.subTest(value=value), patch.object(agent, "cdp_eval", return_value={"value": value}):
+                self.assertFalse(agent.steam_ready(self.dir)[0])
+
+    def test_steam_ready_command_exits_with_the_answer(self):
+        launch = self.dir.parent
+        state = {"initialized": True, "continueAction": True, "apps": 3, "age": 70}
+        with patch.dict(os.environ, {"BL_LAUNCH_DIR": str(launch)}):
+            with patch.object(agent, "steam_ready", return_value=(True, state)) as ask, \
+                    patch("sys.stdout", new_callable=io.StringIO) as out:
+                self.assertEqual(0, agent.main(["--steam-ready", "60"]))
+            self.assertEqual((launch / "agent", 60), ask.call_args.args)
+            self.assertIn("ready=1 initialized=1 continueAction=1 apps=3 age=70", out.getvalue())
+            with patch.object(agent, "steam_ready", return_value=(False, dict(state, age=20))) as ask:
+                self.assertEqual(1, agent.main(["--steam-ready"]))
+            self.assertEqual((launch / "agent", 0), ask.call_args.args)
+            with patch.object(agent, "steam_ready", side_effect=agent.AgentError("NO_TARGET", "none")):
+                self.assertEqual(1, agent.main(["--steam-ready", "60"]))
+            with patch.object(agent, "steam_ready", side_effect=ValueError("bad json")):
+                self.assertEqual(1, agent.main(["--steam-ready", "60"]))
+            for bad in (["--steam-ready", "-1"], ["--steam-ready", "x"], ["--steam-ready", "1", "2"]):
+                self.assertEqual(2, agent.main(bad))
 
     def test_asleep_command_reports_steams_own_sleep_state(self):
         with patch.dict(os.environ, {"BL_LAUNCH_DIR": str(self.dir.parent)}):
@@ -1477,7 +1520,12 @@ class FocusFixTest(unittest.TestCase):
     setUp = FocusGuardTest.setUp
     fake_proc = FocusGuardTest.fake_proc
     snap = FocusGuardTest.snap
-    playing = FocusGuardTest.playing
+
+    def playing(self, seconds=agent.FocusGuard.LAUNCH_SPAN + 60):
+        """In play past the launch phase, after Steam had the front once (the launch steal of every dead-input state;
+        focus-keeper-1111: without one the input check does not arm, see test_no_steal_no_input_steps)."""
+        FocusGuardTest.playing(self, seconds)
+        self.guard.behind[(self.APP, 10747, None)] = self.now[0] - seconds
     dropped = FocusGuardTest.dropped
     lines = FocusGuardTest.lines
     restores_within = FocusGuardTest.restores_within
@@ -1510,12 +1558,113 @@ class FocusFixTest(unittest.TestCase):
         self.playing()
         steps = self.inputs_within(self.held_input(), 40)
         settle, backoff = agent.FocusGuard.INPUT_SETTLE, agent.FocusGuard.INPUT_BACKOFF
-        self.assertEqual([(settle, "flick", 1), (settle + backoff, "configurator", 2),
-                          (settle + 2 * backoff, "take-focus", 3)], steps)
+        self.assertEqual([(settle, "overlay-cycle", 1), (settle + backoff, "overlay-cycle", 2)], steps)
         text = "\n".join(self.lines())
         self.assertIn("holds STEAM_INPUT_FOCUS (Steam's UI thinks it has the input); watching", text)
         self.assertIn("giving up for app %d" % self.APP, text)
         self.assertEqual(1, text.count("giving up for app"))
+
+    def test_no_steal_no_input_steps(self):
+        # focus-keeper-1111: Hob 11-11 08:04-08:07, STEAM_INPUT_FOCUS = 1 on Steam's new window after a web helper kill,
+        # the game never lost the front, the input stayed alive (pause toggle ALIVE x3): no step, one line
+        FocusGuardTest.playing(self)
+        self.assertEqual([], self.inputs_within(self.held_input(), 40))
+        text = "\n".join(self.lines())
+        self.assertEqual(1, text.count("the game never lost the front to Steam"))
+        self.assertIsNone(self.guard.input)
+
+    def test_a_launch_steal_arms_the_input_check(self):
+        # Village 11-11 07:50:25 first front, Steam in front 07:50:38-40 and 07:50:41-43, then the game in front with
+        # Steam's window holding STEAM_INPUT_FOCUS and the input dead (user, 07:55:54 capture)
+        self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
+        self.now[0] += 13
+        self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
+        self.guard.plan(self.snap(769, [413091, 769]))
+        self.assertIn((self.APP, 10747, None), self.guard.behind)
+        self.now[0] += 400  # past the launch phase and any episode span
+        self.guard.episode = None
+        steps = self.inputs_within(self.held_input(), 20)
+        self.assertEqual("overlay-cycle", steps[0][1])
+
+    def test_a_steal_before_the_window_was_found_is_not_counted(self):
+        # known limit (review 1111 r3: the pending-mark variants reopened pid/app reuse holes): only a held process
+        nowin = self.snap(self.APP, [413091, self.APP, 769], game=False)
+        self.assertEqual([], self.guard.plan(nowin))
+        self.now[0] += 2
+        self.guard.plan(self.snap(769, [413091, 769], game=False))
+        self.now[0] += 2
+        self.assertEqual([], self.inputs_within(self.held_input(), 20))
+
+    def test_a_reused_pid_does_not_inherit_the_steal(self):
+        # review 1111 #2: armed game A goes behind another app and exits there; a relaunch reuses the pid
+        self.playing()
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1"}, state="Z")
+        self.guard.plan(self.snap(769, [413091, 769]))  # Steam in front: the dead process's entry goes
+        self.assertEqual({}, self.guard.behind)
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1"})
+        self.guard.held = None
+        self.assertEqual([], self.inputs_within(self.held_input(), 20))
+
+    def test_steam_after_a_game_quit_marks_no_later_relaunch(self):
+        # review 1111 r2 #1: the game exits, Steam in front, the app relaunched within LAUNCH_SPAN: not armed
+        FocusGuardTest.playing(self)
+        self.fake_proc(10747, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1"}, state="Z")
+        self.guard.plan(self.snap(769, [413091, 769], game=False))
+        self.now[0] += 1
+        self.guard.plan(self.snap(769, [413091, 769], game=False))
+        self.fake_proc(10748, 9451, "Watch_Dogs.exe", env={"ENABLE_MALI_COMPAT": "1"})
+        relaunched = self.held_input()
+        relaunched["displays"][":1"][0]["pid"] = 10748
+        relaunched["focusableWindows"][0]["pid"] = 10748
+        self.now[0] += 10
+        self.assertEqual([], self.inputs_within(relaunched, 20))
+
+    def test_a_window_swap_behind_steam_keeps_the_mark(self):
+        # review 1111 r2 #2: the live game replaces its window while Steam is in front
+        self.playing()
+        self.guard.plan(self.snap(769, [413091, 769], game=False))  # old window gone, process alive
+        self.assertTrue(any(k[:2] == (self.APP, 10747) for k in self.guard.behind))
+
+    def test_a_reused_pid_and_window_with_another_start_time_is_not_armed(self):
+        # review 1111 r2 #4: held kept (same app, window, pid), the process start time differs
+        self.playing()
+        with patch.object(agent, "proc_start", return_value=12345):
+            self.assertEqual([], self.inputs_within(self.held_input(), 20))
+
+    def test_a_replaced_process_drops_the_input_state(self):
+        # review 1111 r3 #1/#2: armed, steps running, then the pid and window are reused by a new process
+        self.playing()
+        self.inputs_within(self.held_input(), agent.FocusGuard.INPUT_SETTLE)
+        self.assertIsNotNone(self.guard.input)
+        with patch.object(agent, "proc_start", return_value=999):
+            self.guard.plan(self.snap(769, [413091, 769]))  # Steam in front: no mark for the new process
+            self.now[0] += 1
+            self.assertEqual([], self.inputs_within(self.held_input(), 20))
+        self.assertIsNone(self.guard.input)
+
+    def test_a_reused_pid_and_window_is_a_new_process_that_a_later_steal_arms(self):
+        # review 1111 r4: same app, pid and window id, another start time: a new held; its own steal arms it
+        self.playing()
+        with patch.object(agent, "proc_start", return_value=777):
+            self.guard.plan(self.held_input())
+            self.assertEqual(777, self.guard.held["start"])
+            self.guard.plan(self.snap(769, [413091, 769, self.APP]))
+            self.now[0] += 400
+            self.guard.episode = None
+            self.assertEqual("overlay-cycle", self.inputs_within(self.held_input(), 20)[0][1])
+
+    def test_the_never_lost_the_front_line_is_once_per_process(self):
+        # review 1111 #3: switching between the unarmed game and another app logs it once
+        FocusGuardTest.playing(self)
+        for _ in range(4):
+            self.inputs_within(self.held_input(), 3)
+            other = self.snap(4242, [413091, 4242, 769])
+            other["displays"][":1"].append({"window": 0x4400001, "map": "viewable", "appId": 4242, "pid": 10747,
+                                            "geometry": [0, 0, 1600, 720]})
+            other["focusedWindow"] = 0x4400001
+            self.guard.plan(other)
+            self.now[0] += 1
+        self.assertEqual(1, "\n".join(self.lines()).count("the game never lost the front to Steam"))
 
     def test_without_steam_input_focus_nothing_happens(self):
         self.playing()
@@ -1534,11 +1683,11 @@ class FocusFixTest(unittest.TestCase):
 
     def test_the_input_step_clears_and_is_logged(self):
         self.playing()
-        self.assertEqual([(agent.FocusGuard.INPUT_SETTLE, "flick", 1)],
+        self.assertEqual([(agent.FocusGuard.INPUT_SETTLE, "overlay-cycle", 1)],
                          self.inputs_within(self.held_input(), agent.FocusGuard.INPUT_SETTLE))
         self.now[0] += 1
         self.assertEqual([], self.guard.plan(self.snap(self.APP, [413091, self.APP, 769])))
-        self.assertIn("let go of STEAM_INPUT_FOCUS 2.0 s after input try 1 (flick); app %d has the input" % self.APP,
+        self.assertIn("let go of STEAM_INPUT_FOCUS 2.0 s after input try 1 (overlay-cycle); app %d has the input" % self.APP,
                       "\n".join(self.lines()))
         self.assertIsNone(self.guard.input)
 
@@ -1549,7 +1698,7 @@ class FocusFixTest(unittest.TestCase):
         start = self.now[0]
         self.menu[0] = (start + 5, "guide")  # the user pressed Guide 5 s into the state (and closed the menu)
         steps = self.inputs_within(snap, 20)
-        self.assertEqual("flick", steps[0][1])
+        self.assertEqual("overlay-cycle", steps[0][1])
         self.assertAlmostEqual(start + 5 + agent.FocusGuard.INPUT_SETTLE, start + steps[0][0])
         self.assertIn("guide press at", "\n".join(self.lines()))
 
@@ -1574,7 +1723,7 @@ class FocusFixTest(unittest.TestCase):
         last = self.guard.episode["last"]
         start = self.now[0]
         steps = self.inputs_within(self.held_input(), agent.FocusGuard.EPISODE_SPAN + 10)
-        self.assertEqual("flick", steps[0][1])
+        self.assertEqual("overlay-cycle", steps[0][1])
         self.assertAlmostEqual(last + agent.FocusGuard.EPISODE_SPAN, start + steps[0][0], delta=1.0)
         text = "\n".join(self.lines())
         self.assertIn("launch phase", text)
@@ -1596,13 +1745,13 @@ class FocusFixTest(unittest.TestCase):
     def test_a_steal_right_after_an_input_step_is_ours_to_undo(self):
         self.playing()
         self.step_applied()
-        self.assertEqual("flick", self.guard.input_last[1])
+        self.assertEqual("overlay-cycle", self.guard.input_last[1])
         self.now[0] += 1
-        # Steam takes the front after the flick, the game still in its base layer (would be "Steam's menu")
+        # Steam takes the front after the step, the game still in its base layer (would be "Steam's menu")
         self.assertIsNotNone(self.restores_within(self.snap(769, [413091, 769, self.APP])))
         text = "\n".join(self.lines())
         self.assertNotIn("Steam's menu over the game", text)
-        self.assertIn("our input step flick", text)
+        self.assertIn("our input step overlay-cycle", text)
         # back in front: that episode was only ours, it closes at once (no 60 s reload span for later menus)
         self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))
         self.assertIsNone(self.guard.episode)
@@ -1710,7 +1859,7 @@ class FocusFixTest(unittest.TestCase):
         other = self.held_input()
         other["displays"][":1"][0]["window"] = self.GAME + 1
         other["focusedWindow"] = self.GAME + 1
-        self.assertEqual("flick", self.inputs_within(other, agent.FocusGuard.INPUT_SETTLE)[0][1])
+        self.assertEqual("overlay-cycle", self.inputs_within(other, agent.FocusGuard.INPUT_SETTLE)[0][1])
 
     def test_spent_input_steps_stay_spent_until_steam_lets_go(self):
         self.playing()
@@ -1722,7 +1871,7 @@ class FocusFixTest(unittest.TestCase):
         self.guard.plan(self.snap(self.APP, [413091, self.APP, 769]))  # Steam lets go: over
         self.assertIsNone(self.guard.input)
         self.now[0] += 1
-        self.assertEqual("flick", self.inputs_within(self.held_input(), 20)[0][1])  # a new mismatch: new steps
+        self.assertEqual("overlay-cycle", self.inputs_within(self.held_input(), 20)[0][1])  # a new mismatch: new steps
 
     def test_steps_that_make_steam_take_the_front_do_not_loop(self):
         # review round 5: flick -> Steam in front -> restore -> back with the mismatch -> the next step, not flick again
@@ -1735,9 +1884,9 @@ class FocusFixTest(unittest.TestCase):
             self.restores_within(self.snap(769, [413091, 769, self.APP]))
             self.guard.plan(self.held_input())  # back in front, Steam still holds the input
             self.now[0] += 1
-            if self.guard.input["tries"] >= 3:
+            if self.guard.input["tries"] >= len(agent.FocusGuard.INPUT_STEPS):
                 break
-        self.assertEqual(["flick", "configurator", "take-focus"], steps)
+        self.assertEqual(["overlay-cycle", "overlay-cycle"], steps)
         self.assertEqual([], self.inputs_within(self.held_input(), 40))
         self.assertIn("giving up for app", "\n".join(self.lines()))
 
@@ -1759,7 +1908,7 @@ class FocusFixTest(unittest.TestCase):
     def test_another_games_open_episode_does_not_block_the_input_steps(self):
         self.playing()
         self.guard.episode = {"app": 4242, "opened": self.now[0], "tries": 3, "last": self.now[0], "back": None}
-        self.assertEqual("flick", self.inputs_within(self.held_input(), 20)[0][1])
+        self.assertEqual("overlay-cycle", self.inputs_within(self.held_input(), 20)[0][1])
 
     def test_a_relaunched_game_with_the_same_window_id_starts_over(self):
         # review round 6: X window ids are reused; the pid tells the processes apart
@@ -1769,7 +1918,10 @@ class FocusFixTest(unittest.TestCase):
         relaunched = self.held_input()
         relaunched["displays"][":1"][0]["pid"] = 10748
         relaunched["focusableWindows"][0]["pid"] = 10748
-        self.assertEqual("flick", self.inputs_within(relaunched, 20)[0][1])
+        self.assertEqual([], self.inputs_within(relaunched, 20))  # the new process never lost the front: not armed
+        self.guard.plan(self.snap(769, [413091, 769, self.APP]))  # Steam takes the front once from the relaunch
+        self.now[0] += 1
+        self.assertEqual("overlay-cycle", self.inputs_within(relaunched, 20)[0][1])
 
     def test_an_episode_without_a_try_expires(self):
         # review round 5 (pre-existing): WD2 16:32:26 "back in front after try 0" kept its episode open for good
@@ -1828,7 +1980,7 @@ class FocusFixTest(unittest.TestCase):
         self.assertEqual([(":0", "GAMESCOPE_FOCUSED_APP", [769]), (":0", "GAMESCOPE_FOCUSED_APP", [self.APP]),
                           (":1", self.GAME, self.GAME, "WM_PROTOCOLS", [77, 0], 0)], sent)
         lines = self.lines()
-        self.assertIn("focus guard: input try 1/3 (flick): app %d window 0x4200005 on :1" % self.APP, lines[0])
+        self.assertIn("focus guard: input try 1/2 (flick): app %d window 0x4200005 on :1" % self.APP, lines[0])
         self.assertIn("did: focus flick %d -> 769 -> %d (0.4 s) on :0" % (self.APP, self.APP), lines[0])
         self.assertIn("did: skipped, no DevTools", lines[1])
         self.assertIn("did: ForceConfiguratorFocus true/false", lines[2])
@@ -1841,6 +1993,169 @@ class FocusFixTest(unittest.TestCase):
             self.guard.apply([("input", "flick", ":1", self.GAME, self.APP, 10747, holders, 1, "held 8.0 s")])
         self.assertIn("did: skipped, GAMESCOPE_FOCUSED_APP is [769] now", self.lines()[-1])
         self.assertIsNone(self.guard.input_last)
+
+    def overlay_fakes(self, store=True, back=True, close_fail=None):
+        """cdp_eval and the focus read faked for overlay_cycle: [(expression head)], focus reads."""
+        calls = []
+
+        def cdp(agent_dir, expression, **kw):
+            calls.append(expression)
+            if expression.startswith("typeof"):
+                return {"value": store}
+            if "OpenQuickAccessMenu()" in expression:
+                return {"value": "opened"}
+            if "CloseSideMenus" in expression and close_fail and close_fail[0]:
+                close_fail[0] -= 1
+                raise OSError("connection reset")
+            return {"value": "closed"}
+        reads = iter([[769]] + ([[self.APP]] if back else [[769]] * 100))
+        return calls, cdp, (lambda: next(reads, [769]))
+
+    def test_overlay_cycle_opens_and_closes_the_qam(self):
+        # focus-keeper-1111 live probe p8 (Village 11-11 09:09:16-22): QAM open + close revived the dead input
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes()
+        with patch.object(agent, "cdp_eval", side_effect=cdp), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(3, len(calls))
+        self.assertIn("OpenQuickAccessMenu()", calls[1])
+        self.assertIn("CloseSideMenus", calls[2])
+        self.assertEqual("overlay-cycle", self.guard.input_last[1])
+        self.assertIn("did: QAM opened (focus [769] after 2.0 s), closed, focus [%d]" % self.APP, self.lines()[-1])
+
+    def test_overlay_cycle_without_the_menu_store_is_skipped(self):
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes(store=False)
+        with patch.object(agent, "cdp_eval", side_effect=cdp), patch.object(agent.time, "sleep"):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(1, len(calls))
+        self.assertIsNone(self.guard.input_last)
+        self.assertIn("did: skipped, no MenuStore", self.lines()[-1])
+
+    def test_overlay_cycle_retries_the_close_and_counts_an_unanswered_open(self):
+        # review 1111 r6 #1/#2: the open times out (Steam may still have opened it), the first close fails
+        self.guard.agent_dir = Path(self.temp.name)
+        fails = [1]
+        calls, cdp, focus = self.overlay_fakes(close_fail=fails)
+
+        def cdp2(agent_dir, expression, **kw):
+            if "OpenQuickAccessMenu()" in expression:
+                calls.append(expression)
+                raise OSError("timed out")
+            return cdp(agent_dir, expression, **kw)
+        with patch.object(agent, "cdp_eval", side_effect=cdp2), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(2, sum("ms.CloseSideMenus()" in c for c in calls))
+        self.assertEqual("overlay-cycle", self.guard.input_last[1])
+        self.assertIn("did: failed after the first write: timed out", self.lines()[-1])
+
+    def test_overlay_cycle_leaves_a_users_menu_open(self):
+        # review 1111 r6 #3: the user pressed Guide during the 2 s
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes()
+
+        def cdp2(agent_dir, expression, **kw):
+            if "OpenQuickAccessMenu()" in expression:
+                self.menu[0] = (self.now[0] + 1, "guide")
+            return cdp(agent_dir, expression, **kw)
+        with patch.object(agent, "cdp_eval", side_effect=cdp2), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertFalse(any("ms.CloseSideMenus()" in c for c in calls))
+        self.assertIn("left open: the user pressed guide during the cycle", self.lines()[-1])
+        self.assertIsNone(self.guard.input_last)  # the user's menu explains Steam in front, not our step
+
+    def test_overlay_cycle_rechecks_the_user_before_each_close_try(self):
+        # review 1111 r7 #2: the first close fails, the user presses Guide before the retry
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes(close_fail=[1])
+
+        def cdp2(agent_dir, expression, **kw):
+            out = None
+            try:
+                out = cdp(agent_dir, expression, **kw)
+            finally:
+                if "ms.CloseSideMenus()" in expression:
+                    self.menu[0] = (self.now[0] + 1, "qam")
+            return out
+        with patch.object(agent, "cdp_eval", side_effect=cdp2), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(1, sum("ms.CloseSideMenus()" in c for c in calls))
+        self.assertIn("left open: the user pressed qam", self.lines()[-1])
+
+    def test_overlay_cycle_a_user_menu_right_after_the_close_is_not_ours(self):
+        # review 1111 r8 #1: the user opens the QAM during the 3 s return wait
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, _ = self.overlay_fakes()
+        reads = [0]
+
+        def focus():
+            reads[0] += 1
+            if reads[0] == 2:
+                self.menu[0] = (self.now[0] + 2, "qam")
+            return [769]
+        with patch.object(agent, "cdp_eval", side_effect=cdp), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertIsNone(self.guard.input_last)
+        self.assertIn("then the user pressed qam", self.lines()[-1])
+
+    def test_overlay_cycle_a_missing_close_function_is_retried(self):
+        # review 1111 r8 #2: the close expression throws when the store is gone (cdp_eval raises JS_EXCEPTION)
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes(close_fail=[2])
+        with patch.object(agent, "cdp_eval", side_effect=cdp), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(3, sum("ms.CloseSideMenus()" in c for c in calls))
+        self.assertIn("closed (try 3)", self.lines()[-1])
+
+    def test_overlay_cycle_failed_open_then_a_user_menu_is_not_ours(self):
+        # review 1111 r9: the open times out, the user opens the QAM around the close
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes()
+
+        def cdp2(agent_dir, expression, **kw):
+            if "OpenQuickAccessMenu()" in expression:
+                raise OSError("timed out")
+            if "ms.CloseSideMenus()" in expression:
+                self.menu[0] = (self.now[0] + 1, "qam")
+            return cdp(agent_dir, expression, **kw)
+        with patch.object(agent, "cdp_eval", side_effect=cdp2), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertIsNone(self.guard.input_last)
+
+    def test_overlay_cycle_counts_a_press_during_the_probe(self):
+        # review 1111 r7 #3: the user's Guide arrives while the typeof probe is pending
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, focus = self.overlay_fakes()
+
+        def cdp2(agent_dir, expression, **kw):
+            if expression.startswith("typeof"):
+                self.menu[0] = (self.now[0], "guide")
+            return cdp(agent_dir, expression, **kw)
+        with patch.object(agent, "cdp_eval", side_effect=cdp2), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(focus)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertFalse(any("OpenQuickAccessMenu()" in c for c in calls))  # not even opened
+        self.assertIn("skipped, the user pressed guide meanwhile", self.lines()[-1])
+
+    def test_overlay_cycle_closes_even_if_the_focus_read_fails(self):
+        self.guard.agent_dir = Path(self.temp.name)
+        calls, cdp, _ = self.overlay_fakes()
+
+        def boom():
+            raise ValueError("x")
+        with patch.object(agent, "cdp_eval", side_effect=cdp), patch.object(agent.time, "sleep"), \
+                patch.object(agent.FocusGuard, "focused_now", staticmethod(boom)):
+            self.guard.apply([("input", "overlay-cycle", ":1", self.GAME, self.APP, 10747, [self.STEAM_WIN], 1, "held 8.0 s")])
+        self.assertEqual(3, len(calls))  # the close ran in the finally
+        self.assertIn("did: failed after the first write", self.lines()[-1])
+        self.assertEqual("overlay-cycle", self.guard.input_last[1])
 
     # ---- re-arm on fresh evidence (crash/remap twice within the span) ----
 

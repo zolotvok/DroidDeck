@@ -1,3 +1,4 @@
+import fcntl
 import os
 from pathlib import Path
 import subprocess
@@ -30,6 +31,12 @@ class SteamShortcutRecoveryTest(unittest.TestCase):
         self.agent = self.bin / "droiddeck-agent"
         self.agent.write_text(
             "#!/bin/sh\n"
+            "if [ \"$1\" = --steam-ready ]; then\n"
+            "  printf '%s\\n' \"$*\" >> \"$HOME/ready-args\"\n"
+            "  r=$(cat \"$HOME/ready-count\" 2>/dev/null || echo 0); r=$((r + 1)); echo $r > \"$HOME/ready-count\"\n"
+            "  [ \"$r\" -gt \"${READY_AFTER:-0}\" ] && { echo ready=1 age=61; exit 0; }\n"
+            "  echo ready=0 age=12; exit 1\n"
+            "fi\n"
             "n=$(cat \"$AGENT_COUNT\" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > \"$AGENT_COUNT\"\n"
             "i=0; last=0\n"
             "for s in $AGENT_STATES; do i=$((i + 1)); last=$s; [ \"$i\" -eq \"$n\" ] && exit \"$s\"; done\n"
@@ -125,6 +132,74 @@ class SteamShortcutRecoveryTest(unittest.TestCase):
         self.assertEqual(["steam://rungameid/" + GAME], steam)
         self.assertIsNone(restart)
         self.assertEqual("1", (self.root / "agent-count").read_text().strip())
+
+    def test_a_fresh_client_is_waited_for_before_the_launch(self):
+        steam, restart, out = self.launch_game("3", extra={"READY_AFTER": "4"})
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+        self.assertEqual("5", (self.root / "ready-count").read_text().strip())
+        self.assertEqual(["--steam-ready 60"] * 5, (self.root / "ready-args").read_text().splitlines())
+        self.assertIn("waiting for the client to finish loading before launching " + GAME + " (ready=0 age=12)", out)
+        self.assertIn("client ready for " + GAME, out)
+
+    def test_a_ready_client_launches_at_once_without_a_line(self):
+        steam, _, out = self.launch_game("3")
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+        self.assertEqual("1", (self.root / "ready-count").read_text().strip())
+        self.assertNotIn("client", out)
+
+    def test_a_client_that_never_gets_ready_is_launched_anyway_after_the_cap(self):
+        steam, _, out = self.launch_game("3", extra={"READY_AFTER": "999", "BL_STEAM_READY_MAX": "7",
+                                                     "BL_STEAM_LAUNCH_MIN_AGE": "30"})
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+        self.assertEqual("8", (self.root / "ready-count").read_text().strip())
+        self.assertEqual("--steam-ready 30", (self.root / "ready-args").read_text().splitlines()[0])
+        self.assertIn("launching anyway", out)
+
+    def test_the_wait_can_be_turned_off(self):
+        steam, _, _ = self.launch_game("3", extra={"READY_AFTER": "999", "BL_STEAM_READY_MAX": "0"})
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+        self.assertFalse((self.root / "ready-count").exists())
+
+    def test_a_second_request_while_a_launch_job_holds_the_lock_is_dropped(self):
+        lock = self.launch / ("steam-launch-job." + GAME + ".lock")
+        with open(lock, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            steam, _, out = self.launch_game("3", extra={"READY_AFTER": "999"})
+        self.assertEqual([], steam)
+        self.assertIn("already on its way", out)
+        self.assertFalse((self.root / "ready-count").exists())
+
+    def test_a_leftover_lock_file_without_a_holder_does_not_block_the_launch(self):
+        (self.launch / ("steam-launch-job." + GAME + ".lock")).write_text("")
+        steam, _, _ = self.launch_game("3")
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+
+    def test_another_game_holding_its_lock_does_not_block_this_one(self):
+        with open(self.launch / "steam-launch-job.1245620.lock", "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            steam, _, _ = self.launch_game("3")
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+
+    def test_without_a_lock_the_launch_goes_at_once_without_the_wait(self):
+        (self.launch / ("steam-launch-job." + GAME + ".lock")).mkdir()   # cannot be opened as a file
+        steam, _, out = self.launch_game("3", extra={"READY_AFTER": "999"})
+        self.assertEqual(["steam://rungameid/" + GAME], steam)
+        self.assertIn("no launch lock", out)
+        self.assertFalse((self.root / "ready-count").exists())
+
+    def test_the_lock_is_held_during_the_launch_and_not_inherited_by_the_client(self):
+        probe = self.root / "probe"
+        steam_bin = self.root / "steam/steamrtarm64/steam"
+        steam_bin.write_text(
+            "#!/bin/bash\nprintf '%%s\\n' \"$*\" >> \"$STEAM_LOG\"\n"
+            "if flock -n %s true; then echo free > %s; else echo held > %s; fi\n"
+            "ls -l /proc/$$/fd > %s.fds 2>&1\n"
+            "(sleep 30 &) \n" % (self.launch / ("steam-launch-job." + GAME + ".lock"), probe, probe, probe))
+        steam, _, _ = self.launch_game("3")
+        self.assertEqual("held", probe.read_text().strip())
+        self.assertNotIn("steam-launch-job", Path(str(probe) + ".fds").read_text())
+        with open(self.launch / ("steam-launch-job." + GAME + ".lock"), "a") as again:
+            fcntl.flock(again, fcntl.LOCK_EX | fcntl.LOCK_NB)   # raises if a leftover child kept it
 
     def check_exits(self, listings, states, beats):
         pgrep = self.bin / "pgrep"

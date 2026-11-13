@@ -1176,7 +1176,50 @@ case $mode in
       printf '%s\n' "$1" > "$HOME/.bl-restart-game"
       "${steam_client[@]:-$steam_root/steamrtarm64/steam}" -shutdown >/dev/null 2>&1
     }
+    # Right after a session start Steam's UI takes the front a few times while it finishes
+    # loading. A game whose first seconds fall into that kept running but lost all input
+    # (W3 2026-11-11, docs/agents/focus-fix-1110.md "input class 2"; the relaunch on an older
+    # client was fine). Wait until the client is initialized (upstream 6bcd431ca) and its UI
+    # is BL_STEAM_LAUNCH_MIN_AGE s old, at most BL_STEAM_READY_MAX checks (about 1 s apart),
+    # then launch anyway.
+    steam_wait_client_ready() {
+      local min=${BL_STEAM_LAUNCH_MIN_AGE:-60} max=${BL_STEAM_READY_MAX:-75} tries=0 out= start=$SECONDS
+      case $min in ''|*[!0-9]*) min=60 ;; esac
+      case $max in ''|*[!0-9]*) max=75 ;; esac
+      [ "$max" -gt 0 ] || return 0
+      until out=$(timeout 5 /usr/local/bin/droiddeck-agent --steam-ready "$min" 2>/dev/null); do
+        if [ "$tries" -ge "$max" ] || [ "$((SECONDS - start))" -ge "$max" ]; then
+          echo "== steam: client not ready for $1 after $((SECONDS - start)) s (${out:-no answer}); launching anyway"
+          return 0
+        fi
+        [ "$tries" -gt 0 ] || echo "== steam: waiting for the client to finish loading before launching $1 (${out:-no answer})"
+        nap 1
+        tries=$((tries + 1))
+      done
+      [ "$tries" -eq 0 ] || echo "== steam: client ready for $1 after $((SECONDS - start)) s ($out)"
+    }
+    # One launch job per game id: while a job waits for the client or is launching, another
+    # request for the same id (steam_hold_launch's second hand-off for a shortcut, a second
+    # tap) is dropped. The job holds flock on steam-launch-job.<id>.lock; the kernel drops
+    # the lock when the job ends or dies. Its children get fd 8 closed (bash keeps its saved
+    # copy close-on-exec), so a client or helper that outlives the job cannot hold the lock.
     steam_launch_game() {
+      # Without the lock (no flock, the lock file cannot be opened) there is no readiness
+      # wait either: two waiting requests could both launch, so it launches at once as before.
+      (
+        if command -v flock >/dev/null 2>&1 && exec 8>>"$BL_LAUNCH_DIR/steam-launch-job.$1.lock" 2>/dev/null; then
+          if ! flock -n 8; then
+            echo "== steam: a launch of $1 is already on its way; not queuing another"
+            exit 0
+          fi
+          steam_wait_client_ready "$1" 8>&-
+        else
+          echo "== steam: no launch lock for $1; launching without the readiness wait"
+        fi
+        steam_launch_game_now "$1" 8>&-
+      )
+    }
+    steam_launch_game_now() {
       local state=0 tries
       /usr/local/bin/droiddeck-agent --steam-shortcut-state "$1" 6 >/dev/null 2>&1 || state=$?
       [ "$state" -eq 0 ] && rm -f "$HOME/.bl-restarted-for"

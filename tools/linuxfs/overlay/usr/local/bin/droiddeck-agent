@@ -493,6 +493,15 @@ def pid_alive(pid, proc=Path("/proc")):
         return False
 
 
+def proc_start(pid, proc=Path("/proc")):
+    """The process start time (/proc/<pid>/stat field 22), to tell a reused pid apart; None if unreadable."""
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+        return int(stat[stat.rindex(")") + 2:].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def steam_shows_itself_first(baselayer, app):
     """True when Steam's base layer does not put the app before its own UI: Steam no longer runs it."""
     if app not in baselayer:
@@ -748,12 +757,15 @@ class FocusGuard:
     it has the input. 32 captured focus snapshots: 13/13 with Steam in front have it; with a game in front it is set
     in exactly the 3 dead-input states (Doom 11-06 x2, Village 11-07 launch 1, after the launch-time front steal and
     the guard's two tries) and 0 in the 14 others (Village's working relaunch included). Clearing the property by hand
-    did nothing (doom-inputtex-1106 T4): it is Steam's report, not its switch. After INPUT_SETTLE s of that state (and
+    did nothing (doom-inputtex-1106 T4): it is Steam's report, not its switch. It is not enough on its own (focus-keeper-1111):
+    Hob 11-11 kept a live input with it set on Steam's new window after a web helper kill, with no front steal, while
+    every dead state (Village 11-07 L1 and 11-11 07:50, Doom 11-06) followed a Steam front steal. So the check arms only
+    for a game process that lost the front to Steam at least once (else one "never lost the front" line). After INPUT_SETTLE s of that state (and
     INPUT_SETTLE s after any Guide/QAM press, the user's or our tools'; never while a reload episode is open) one
-    step per INPUT_BACKOFF s: "flick" GAMESCOPE_FOCUSED_APP game -> 769 -> game on Steam's display (PadApply stage B:
-    Steam sees a focus switch back to the game; nothing is shown), "configurator"
-    SteamClient.Input.ForceConfiguratorFocus true/false (stage A), "take-focus" WM_TAKE_FOCUS to the game window
-    (Wine's own activation request), then it gives up for that game window until Steam lets go of the input. Each
+    step per INPUT_BACKOFF s, at most twice: "overlay-cycle" = Steam's Quick Access Menu opened and closed again through
+    Steam's own menu store (the live probes of 11-11 09:06-09:10: only a QAM open/close revived Village's input; X focus,
+    FocusIn, _NET_ACTIVE_WINDOW, STEAM_INPUT_FOCUS 0 and the older take-focus/flick/configurator steps did not), then it
+    gives up for that game window until Steam lets go of the input. Each
     step is logged; a Steam front steal within INPUT_STEAL_SPAN s after a step that wrote something is undone (an
     episode only that step explains closes once the game is back), a later one is not (a Steam menu opened by mouse
     or keyboard stays the user's). An episode in which the game came back without a try ends EPISODE_SPAN s after
@@ -774,7 +786,14 @@ class FocusGuard:
     REARMS = 2            # fresh reload evidence after the last try re-arms the TRIES this often per reload
     INPUT_SETTLE = 8.0    # Steam's window holds STEAM_INPUT_FOCUS this long with the game in front: act
     INPUT_BACKOFF = 4.0   # between the input steps
-    INPUT_STEPS = ("flick", "configurator", "take-focus")
+    # focus-keeper-1111 live probes (Village 11-11 09:06-09:10, dead state): X focus bounce, FocusIn, _NET_ACTIVE_WINDOW,
+    # STEAM_INPUT_FOCUS 0, NotifyGameOverlayStateChanged(false) and the agent's take-focus/flick/configurator all left the
+    # input dead; one Steam QAM open + close (droiddeckctl input pad qam x2) revived it. So: Steam's own overlay cycle,
+    # twice at most. The older steps stay in input_step (tests, manual use) but are no longer planned.
+    INPUT_STEPS = ("overlay-cycle", "overlay-cycle")
+    QAM_OPEN = 2.0        # the QAM stays open this long (p8: 3 s by hand)
+    QAM_BACK = 3.0        # after the close, wait up to this long for the game to be gamescope's focus again
+    CLOSE_TRIES = 3       # DevTools may drop between the open and the close: the close is retried 1 s apart
     INPUT_FLICK = 0.4
     INPUT_STEAL_SPAN = 6.0  # Steam taking the front this soon after an input step: that step's doing, put the game back
     CONTROL = "GAMESCOPECTRL_BASELAYER_WINDOW"
@@ -806,6 +825,8 @@ class FocusGuard:
         self.input = None     # Steam's window holding STEAM_INPUT_FOCUS with the game in front: app, window, since, tries
         self.input_last = None  # (t, what) of the last input step: a Steam steal within INPUT_STEAL_SPAN of it is ours
         self.browsers_gone = False
+        self.behind = {}      # (app, pid, start) -> when Steam first had the front while that game process lived
+        self.behind_noted = set()  # behind keys already logged as "never lost the front" (one line per process)
 
     @staticmethod
     def off():
@@ -925,6 +946,27 @@ class FocusGuard:
         except OSError:
             return False
 
+    @staticmethod
+    def behind_key(held):
+        # the start time read when this game process was first held: a reused pid has another one
+        return held["app"], held["pid"], held.get("start")
+
+    def armed(self, held):
+        """The game process in front lost the front to Steam at least once while it lived (focus-keeper-1111), and it
+        is still the same process (pid and window ids can be reused between two snapshots: start time compared)."""
+        return (self.behind_key(held) in self.behind
+                and held.get("start") == proc_start(held["pid"], self.proc))
+
+    def note_behind(self, now):
+        """Steam has the front: remember it for the game process last in front, if that process still lives as the
+        same process; drop the marks of gone processes. A steal before the game's window was ever resolved is not
+        counted (known limit; the snapshots of Village/Doom/Hob had the window at the first front)."""
+        if self.held is not None and self.held.get("start") == proc_start(self.held["pid"], self.proc):
+            self.behind.setdefault(self.behind_key(self.held), now)
+        for key in [k for k in self.behind if not pid_alive(k[1], self.proc)]:
+            del self.behind[key]
+        self.behind_noted = {k for k in self.behind_noted if pid_alive(k[1], self.proc)}
+
     def plan_input(self, snap, held, now):
         """The input check (see the class doc): [] or [("input", step, display, window, app, pid, holders, try, why)]."""
         holders = self.steam_input_windows(snap)
@@ -939,6 +981,16 @@ class FocusGuard:
                 log("focus guard: input: Steam's window let go of STEAM_INPUT_FOCUS by itself after %.1f s (no try)"
                     % (now - st["since"]))
             self.input = None
+            return []
+        if not self.armed(held):
+            self.input = None  # also a replaced process that kept the old input state (review 1111 r3)
+            # focus-keeper-1111: Hob 11-11 08:04 kept a live input for 150 s with STEAM_INPUT_FOCUS = 1 on Steam's new
+            # window after a web helper kill (no steal); every dead-input state had a Steam front steal first
+            if self.behind_key(held) not in self.behind_noted:
+                self.behind_noted.add(self.behind_key(held))
+                log("focus guard: input: app %s in front (window 0x%x), Steam's window %s holds STEAM_INPUT_FOCUS, but "
+                    "the game never lost the front to Steam (input alive in this state on 11-11); not acting"
+                    % (held["app"], held["window"], ", ".join("0x%x" % w for w in holders)))
             return []
         if st is None:
             on, why = self.input_enabled(held["pid"])
@@ -1023,10 +1075,12 @@ class FocusGuard:
             display, win, pid = found
             if focused not in self.launch:
                 self.launch[focused] = now
-            if held is None or (held["app"], held["window"], held["pid"]) != (focused, win["window"], pid):
+            start = proc_start(pid, self.proc)  # a relaunch may reuse the pid and the window id: a new process
+            if held is None or (held["app"], held["window"], held["pid"], held.get("start")) != (
+                    focused, win["window"], pid, start):
                 on, why = self.enabled_for(pid)
                 held = self.held = {"app": focused, "display": display, "window": win["window"], "pid": pid,
-                                    "since": now, "on": on, "why": why}
+                                    "since": now, "on": on, "why": why, "start": start}
                 log("focus guard: %s app %s, window 0x%x on %s, pid %s (%s)"
                     % ("watching" if on else "not watching", focused, win["window"], display, pid, why))
             held["seen"] = now
@@ -1066,6 +1120,8 @@ class FocusGuard:
         # flick -> Steam in front -> restore -> flick); a new game window or Steam letting go starts it over
         if self.input is not None:
             self.input["away"] = True
+        if focused == STEAM_UI_APP:
+            self.note_behind(now)  # per process: a game may swap windows after a steal
         if held is None or not held["on"]:
             return actions
         app = held["app"]
@@ -1073,6 +1129,9 @@ class FocusGuard:
         if win is None or not pid_alive(held["pid"], self.proc):
             if self.episode or self.away:
                 log("focus guard: app %s %s; stopped" % (app, "window gone" if win is None else "process gone"))
+            if not pid_alive(held["pid"], self.proc):  # only a gone process loses its mark (a game may swap windows)
+                for key in [k for k in self.behind if k[:2] == (app, held["pid"])]:
+                    del self.behind[key]
             self.held = self.away = self.episode = self.input = None
             self.launch.pop(app, None)
             return actions
@@ -1209,6 +1268,8 @@ class FocusGuard:
                 finally:
                     FLICK_UNTIL[0] = time.monotonic() + 0.3
                     x.close()
+            if step == "overlay-cycle":
+                return self.overlay_cycle(app, sent)
             if step == "configurator":
                 if self.agent_dir is None:
                     return "skipped, no DevTools (agent dir unknown)", False
@@ -1237,6 +1298,87 @@ class FocusGuard:
                 x.close()
         except (AgentError, OSError, ValueError, struct.error) as e:
             return "failed%s: %s" % (" after the first write" if sent[0] else "", e), sent[0]
+
+    QAM_JS = "globalThis.SteamUIStore?.WindowStore?.GamepadUIMainWindowInstance?.MenuStore"
+
+    def overlay_cycle(self, app, sent):
+        """Open Steam's Quick Access Menu over the game and close it again through Steam's own UI (the menu store the
+        QAM button uses), so Steam runs its overlay open/close for the game. Returns (what it did, acted). Counted as
+        acted from the open request on (Steam may have opened it even if DevTools did not answer); the close is tried
+        CLOSE_TRIES times, and left alone when the user pressed Guide/QAM or used Steam's UI during the cycle."""
+        if self.agent_dir is None:
+            return "skipped, no DevTools (agent dir unknown)", False
+        store = self.QAM_JS
+        start = self.clock()  # before the probe: a user press while it is pending counts too
+        probe = cdp_eval(self.agent_dir, "typeof (%s)?.OpenQuickAccessMenu === 'function' && "
+                         "typeof (%s)?.CloseSideMenus === 'function'" % (store, store),
+                         await_promise=False, timeout=5).get("value")
+        if probe is not True:
+            return "skipped, no MenuStore.OpenQuickAccessMenu/CloseSideMenus", False
+        if self.user_since(start):
+            return "skipped, the user pressed %s meanwhile" % self.user_since(start), False
+        sent[0] = True
+        FLICK_UNTIL[0] = time.monotonic() + self.QAM_OPEN + self.QAM_BACK + self.CLOSE_TRIES + 1.0
+        during, opened = None, "open failed"
+        try:
+            opened = cdp_eval(self.agent_dir, "(%s).OpenQuickAccessMenu(), 'opened'" % store,
+                              await_promise=False, timeout=5).get("value")
+            time.sleep(self.QAM_OPEN)
+            during = self.focused_now()
+        finally:
+            closed = None
+            for attempt in range(1, self.CLOSE_TRIES + 1):
+                users = self.user_since(start)
+                if users:  # the menu is the user's now: never closed, and the cycle explains no steal (acted False)
+                    closed = "left open: the user pressed %s during the cycle" % users
+                    sent[0] = False
+                    FLICK_UNTIL[0] = time.monotonic() + 0.3
+                    break
+                try:
+                    cdp_eval(self.agent_dir, "(() => { const ms = %s; if (typeof ms?.CloseSideMenus !== 'function') "
+                             "throw new Error('no CloseSideMenus'); ms.CloseSideMenus(); return 'closed'; })()" % store,
+                             await_promise=False, timeout=5)  # a missing store is a failed try, not a silent success
+                    closed = "closed" if attempt == 1 else "closed (try %d)" % attempt
+                    break
+                except (AgentError, OSError, ValueError) as e:
+                    closed = "close try %d failed: %s" % (attempt, e)
+                    time.sleep(1.0)
+            if self.user_since(start):  # also on the exception path: a user menu is never counted as our step's
+                sent[0] = False
+        if closed and closed.startswith("left open"):
+            return "QAM %s, %s" % (opened, closed), False
+        after = None
+        deadline = time.monotonic() + self.QAM_BACK
+        while time.monotonic() < deadline:
+            after = self.focused_now()
+            if after == [app]:
+                break
+            time.sleep(0.2)
+        FLICK_UNTIL[0] = time.monotonic() + 0.3
+        users = self.user_since(start)  # a user menu right after our close is the user's, not our step's steal
+        return ("QAM %s (focus %s after %.1f s), %s, focus %s%s" % (
+            opened, during, self.QAM_OPEN, closed, after, "; then the user pressed %s" % users if users else "")), \
+            not users
+
+    def user_since(self, start):
+        """The user's Guide/QAM press (agent input filtered) or real input on Steam's UI at or after start, else None."""
+        menu, user = self.user_menu(), self.user_input()
+        if menu and menu[0] >= start:
+            return menu[1]
+        if user is not None and user >= start:
+            return "on Steam's UI"
+        return None
+
+    @staticmethod
+    def focused_now():
+        try:
+            x = X(os.environ.get("DISPLAY"))
+            try:
+                return x.prop(x.root, "GAMESCOPE_FOCUSED_APP")
+            finally:
+                x.close()
+        except (OSError, struct.error):
+            return None
 
     def apply(self, actions, control_busy=False):
         steam = os.environ.get("DISPLAY")
@@ -2318,6 +2460,40 @@ def steam_shortcut_state(agent_dir, game_id, timeout=6):
         if state == "ready" or time.monotonic() >= deadline:
             return state
         time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+STEAM_READY_MIN_AGE = 60
+
+
+def steam_ready_state(agent_dir):
+    """The client's launch readiness, read once (upstream DroidDeck 6bcd431ca #2362: the
+    app store is initialized and ContinueGameAction exists) plus the age of Steam's
+    shared JS context in seconds (performance.now() of SharedJSContext: it starts when
+    the client UI loads and restarts with a web helper reload). W3 launched within
+    about 40 s of a session start lost its input after Steam took the front 2-4 times
+    during the logos (rt-shader-stats-1111 L2/L3, w3-rtx-split-1112 B/C, 2026-11-11)."""
+    expression = """(() => {
+        const store = globalThis.appStore;
+        return JSON.stringify({
+            initialized: !!store?.m_bIsInitialized,
+            continueAction: typeof globalThis.SteamClient?.Apps?.ContinueGameAction === 'function',
+            apps: Array.isArray(store?.allApps) ? store.allApps.length : -1,
+            age: Math.floor((globalThis.performance?.now?.() ?? 0) / 1000),
+        });
+    })()"""
+    value = cdp_eval(agent_dir, expression, await_promise=False, timeout=3).get("value")
+    state = json.loads(value) if isinstance(value, str) else {}
+    if not isinstance(state, dict):
+        state = {}
+    return {"initialized": state.get("initialized") is True,
+            "continueAction": state.get("continueAction") is True,
+            "apps": state.get("apps") if isinstance(state.get("apps"), int) else -1,
+            "age": state.get("age") if isinstance(state.get("age"), int) else 0}
+
+
+def steam_ready(agent_dir, min_age=0):
+    state = steam_ready_state(agent_dir)
+    return state["initialized"] and state["continueAction"] and state["age"] >= min_age, state
+
+
 def run_steam_shortcut(agent_dir, game_id, timeout=45):
     """Start a shortcut the way the client's Play button does (SteamClient.Apps.RunGame).
 
@@ -2698,6 +2874,20 @@ def main(argv):
             return 3
         print("droiddeck-agent: started shortcut app %d through RunGame" % started["appId"])
         return 0
+    if argv and argv[0] == "--steam-ready":
+        # Exit 0 ready (store initialized, ContinueGameAction, UI age >= min-age), 1 not yet
+        # or unknown. One read, bounded by the 3-s DevTools timeout; the caller loops.
+        if len(argv) > 2 or (len(argv) == 2 and not (argv[1].isascii() and argv[1].isdecimal())):
+            print("usage: droiddeck-agent --steam-ready [min-ui-age-seconds]", file=sys.stderr)
+            return 2
+        try:
+            ready, state = steam_ready(Path(base) / "agent", int(argv[1]) if len(argv) == 2 else 0)
+        except (AgentError, OSError, ValueError) as error:
+            print("droiddeck-agent: Steam readiness unknown: %s" % error)
+            return 1
+        print("ready=%d initialized=%d continueAction=%d apps=%d age=%d" % (
+            ready, state["initialized"], state["continueAction"], state["apps"], state["age"]))
+        return 0 if ready else 1
     serve(Path(base) / "agent", focus="--no-focus" not in argv)
     return 0
 
