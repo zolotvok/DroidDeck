@@ -111,7 +111,7 @@ class PanvkOwnSlotTest {
         val before = snapshot(foreign)
         val legacyStore = snapshot(File(tmp, "panvk"))
         val host = FakeHost(zip("v2"), "v2")
-        install("v1", host = host)
+        install("v1", source = PanvkPackage.SOURCE_BUNDLED, host = host)
         assertEquals("upgraded", PanvkPackage.ensureCurrent(layout, host, legacy))
         PanvkPackage.rollback(layout, host)
         PanvkPackage.reset(layout, host)
@@ -179,8 +179,11 @@ class PanvkOwnSlotTest {
     }
 
     @Test fun ensureCurrentUpgradesAnOlderManagedSlotButNeverDowngrades() {
-        install("v26.3.1-234-236")
         val host = FakeHost(zip("v26.3.1-234-237"), "v26.3.1-234-237")
+        // a chosen (adb) older install is not replaced by the APK's newer bundle (review M2); a slot the APK filled is
+        install("v26.3.1-234-236")
+        assertEquals("current", PanvkPackage.ensureCurrent(layout, host, legacy))
+        install("v26.3.1-234-236", source = PanvkPackage.SOURCE_BUNDLED)
         assertEquals("upgraded", PanvkPackage.ensureCurrent(layout, host, legacy))
         val status = PanvkPackage.status(layout, host)
         assertEquals("v26.3.1-234-237", status.version)

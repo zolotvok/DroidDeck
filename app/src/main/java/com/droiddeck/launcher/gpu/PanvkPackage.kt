@@ -166,7 +166,8 @@ object PanvkPackage {
         if (!creating) {
             val state = readJson(File(layout.store, STATE))?.takeIf { it.optString("soMd5") == liveMd5 }
             val stale = liveMd5 in staleMd5
-            val newer = state != null && compareVersions(bundled.version, state.optString("version")) > 0
+            // Only a slot the APK filled follows the APK: a rollback or a chosen older install stays (review M2).
+            val newer = state != null && state.optString("source") == SOURCE_BUNDLED && compareVersions(bundled.version, state.optString("version")) > 0
             if (!stale && !newer) return@synchronized if (migrated) "migrated" else "current"
         }
         val prepared = host.openBundled()?.use { prepare(layout, it, bundled.sha256) }
