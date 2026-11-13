@@ -30,6 +30,7 @@ object GameEnvironmentStore {
     fun readLenient(context: Context): GameEnvironment.Config = readLenientOrNull(context) ?: GameEnvironment.Config()
 
     /** [readLenient], but null when the file exists and cannot be read or parsed (a caller keeps its last good copy). */
+    @Synchronized
     fun readLenientOrNull(context: Context): GameEnvironment.Config? {
         val bytes = try {
             AtomicFile(File(context.filesDir, SETTINGS)).readFully()

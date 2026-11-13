@@ -247,7 +247,7 @@ object GameThreadHints {
     internal fun lowestLimit(vararg limits: Int): Int = limits.filter { it > 0 }.minOrNull() ?: 0
 
     private val CAP_KEYS = listOf("VKD3D_FRAME_RATE", "DXVK_FRAME_RATE")
-    private val DXVK_MAX_FRAME_RATE = Regex("""^\s*(?:dxvk|d3d9)\.maxFrameRate\s*=\s*(-?[0-9]+)\s*$""")
+    private val DXVK_MAX_FRAME_RATE = Regex("""^\s*(?:dxvk|d3d9|dxgi)\.maxFrameRate\s*=\s*(-?[0-9]+)\s*$""")
 
     /**
      * The frame cap game [scope]'s environment sets (its own entry over the shared one, as
