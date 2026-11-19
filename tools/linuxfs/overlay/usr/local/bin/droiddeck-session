@@ -18,6 +18,7 @@ if [ -n "${BL_LOG:-}" ] && [ -z "${BL_INSIDE:-}" ]; then
   exec > >({ "$dd" of="$BL_LOG" oflag=append conv=notrunc iflag=count_bytes count="${BL_LOG_CAP:-268435456}" bs=65536 status=none; cat >/dev/null; }) 2>&1
   echo "== droiddeck-session $(date) mode=$mode $*"
   echo "== uid=$(id -u) size=${BL_WIDTH:-?}x${BL_HEIGHT:-?} icd=${VK_ICD_FILENAMES:-none}"
+  echo "== vendor Vulkan HAL names: ${MALI_BRIDGE_HAL_NAMES:-none} (the bridge logs the file it takes as 'mali-bridge: vendor HAL:')"
   echo "== gamescope: $(gamescope --version 2>&1 | head -1) at $(command -v gamescope)"
   echo "== rootfs: $(cat /.version 2>/dev/null || echo unversioned)"
 fi

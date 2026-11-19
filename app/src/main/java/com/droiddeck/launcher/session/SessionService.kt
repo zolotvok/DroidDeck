@@ -820,6 +820,9 @@ class SessionService : Service() {
         LinuxVulkanDriver.resolveIcdPath(this, gameDriverId)
             ?.let { guest.add(LinuxVulkanDriver.ENV_GAMES + "=" + it) }
         LinuxVulkanDriver.bridgeIcdPath(this)?.let { guest.add(LinuxVulkanDriver.ENV_BRIDGE + "=" + it) }
+        // The bridge ICD looks for the vendor Vulkan HAL under these names first (Oppo/others may not ship vulkan.mali.so).
+        com.droiddeck.launcher.gpu.VendorVulkanHal.names().takeIf { it.isNotEmpty() }
+            ?.let { guest.add(com.droiddeck.launcher.gpu.VendorVulkanHal.ENV + "=" + it) }
         SessionState.sessionDriver = linuxDriverId.ifEmpty { null }
         SessionState.gameDriver = gameDriverId.ifEmpty { null }
         val tuOverride = tuDebugOverride()

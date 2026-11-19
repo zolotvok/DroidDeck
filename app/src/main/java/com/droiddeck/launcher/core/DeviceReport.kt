@@ -188,6 +188,20 @@ object DeviceReport {
         k("KGSL chip id", readSys("/sys/class/kgsl/kgsl-3d0/gpu_chipid"))
         k("System Vulkan ICD", if (File("/vendor/lib64/hw/vulkan.adreno.so").exists()) "/vendor/lib64/hw/vulkan.adreno.so" else "not at the usual path")
 
+        h("Vendor Vulkan HAL (Mali bridge)")
+        for ((key, value) in runCatching { com.droiddeck.launcher.gpu.VendorVulkanHal.properties() }.getOrDefault(emptyList())) k(key, value)
+        val halFiles = runCatching { com.droiddeck.launcher.gpu.VendorVulkanHal.files() }.getOrNull()
+        k("HAL by the bridge's order", runCatching { com.droiddeck.launcher.gpu.VendorVulkanHal.resolve() }.getOrNull()
+            ?: if (halFiles?.contains("not readable") == true) "unknown (a hw dir is not readable by the app)" else "no vulkan.*.so file found")
+        k("HAL files", halFiles)
+        // Only the cached query: running the Vulkan driver here (session start, app process) could crash the session.
+        val vk = com.droiddeck.launcher.gpu.VulkanInfo.cachedOrNull()
+        if (vk == null) k("Android Vulkan device", "not queried (open Drivers or the GPU panel once)") else {
+            k("Android Vulkan device", vk["device"] ?: vk["error"])
+            k("  API / driver version", "${vk["api"] ?: "?"} / ${vk["driver_version"] ?: "?"}")
+            k("  driver info", vk["driver_info"]?.take(120))
+        }
+
         h("Display")
         k("Session output", SessionState.outputSize?.let { "${it.first}x${it.second}" })
         k("Session refresh", String.format(Locale.US, "%.2f Hz", SessionState.refreshHz))
@@ -248,6 +262,16 @@ object DeviceReport {
         val broken = runCatching { com.droiddeck.launcher.runtime.RuntimeHealth.brokenLibraryLinks(context) }.getOrDefault(emptyList())
         k("Broken library links", if (broken.isEmpty()) "none" else "${broken.size}: ${broken.take(8).joinToString()}")
         k("Runtime root", LinuxRuntime.rootDir(context).path)
+
+        h("Steam and Proton")
+        runCatching {
+            val root = LinuxRuntime.rootDir(context)
+            val x64 = SessionPrefs.activeSteamClientArch(context) == "x86_64"
+            for ((key, value) in SteamProtonReport.steamState(root, x64)) k(key, value)
+            k("Windows compat tools", SteamProtonReport.windowsTools(root).joinToString("; ").ifEmpty { "none" })
+            for ((name, state) in SteamProtonReport.protonApps(root)) k("  $name", state)
+            k("  Proton from the app", DesktopCatalog.installed(context, DesktopCatalog.PROTON_SEED_ID) ?: "not installed")
+        }.onFailure { k("Steam and Proton", "could not read: ${it.javaClass.simpleName}") }
 
         h("Settings in effect")
         k("Client core override", SessionPrefs.clientCpusOverride(context))
