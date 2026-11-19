@@ -545,9 +545,9 @@ class SessionMaliDefaultsTest(unittest.TestCase):
                                  capture_output=True, check=True).stdout
             return dict(line.split("=", 1) for line in out.splitlines())
 
-    def test_panvk_session_defaults_to_software_menus_and_panvk_light(self):
+    def test_panvk_session_defaults_to_gpu_menus_and_panvk_light(self):
         self.assertEqual(self.session("libvulkan_panfrost.so"), {
-            "BL_STEAM_SOFTWARE_MENUS": "1", "PANVK_DEBUG": "no_gs,no_tess,noafbc,no_crc",
+            "BL_STEAM_SOFTWARE_MENUS": "unset", "PANVK_DEBUG": "no_gs,no_tess,noafbc,no_crc",
             "PANVK_KBASE_HEAP_RENEW_INTERVAL": "32", "VKD3D_DISABLE_EXTENSIONS": "VK_EXT_present_timing"})
 
     def test_the_users_own_values_win(self):
@@ -556,6 +556,10 @@ class SessionMaliDefaultsTest(unittest.TestCase):
         self.assertEqual(got["PANVK_DEBUG"], "")
         self.assertEqual(got["VKD3D_DISABLE_EXTENSIONS"], "X")
         self.assertEqual(self.session("libvulkan_panfrost.so", BL_STEAM_SOFTWARE_MENUS="0")["BL_STEAM_SOFTWARE_MENUS"], "0")
+        self.assertEqual(self.session("libvulkan_panfrost.so", BL_STEAM_SOFTWARE_MENUS="1")["BL_STEAM_SOFTWARE_MENUS"], "1")
+
+    def test_mali_bridge_session_still_draws_the_menus_in_software(self):
+        self.assertEqual(self.session("libvulkan_mali_bridge.so")["BL_STEAM_SOFTWARE_MENUS"], "1")
 
     def test_other_session_drivers_are_untouched(self):
         self.assertEqual(set(self.session("libvulkan_freedreno.so").values()), {"unset"})
