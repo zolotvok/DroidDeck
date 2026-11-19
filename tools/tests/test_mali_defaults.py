@@ -602,7 +602,7 @@ class EnvDefaultsManifestTest(unittest.TestCase):
 
     def test_the_shipped_manifest_is_valid_and_keeps_every_built_in_recipe(self):
         version, recipes = MALI["load_manifest"](MANIFEST)
-        self.assertRegex(version, r"^2026\.11\.07\.[0-9]+$")
+        self.assertRegex(version, r"^2026\.11\.19\.[0-9]+$")
         self.assertEqual(set(recipes), set(MALI["RECIPES"]))
         for key, built_in in MALI["RECIPES"].items():
             self.assertEqual(recipes[key].env, built_in.env, key)
@@ -633,12 +633,18 @@ class EnvDefaultsManifestTest(unittest.TestCase):
                     self.assertNotIn("nvapi", recipe.env.get("WINEDLLOVERRIDES", "").lower())
                     if key != "steam:782330":
                         self.assertNotIn("MALI_COMPAT_VENDOR_ID", recipe.env)
-            self.assertEqual(source["steam:782330"].env, {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1"})
+            self.assertEqual(source["steam:782330"].env, {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1",
+                                                          "MALI_COMPAT_DESC_POOL_SCALE": "8", "MALI_COMPAT_BDA_EXT": "1"})
             # 752c09f's limit overrides are opt-in since layer 11-07 (they break Watch Dogs 2): DOOM both, RE Village the clamp
             self.assertEqual(source["steam:1196590"].env, {"MALI_COMPAT_FAKE_ALIGN": "1"})
+            # 2026.11.19.1: The Witcher 3 and Watch Dogs were measured with both overrides (integ-night-1111, wrap-1111)
+            fake = {"steam:782330": {"MALI_COMPAT_FAKE_LIMITS"}, "steam:1196590": {"MALI_COMPAT_FAKE_ALIGN"},
+                    "steam:292030": {"MALI_COMPAT_FAKE_LIMITS"}, "epic:Jasper": {"MALI_COMPAT_FAKE_LIMITS"}}
             for key, recipe in source.items():
-                if key not in ("steam:782330", "steam:1196590"):
-                    self.assertFalse([n for n in recipe.env if n in ("MALI_COMPAT_FAKE_LIMITS", "MALI_COMPAT_FAKE_ALIGN", "MALI_COMPAT_FAKE_SUBGROUP")], key)
+                self.assertEqual({n for n in recipe.env if n in ("MALI_COMPAT_FAKE_LIMITS", "MALI_COMPAT_FAKE_ALIGN", "MALI_COMPAT_FAKE_SUBGROUP")},
+                                 fake.get(key, set()), key)
+            # never for Watch Dogs 2: the overrides break it
+            self.assertFalse([n for n in source["epic:Angelonia"].env if n.startswith("MALI_COMPAT_FAKE_")])
         for game in raw["games"].values():
             for pending in game.get("pending", []):
                 self.assertNotIn("MALI_COMPAT_VENDOR_ID", pending["env"])

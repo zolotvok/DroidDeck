@@ -61,6 +61,9 @@ RECIPES = {
         UBISOFT_SYNC,
         MALI_COMPAT_WLS_CLAMP="all",
         MALI_WSI_ASYNC_PRESENT="1",
+        # 2026.11.19.1: the old limit overrides (REAL_LIMITS was slower, 11-11) and no vsync wait (the 11-05 winner).
+        MALI_COMPAT_FAKE_LIMITS="1",
+        DXVK_CONFIG="dxgi.syncInterval = 0",
     )),
     "epic:Calluna": Recipe("Control", {
         "MALI_WSI_ASYNC_PRESENT": "1",
@@ -76,6 +79,8 @@ RECIPES = {
         "WINEESYNC": "0",
         "WINEFSYNC": "0",
         "MALI_COMPAT_FB_MASK": FB_MASK,
+        # The boot-freeze fix (control-tsobisect-1113: 5/5 clean boots with the vector key alone; user default 11-13).
+        "FEX_VECTORTSOENABLED": "1",
     }, note="tested on the game's Low preset (renderer.ini); the app does not change game settings"),
     "steam:1245620": Recipe("Elden Ring", {
         "VKD3D_FEATURE_LEVEL": "12_1",
@@ -91,6 +96,10 @@ RECIPES = {
         FEX_EXTENDEDVOLATILEMETADATA="witcher3.exe;1e447c0-1e4487e;1e447c3,1e447df,1e447ec,1e447ef,1e447ff,1e44814,1e44831,"
                                      "1e44852,1e44871,1e44878",
         MALI_COMPAT_FB_MASK=FB_MASK,
+        # 2026.11.19.1: 30.0 -> 34.9 fps (11-07; this game only, it breaks Watch Dogs 1 and 2), and the limits every
+        # DX12 / ray tracing run since integ-night-1111 was measured with (harmless with ray tracing off).
+        FEX_HOSTFEATURES="disableafp",
+        MALI_COMPAT_FAKE_LIMITS="1",
     )),
     "steam:1151640": Recipe("Horizon Zero Dawn", {
         "MALI_COMPAT_NO_SUSPEND_RESUME": "1",
@@ -109,7 +118,9 @@ RECIPES = {
     )),
     "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1"}),
     # The only GPU vendor spoof: DOOM Eternal's launcher accepts NVIDIA/AMD/Intel only (doom_eternal.md). Never global.
-    "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1"},
+    # 2026.11.19.1: DESC_POOL_SCALE (dd1106 WIN: the title is reached) and BDA_EXT (doom-gfx-1112: the textures appear).
+    "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1",
+                                            "MALI_COMPAT_DESC_POOL_SCALE": "8", "MALI_COMPAT_BDA_EXT": "1"},
                            note="reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts "
                                 "NVIDIA/AMD/Intel GPUs only"),
     # Vulkan ray queries: BL_RT_VULKAN=1 makes droiddeck-game-env / droiddeck-fex pad and scale the descriptor pools
