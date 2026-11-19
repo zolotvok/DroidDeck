@@ -593,7 +593,7 @@
     <string name="rt_vulkan_hint">Hardveres sugárkövetés Vulkan-játékokhoz, például a Quake II RTX-hez, a Mali rendszer-illesztővel. A DX12-es sugárkövetés még nem támogatott. A Quake II RTX-nél alapból be van kapcsolva; a játék saját beállítása az erősebb. A következő játékindításkor lép életbe.</string>
     <string name="rt_vulkan_a11y">Sugárkövetés kapcsoló Vulkan-játékokhoz, például a Quake II RTX-hez. A DX12-es sugárkövetés nem támogatott.</string>
     <string name="rt_dxr">Sugárkövetés: DX12-játékok (DXR)</string>
-    <string name="rt_dxr_hint">A DX12-es sugárkövetés egy Blobferry-frissítéssel érkezik; a kapcsoló már most beállítható. %1$s</string>
+    <string name="rt_dxr_hint">Bekapcsolja a DX12-es sugárkövetést a Mali rendszerillesztőn futó játékokban, ha a telepített Blobferry támogatja. Egy játék saját VKD3D_CONFIG-ja elsőbbséget élvez. %1$s</string>
     <string name="rt_dxr_a11y">Sugárkövetés kapcsoló DX12-játékokhoz. Csak akkor működik, ha a telepített Blobferry támogatja.</string>
     <string name="rt_dxr_not_implemented">DX12-es sugárkövetés: ebben a Blobferry-verzióban nincs megvalósítva.</string>
     <string name="rt_dxr_supported">DX12-es sugárkövetés: elérhető.</string>

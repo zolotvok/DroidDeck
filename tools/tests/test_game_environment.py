@@ -2235,16 +2235,41 @@ class LaunchChainOomTest(unittest.TestCase):
 
 
 class RayTracingTest(unittest.TestCase):
-    def test_vulkan_ray_query_pads_pools_user_keys_win_and_dxr_sets_nothing(self):
+    def test_vulkan_ray_query_pads_pools_user_keys_win_and_dxr_off_the_bridge_sets_only_the_layer_keys(self):
         rt = MODULE["ray_tracing"]
         self.assertEqual(rt({"A": "1"}), {"A": "1"})
         on = rt({"BL_RT_VULKAN": "1", "MALI_COMPAT_DESC_POOL_PAD": "2"})
         self.assertEqual((on["MALI_COMPAT_DESC_POOL_PAD"], on["MALI_COMPAT_DESC_POOL_SCALE"]), ("2", "8"))
         self.assertNotIn("MALI_COMPAT_DESC_POOL_PAD", rt({"BL_RT_VULKAN": "0"}))
-        dxr = rt({"BL_DXR": "1"})
-        self.assertEqual(dxr, {"BL_DXR": "1", "MALI_COMPAT_RT_PIPELINE": "1"})
+        dxr = rt({"BL_DXR": "1", "VKD3D_CONFIG": "nodxr"})
+        self.assertEqual(dxr, {"BL_DXR": "1", "VKD3D_CONFIG": "nodxr", "MALI_COMPAT_RT_PIPELINE": "1", "MALI_COMPAT_RT_SIZE_PAD": "0"})
         self.assertEqual(rt({"BL_DXR": "1", "MALI_COMPAT_RT_PIPELINE": "0"})["MALI_COMPAT_RT_PIPELINE"], "0")
-        self.assertNotIn("VKD3D_CONFIG", dxr)
+
+    def test_dxr_on_the_bridge_swaps_nodxr_for_the_dxr_flags_only_with_a_supporting_blobferry(self):
+        rt = MODULE["ray_tracing"]
+        bridge = {"BL_DXR": "1", "ENABLE_MALI_COMPAT": "1", "VKD3D_CONFIG": "no_upload_hvv,nodxr,extra_rtas_sync,dxr"}
+        with tempfile.TemporaryDirectory() as tmp:
+            caps = Path(tmp) / "capabilities.json"
+            with mock.patch.dict(rt.__globals__, BLOBFERRY_CAPABILITIES=str(caps)):
+                self.assertEqual(rt(bridge)["VKD3D_CONFIG"], bridge["VKD3D_CONFIG"])  # no file
+                for text, flags in (('{"dxr": "not_implemented"}', bridge["VKD3D_CONFIG"]), ("not json", bridge["VKD3D_CONFIG"]),
+                                    ('{"capabilities": {"rt_pipeline": "supported"}}', "dxr,dxr11,no_upload_hvv,extra_rtas_sync"),
+                                    ('{"dxr": "supported"}', "dxr,dxr11,no_upload_hvv,extra_rtas_sync")):
+                    caps.write_text(text)
+                    self.assertEqual(rt(bridge)["VKD3D_CONFIG"], flags, text)
+                self.assertEqual(rt(dict(bridge, VKD3D_CONFIG=""))["VKD3D_CONFIG"], "dxr,dxr11,no_upload_hvv,extra_rtas_sync")
+                self.assertEqual(rt(dict(bridge, VKD3D_CONFIG="nodxr"), (), "292030")["VKD3D_CONFIG"],
+                                 "dxr,dxr11,no_upload_hvv,single_queue,extra_rtas_sync")
+                self.assertEqual(rt(bridge, {"VKD3D_CONFIG"})["VKD3D_CONFIG"], bridge["VKD3D_CONFIG"])
+                self.assertEqual(rt(dict(bridge, BL_DXR="0")), dict(bridge, BL_DXR="0"))
+
+    def test_own_keys_are_the_games_entry_and_the_users_shared_names(self):
+        own = MODULE["own_keys"]
+        config = {"userShared": ["VKD3D_CONFIG", 3], "games": {"1": {"BL_DXR": "1"}, "2": {"X": "1"}}}
+        self.assertEqual(own(config, "1"), {"VKD3D_CONFIG", "BL_DXR"})
+        self.assertEqual(own(None, "1"), set())
+        self.assertEqual(own(False, "1"), set())
+        self.assertEqual(own({"games": []}, "1"), set())
 
 if __name__ == "__main__":
     unittest.main()

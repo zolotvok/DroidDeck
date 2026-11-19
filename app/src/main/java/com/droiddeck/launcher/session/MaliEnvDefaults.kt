@@ -20,7 +20,7 @@ import java.security.MessageDigest
  * tools/tests/data/env-defaults-cases.json).
  *
  * Games are keyed by `steam:<app id>` or `<store>:<store id>`, never by a per-install Steam shortcut id. Only `env`
- * applies; `pending` entries are documentation. Names that load code or move a game's files are refused, and a path
+ * and `env2` apply (`env2`: the [ENV2_NAMES] that older apps refuse; they skip the field); `pending` entries are documentation. Names that load code or move a game's files are refused, and a path
  * value must stay under /usr/share/droiddeck-mali. The user's own keys (the game's entry, the user's shared settings,
  * published as `userShared`) always win; that merge is the guest's (droiddeck-mali-defaults.recipe).
  *
@@ -47,6 +47,10 @@ object MaliEnvDefaults {
     private val ENV_NAME = Regex("[A-Z][A-Z0-9_]{0,63}")
     private val ENV_PREFIXES = listOf("MALI_COMPAT_", "MALI_WSI_", "DXVK_", "VKD3D_", "PROTON_", "WINE", "FEX_", "BL_")
     private val ENV_NAMES = setOf("MALI_DEBUG_CONFIG")
+    /** Exact names that apps up to v0.3.1 (0.6.9-mali.3) refuse in `env` (they would refuse the whole manifest): only in a
+     *  game's `env2`, which those apps skip, and never in `env`. Newer apps apply `env2` after `env`
+     *  (droiddeck-mali-defaults.ENV2_NAMES). [keeper, Claude Opus 5.5] 2026-11-19 */
+    val ENV2_NAMES = setOf("GAMESCOPE_WSI_FRAME_LIMITER_AWARE", "BANNER_AUDIO_DIRECT_MS", "BANNER_AUDIO_DIRECT_PERIOD_MS")
     val ENV_DENIED = setOf(
         "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEDLLPATH", "WINEARCH", "PROTON_LOG_DIR", "PROTONPATH",
         "FEX_ROOTFS", "FEX_THUNKHOSTLIBS", "FEX_THUNKGUESTLIBS", "FEX_THUNKCONFIG", "FEX_APP_CONFIG", "FEX_APP_CONFIG_LOCATION",
@@ -90,9 +94,12 @@ object MaliEnvDefaults {
 
     // ---- validation (the same rules as droiddeck-mali-defaults.parse_manifest) ----
 
-    fun checkEnv(name: String, value: Any?): String? {
+    fun checkEnv(name: String, value: Any?, env2: Boolean = false): String? {
         if (!ENV_NAME.matches(name)) return "bad name '$name'"
-        if (name in ENV_DENIED || !(name in ENV_NAMES || ENV_PREFIXES.any { name.startsWith(it) })) return "$name is not allowed in env defaults"
+        if (env2 && name !in ENV2_NAMES) return "$name is not allowed in env2 (only ${ENV2_NAMES.joinToString()})"
+        if (!env2 && (name in ENV_DENIED || !(name in ENV_NAMES || ENV_PREFIXES.any { name.startsWith(it) }))) {
+            return "$name is not allowed in env defaults" + if (name in ENV2_NAMES) " (it goes in env2)" else ""
+        }
         if (value !is String || value.length > MAX_VALUE || value.any { it.code < 0x20 || it.code == 0x7f }) return "$name: bad value"
         if (value.startsWith("/") || DRIVE_PATH.matches(value)) {
             if ('\\' in value || "/../" in "$value/" || PATH_ROOTS.none { value.startsWith(it) }) return "$name: a path outside /usr/share/droiddeck-mali"
@@ -118,11 +125,12 @@ object MaliEnvDefaults {
             val title = game.opt("title") as? String
             if (title.isNullOrEmpty() || title.length > 128) bad("$key: bad title")
             val env = game.opt("env") as? JSONObject ?: bad("$key: env must be an object")
-            if (env.length() > MAX_KEYS) bad("$key: more than $MAX_KEYS keys")
+            val env2 = if (game.has("env2")) game.opt("env2") as? JSONObject ?: bad("$key: env2 must be an object") else JSONObject()
+            if (env.length() + env2.length() > MAX_KEYS) bad("$key: more than $MAX_KEYS keys in env and env2 together")
             val values = LinkedHashMap<String, String>()
-            for (name in env.keys()) {
-                checkEnv(name, env.opt(name))?.let { bad("$key: $it") }
-                values[name] = env.getString(name)
+            for ((names, extended) in listOf(env to false, env2 to true)) for (name in names.keys()) {
+                checkEnv(name, names.opt(name), extended)?.let { bad("$key: $it") }
+                values[name] = names.getString(name)
             }
             if (game.has("note") && !game.isNull("note") && (game.opt("note") !is String || game.getString("note").length > 512)) bad("$key: bad note")
             val prefix = if (game.has("prefix")) game.opt("prefix") as? JSONArray ?: bad("$key: prefix must be a list") else JSONArray()

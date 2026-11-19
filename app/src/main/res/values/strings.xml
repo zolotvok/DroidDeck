@@ -633,7 +633,7 @@
     <string name="rt_vulkan_hint">Hardware ray tracing for Vulkan games like Quake II RTX, on the Mali system driver. DX12 ray tracing is not supported yet. On for Quake II RTX by default; a game\'s own setting wins. Takes effect at the next game start.</string>
     <string name="rt_vulkan_a11y">Ray tracing switch for Vulkan games such as Quake II RTX. DX12 ray tracing is not supported.</string>
     <string name="rt_dxr">Ray tracing: DX12 games (DXR)</string>
-    <string name="rt_dxr_hint">DX12 ray tracing comes with a Blobferry update; the switch can be set now. %1$s</string>
+    <string name="rt_dxr_hint">Turns DX12 ray tracing on in games on the Mali system driver, when the installed Blobferry supports it. Your own VKD3D_CONFIG for a game wins. %1$s</string>
     <string name="rt_dxr_a11y">Ray tracing switch for DX12 games. Works only when the installed Blobferry supports it.</string>
     <string name="rt_dxr_not_implemented">DX12 ray tracing: not implemented in this Blobferry version.</string>
     <string name="rt_dxr_supported">DX12 ray tracing: available.</string>

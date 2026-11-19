@@ -90,6 +90,23 @@ class MaliEnvDefaultsTest {
         for (i in 0 until valid.length()) MaliEnvDefaults.parse(valid.getJSONObject(i).getJSONObject("manifest").toString().toByteArray())
     }
 
+    /** GAMESCOPE_WSI_FRAME_LIMITER_AWARE and the WD2 BANNER_AUDIO_DIRECT_* keys: only in `env2` (apps up to v0.3.1 skip
+     *  it; in `env` they refuse the whole manifest), applied after `env`; the shipped manifest keeps them out of `env`. */
+    @Test fun env2NamesApplyAndNeverSitInEnv() {
+        for (name in MaliEnvDefaults.ENV2_NAMES) {
+            assertTrue(name, MaliEnvDefaults.checkEnv(name, "0") != null)
+            assertEquals(name, null, MaliEnvDefaults.checkEnv(name, "0", env2 = true))
+        }
+        assertTrue(MaliEnvDefaults.checkEnv("VKD3D_CONFIG", "dxr", env2 = true) != null)
+        val bytes = JSONObject(String(manifest("2026.11.06.1"))).apply {
+            getJSONObject("games").getJSONObject("steam:1245620").put("env2", JSONObject().put("GAMESCOPE_WSI_FRAME_LIMITER_AWARE", "0"))
+        }.toString().toByteArray()
+        assertEquals(mapOf("VKD3D_FEATURE_LEVEL" to "12_1", "GAMESCOPE_WSI_FRAME_LIMITER_AWARE" to "0"),
+            MaliEnvDefaults.parse(bytes).games.getValue("steam:1245620").env)
+        val games = JSONObject(String(shipped.readBytes())).getJSONObject("games")
+        for (key in games.keys()) assertTrue(key, games.getJSONObject(key).getJSONObject("env").keys().asSequence().none { it in MaliEnvDefaults.ENV2_NAMES })
+    }
+
     @Test fun newestWinsAndTheGuestCopyFollows() {
         bundled = manifest("2026.11.06.1")
         assertEquals("bundled", MaliEnvDefaults.status(layout, host).source)

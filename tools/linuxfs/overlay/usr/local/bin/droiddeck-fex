@@ -745,7 +745,7 @@ def game_environment(env, command):
                 say("Mali defaults not applied (%s)" % error)
         env = game_env["apply_config"](env, config, str(app), fixes)
         env.pop(game_env["GAME_DRIVER"], None)
-        return game_env["ray_tracing"](env)
+        return game_env["ray_tracing"](env, game_env["own_keys"](config, str(app)), str(app))
     except FileNotFoundError:
         return env
     except Exception as error:

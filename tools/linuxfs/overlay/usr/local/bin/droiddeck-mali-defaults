@@ -147,6 +147,12 @@ GAME_KEY = re.compile(r"steam:[1-9][0-9]{0,9}|[a-z]{2,16}:[A-Za-z0-9._-]{1,128}"
 ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 ENV_PREFIXES = ("MALI_COMPAT_", "MALI_WSI_", "DXVK_", "VKD3D_", "PROTON_", "WINE", "FEX_", "BL_")
 ENV_NAMES = ("MALI_DEBUG_CONFIG",)
+# Exact names that apps up to v0.3.1 (0.6.9-mali.3) refuse in "env", where one of them would make those apps refuse the
+# whole manifest: they go only in a game's "env2", which older parsers never read (they skip unknown fields). Newer apps
+# apply "env2" after "env". Only these names may be in "env2", and none of them may be in "env" (the gate stays shut
+# for as long as old apps download the same asset). GAMESCOPE_WSI_FRAME_LIMITER_AWARE: the Witcher 3 / Village
+# warning-screen freeze fix; BANNER_AUDIO_DIRECT_*: the Watch Dogs 2 audio timing (11-12).
+ENV2_NAMES = ("GAMESCOPE_WSI_FRAME_LIMITER_AWARE", "BANNER_AUDIO_DIRECT_MS", "BANNER_AUDIO_DIRECT_PERIOD_MS")
 # Names that load code or move the game's files, and the defaults' own switches: never from a manifest.
 ENV_DENIED = frozenset((
     "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEDLLPATH", "WINEARCH", "PROTON_LOG_DIR", "PROTONPATH",
@@ -161,12 +167,14 @@ MAX_KEYS = 64
 MAX_VALUE = 1024
 
 
-def check_env(name, value):
-    """Why a manifest env entry is refused, or None."""
+def check_env(name, value, env2=False):
+    """Why a manifest env entry (env2: an "env2" entry) is refused, or None."""
     if not isinstance(name, str) or not ENV_NAME.fullmatch(name):
         return "bad name %r" % (name,)
-    if name in ENV_DENIED or not (name in ENV_NAMES or name.startswith(ENV_PREFIXES)):
-        return "%s is not allowed in env defaults" % name
+    if env2 and name not in ENV2_NAMES:
+        return "%s is not allowed in env2 (only %s)" % (name, ", ".join(ENV2_NAMES))
+    if not env2 and (name in ENV_DENIED or not (name in ENV_NAMES or name.startswith(ENV_PREFIXES))):
+        return "%s is not allowed in env defaults" % name + (" (it goes in env2)" if name in ENV2_NAMES else "")
     if not isinstance(value, str) or len(value) > MAX_VALUE or any(ord(c) < 0x20 or ord(c) == 0x7f for c in value):
         return "%s: bad value" % name
     if value.startswith("/") or re.match(r"[A-Za-z]:[/\\]", value):
@@ -200,12 +208,14 @@ def parse_manifest(data):
         title, env, note = game.get("title"), game.get("env"), game.get("note")
         if not isinstance(title, str) or not title or len(title) > 128:
             raise ValueError("%s: bad title" % key)
-        if not isinstance(env, dict) or len(env) > MAX_KEYS:
-            raise ValueError("%s: env must be an object of at most %d keys" % (key, MAX_KEYS))
-        for name, value in env.items():
-            problem = check_env(name, value)
-            if problem:
-                raise ValueError("%s: %s" % (key, problem))
+        env2 = game.get("env2", {})
+        if not isinstance(env, dict) or not isinstance(env2, dict) or len(env) + len(env2) > MAX_KEYS:
+            raise ValueError("%s: env and env2 must be objects of at most %d keys together" % (key, MAX_KEYS))
+        for names, extended in ((env, False), (env2, True)):
+            for name, value in names.items():
+                problem = check_env(name, value, extended)
+                if problem:
+                    raise ValueError("%s: %s" % (key, problem))
         if note is not None and (not isinstance(note, str) or len(note) > 512):
             raise ValueError("%s: bad note" % key)
         prefix = game.get("prefix", [])
@@ -220,7 +230,7 @@ def parse_manifest(data):
                 problem = check_env(name, value)
                 if problem:
                     raise ValueError("%s (pending): %s" % (key, problem))
-        recipes[key] = Recipe(title, dict(env), note, wpad="wpad-off" in prefix)
+        recipes[key] = Recipe(title, dict(env, **env2), note, wpad="wpad-off" in prefix)
     return version, recipes
 
 

@@ -691,6 +691,28 @@ class EnvDefaultsManifestTest(unittest.TestCase):
         values, notes, _ = self.er_recipe(bundled)
         self.assertEqual(values["VKD3D_FEATURE_LEVEL"], "12_1")
 
+    def test_env2_names_apply_on_new_apps_and_never_sit_in_env(self):
+        """GAMESCOPE_WSI_FRAME_LIMITER_AWARE and the WD2 BANNER_AUDIO_DIRECT_* keys: refused in "env" by every app up
+        to v0.3.1 (the whole manifest with them), so they go in "env2", which those apps skip."""
+        self.assertEqual(set(MALI["ENV2_NAMES"]), {"GAMESCOPE_WSI_FRAME_LIMITER_AWARE", "BANNER_AUDIO_DIRECT_MS",
+                                                   "BANNER_AUDIO_DIRECT_PERIOD_MS"})
+        for name in MALI["ENV2_NAMES"]:
+            self.assertIsNotNone(MALI["check_env"](name, "0"), name)
+            self.assertIsNone(MALI["check_env"](name, "0", True), name)
+        manifest = self.er("2026.11.06.1", "12_1")
+        manifest["games"]["steam:1245620"]["env2"] = {"GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0", "BANNER_AUDIO_DIRECT_MS": "60"}
+        values, _, _ = self.er_recipe(self.bundled(manifest))
+        self.assertEqual((values["VKD3D_FEATURE_LEVEL"], values["GAMESCOPE_WSI_FRAME_LIMITER_AWARE"], values["BANNER_AUDIO_DIRECT_MS"]),
+                         ("12_1", "0", "60"))
+        mine = {"version": 1, "games": {"1245620": {"GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "1"}}}
+        self.assertNotIn("GAMESCOPE_WSI_FRAME_LIMITER_AWARE", self.er_recipe(self.bundled(manifest), mine)[0])
+        manifest["games"]["steam:1245620"]["env"] = {"MALI_COMPAT_X%d" % i: "1" for i in range(63)}
+        with self.assertRaisesRegex(ValueError, "at most 64 keys together"):  # 63 + 2
+            MALI["parse_manifest"](json.dumps(manifest))
+        # the shipped manifest keeps env free of them (it is also what apps up to v0.3.1 download)
+        for key, game in json.loads(MANIFEST.read_text())["games"].items():
+            self.assertFalse(set(game["env"]) & set(MALI["ENV2_NAMES"]), key)
+
     def test_user_keys_win_over_the_defaults(self):
         bundled = self.bundled(self.er("2026.11.06.1", "12_1"))
         mine = {"version": 1, "userShared": ["VKD3D_FEATURE_LEVEL"], "shared": {"VKD3D_FEATURE_LEVEL": "12_2"}, "games": {}}
@@ -739,7 +761,8 @@ class EffectiveEnvTest(unittest.TestCase):
     """The whole merge for a launch on the bridge: session env < bridge (game_driver) < shared (the app's defaults and
     the user's shared keys) < engine fixes + Mali defaults (minus the user's keys) < the game's own entries."""
 
-    def launch(self, compat, exe, config):
+    def launch(self, compat, exe, config, dxr=None, inherited=None):
+        """dxr: the installed Blobferry's "dxr" capability (None: no capabilities file). inherited: extra launch env."""
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             prefix = home / "compatdata" / compat
@@ -757,10 +780,91 @@ class EffectiveEnvTest(unittest.TestCase):
             game.parent.mkdir(parents=True, exist_ok=True)
             game.write_bytes(b"")
             env = {k: v for k, v in os.environ.items() if not k.startswith(("WINE", "PROTON", "DROIDDECK", "BL_", "STEAM", "MALI", "FEX", "VK", "DXVK"))}
-            env.update(HOME=tmp, STEAM_COMPAT_DATA_PATH=str(prefix), BL_VK_GAME_DRIVER=str(icd))
-            result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun", str(game)],
-                                    env=env, text=True, capture_output=True, check=True)
+            env.update(HOME=tmp, STEAM_COMPAT_DATA_PATH=str(prefix), BL_VK_GAME_DRIVER=str(icd), **(inherited or {}))
+            caps = home / "capabilities.json"
+            if dxr is not None:
+                caps.write_text(json.dumps({"blobferry_version": "0.3.0", "rt_pipeline": dxr, "dxr": dxr}))
+            runner = home / "run.py"
+            runner.write_text("import runpy, sys\nmain = runpy.run_path(sys.argv[1])['main']\n"
+                              "main.__globals__['BLOBFERRY_CAPABILITIES'] = sys.argv[2]\n"
+                              "sys.argv = [sys.argv[1]] + sys.argv[3:]\nsys.exit(main())\n")
+            result = subprocess.run([sys.executable, str(runner), str(BIN / "droiddeck-game-env"), str(caps), str(probe),
+                                     "waitforexitandrun", str(game)], env=env, text=True, capture_output=True, check=True)
+            self.stderr = result.stderr
             return json.loads(result.stdout)
+
+    W3 = ("292030", "The Witcher 3/bin/x64_dx12/witcher3.exe")
+    # The proven W3 ray tracing env (docs/games/witcher3.md "Installed"; w3-rt-1116, release-gate-1115 R4 PASS)
+    W3_RT = {"VKD3D_CONFIG": "dxr,dxr11,no_upload_hvv,single_queue,extra_rtas_sync", "MALI_COMPAT_RT_PIPELINE": "1",
+             "MALI_COMPAT_RT_SIZE_PAD": "0"}
+
+    def w3(self, games=None, shared=None, user_shared=None, **launch):
+        config = {"version": 1, "shared": dict(GameEnvironment_defaults(), **(shared or {})), "games": games or {}}
+        if user_shared is not None:
+            config["userShared"] = user_shared
+        return self.launch(*self.W3, config, **launch)
+
+    def rt(self, game):
+        return {name: game.get(name) for name in self.W3_RT}
+
+    def test_witcher3_dxr_switch_alone_gives_the_proven_rt_env_on_the_defaults(self):
+        """The app's switch (BL_DXR=1 in the session) or the game's own BL_DXR entry, nothing else: the env defaults'
+        nodxr goes, the proven flags come, the bridge's no_upload_hvv stays, the defaults' other keys stay."""
+        for how, launch in (("session switch", dict(inherited={"BL_DXR": "1"})),
+                            ("game entry", dict(games={"292030": {"BL_DXR": "1"}}))):
+            with self.subTest(how=how):
+                game = self.w3(dxr="supported", **launch)
+                self.assertEqual(self.rt(game), self.W3_RT)
+                self.assertEqual(game["MALI_COMPAT_FAKE_LIMITS"], "1")
+                self.assertEqual(game["FEX_HOSTFEATURES"], "disableafp")
+                self.assertEqual(game["VKD3D_FEATURE_LEVEL"], "12_1")
+                self.assertIn("ray tracing (DXR): VKD3D_CONFIG=dxr,dxr11,no_upload_hvv,single_queue,extra_rtas_sync", self.stderr)
+
+    def test_witcher3_without_the_switch_keeps_dxr_off(self):
+        for launch in (dict(), dict(inherited={"BL_DXR": "0"}), dict(inherited={"BL_DXR": "1"}, games={"292030": {"BL_DXR": "0"}})):
+            with self.subTest(launch=launch):
+                game = self.w3(dxr="supported", **launch)
+                # unchanged: the env defaults' nodxr (it replaces the bridge's no_upload_hvv, as before)
+                self.assertEqual(game["VKD3D_CONFIG"], "nodxr")
+                self.assertNotIn("MALI_COMPAT_RT_PIPELINE", game)
+                self.assertNotIn("MALI_COMPAT_RT_SIZE_PAD", game)
+
+    def test_the_users_own_vkd3d_config_wins_over_the_dxr_switch(self):
+        own = "nodxr,single_queue"
+        for how, launch in (("game entry", dict(games={"292030": {"BL_DXR": "1", "VKD3D_CONFIG": own}})),
+                            ("shared", dict(inherited={"BL_DXR": "1"}, shared={"VKD3D_CONFIG": own},
+                                            user_shared=["VKD3D_CONFIG"]))):
+            with self.subTest(how=how):
+                game = self.w3(dxr="supported", **launch)
+                self.assertEqual(game["VKD3D_CONFIG"], own)
+                self.assertEqual(game["MALI_COMPAT_RT_PIPELINE"], "1")
+                self.assertIn("your own VKD3D_CONFIG is kept (nodxr, or no dxr: DXR stays off)", self.stderr)
+        game = self.w3(dxr="supported", games={"292030": {"BL_DXR": "1", "VKD3D_CONFIG": "dxr,dxr11"}})
+        self.assertEqual(game["VKD3D_CONFIG"], "dxr,dxr11")
+        self.assertIn("your own VKD3D_CONFIG is kept\n", self.stderr)
+        # Steam launch options stay below the env defaults (as before): their nodxr / dxr is replaced, the switch decides
+        for inherited in ("nodxr,single_queue", "dxr,dxr11"):
+            game = self.w3(dxr="supported", inherited={"BL_DXR": "1", "VKD3D_CONFIG": inherited})
+            self.assertEqual(game["VKD3D_CONFIG"], self.W3_RT["VKD3D_CONFIG"], inherited)
+        game = self.w3(dxr="supported", games={"292030": {"BL_DXR": "1", "MALI_COMPAT_RT_PIPELINE": "0",
+                                                          "MALI_COMPAT_RT_SIZE_PAD": "4"}})
+        self.assertEqual((game["MALI_COMPAT_RT_PIPELINE"], game["MALI_COMPAT_RT_SIZE_PAD"]), ("0", "4"))
+        self.assertEqual(game["VKD3D_CONFIG"], self.W3_RT["VKD3D_CONFIG"])
+
+    def test_other_dx12_games_get_the_dxr_flags_without_the_witcher3_single_queue(self):
+        game = self.launch("1151640", "HZD/HorizonZeroDawn.exe", {"version": 1, "shared": GameEnvironment_defaults(), "games": {}},
+                           dxr="supported", inherited={"BL_DXR": "1"})
+        self.assertEqual(game["VKD3D_CONFIG"], "dxr,dxr11,no_upload_hvv,extra_rtas_sync")
+        game = self.launch("1151640", "HZD/HorizonZeroDawn.exe", {"version": 1, "shared": GameEnvironment_defaults(), "games": {}},
+                           dxr="supported")
+        self.assertEqual(game["VKD3D_CONFIG"], "no_upload_hvv")
+
+    def test_no_dxr_flags_without_a_blobferry_that_supports_dxr(self):
+        for dxr in (None, "not_implemented"):
+            with self.subTest(dxr=dxr):
+                game = self.w3(dxr=dxr, inherited={"BL_DXR": "1"})
+                self.assertEqual(game["VKD3D_CONFIG"], "nodxr")
+                self.assertIn("does not report DX12 ray tracing", self.stderr)
 
     def test_a_normal_dx12_game_gets_12_1_no_dxr_no_spoof_and_keeps_the_bridge_flags(self):
         game = self.launch("2050650", "Game/game.exe", {"version": 1, "shared": GameEnvironment_defaults(), "games": {}})

@@ -743,8 +743,11 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("rtVulkan", on).apply()
     }
 
-    /** DX12 ray tracing (DXR): planned. BL_DXR=1 only logs "not yet supported" in droiddeck-game-env today; it never
-     *  raises VKD3D_FEATURE_LEVEL or sets VKD3D_CONFIG=dxr (that crashes games, docs/agents/env-defaults-1106.md). */
+    /** DX12 ray tracing (DXR): BL_DXR=1 in the session. droiddeck-game-env (ray_tracing) then sets the compat layer's
+     *  MALI_COMPAT_RT_PIPELINE=1 / RT_SIZE_PAD=0 and, for every DX12 game on the Mali system driver with a Blobferry
+     *  whose capabilities.json says "dxr": "supported", swaps the env defaults' nodxr for dxr,dxr11 (+ no_upload_hvv,
+     *  extra_rtas_sync; single_queue for The Witcher 3 only); a VKD3D_CONFIG the user set stays as it is. Never VKD3D_FEATURE_LEVEL 12_2
+     *  (docs/agents/env-defaults-1106.md). A game's own BL_DXR entry wins over this switch. */
     fun rtDxr(context: Context): Boolean = prefs(context).getBoolean("rtDxr", false)
 
     fun setRtDxr(context: Context, on: Boolean) {

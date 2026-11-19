@@ -274,7 +274,7 @@ object DeviceReport {
         k("gamescope realtime", SessionPrefs.gamescopeRealtime(context))
         k("unlock Steam frame limit", SessionPrefs.unlockFrameLimit(context))
         k("ray tracing: Vulkan (ray query)", SessionPrefs.rtVulkan(context))
-        k("ray tracing: DX12 (DXR, planned)", SessionPrefs.rtDxr(context))
+        k("ray tracing: DX12 (DXR)", SessionPrefs.rtDxr(context))
         k("zRAM: compress Steam during games", SessionPrefs.zramClient(context))
         k("RAM cap", SessionPrefs.ramCapMb(context).let { if (it > 0) "$it MB" else "off" })
         k("VRAM cap", SessionPrefs.vramCapMb(context).let { if (it > 0) "$it MB" else "driver default" })

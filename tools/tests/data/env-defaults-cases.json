@@ -372,6 +372,216 @@
      }
     }
    }
+  },
+  {
+   "why": "an env2-only name in env (apps up to v0.3.1 would refuse the whole manifest)",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1",
+       "GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "a Watch Dogs 2 audio name in env",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "BANNER_AUDIO_DIRECT_MS": "60"
+      },
+      "evidence": "test"
+     }
+    }
+   }
+  },
+  {
+   "why": "an env name in env2",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": {
+       "VKD3D_CONFIG": "dxr"
+      }
+     }
+    }
+   }
+  },
+  {
+   "why": "another name of the same prefix in env2",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": {
+       "BANNER_AUDIO_DIRECT_RELAY": "/usr/share/droiddeck-mali/x"
+      }
+     }
+    }
+   }
+  },
+  {
+   "why": "LD_PRELOAD in env2",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": {
+       "LD_PRELOAD": "/root/x.so"
+      }
+     }
+    }
+   }
+  },
+  {
+   "why": "env2 not an object",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": [
+       "GAMESCOPE_WSI_FRAME_LIMITER_AWARE"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "why": "newline in an env2 value",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": {
+       "BANNER_AUDIO_DIRECT_MS": "60\n"
+      }
+     }
+    }
+   }
+  },
+  {
+   "why": "more than 64 keys in env and env2 together (63 + 2)",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "MALI_COMPAT_X0": "1",
+       "MALI_COMPAT_X1": "1",
+       "MALI_COMPAT_X2": "1",
+       "MALI_COMPAT_X3": "1",
+       "MALI_COMPAT_X4": "1",
+       "MALI_COMPAT_X5": "1",
+       "MALI_COMPAT_X6": "1",
+       "MALI_COMPAT_X7": "1",
+       "MALI_COMPAT_X8": "1",
+       "MALI_COMPAT_X9": "1",
+       "MALI_COMPAT_X10": "1",
+       "MALI_COMPAT_X11": "1",
+       "MALI_COMPAT_X12": "1",
+       "MALI_COMPAT_X13": "1",
+       "MALI_COMPAT_X14": "1",
+       "MALI_COMPAT_X15": "1",
+       "MALI_COMPAT_X16": "1",
+       "MALI_COMPAT_X17": "1",
+       "MALI_COMPAT_X18": "1",
+       "MALI_COMPAT_X19": "1",
+       "MALI_COMPAT_X20": "1",
+       "MALI_COMPAT_X21": "1",
+       "MALI_COMPAT_X22": "1",
+       "MALI_COMPAT_X23": "1",
+       "MALI_COMPAT_X24": "1",
+       "MALI_COMPAT_X25": "1",
+       "MALI_COMPAT_X26": "1",
+       "MALI_COMPAT_X27": "1",
+       "MALI_COMPAT_X28": "1",
+       "MALI_COMPAT_X29": "1",
+       "MALI_COMPAT_X30": "1",
+       "MALI_COMPAT_X31": "1",
+       "MALI_COMPAT_X32": "1",
+       "MALI_COMPAT_X33": "1",
+       "MALI_COMPAT_X34": "1",
+       "MALI_COMPAT_X35": "1",
+       "MALI_COMPAT_X36": "1",
+       "MALI_COMPAT_X37": "1",
+       "MALI_COMPAT_X38": "1",
+       "MALI_COMPAT_X39": "1",
+       "MALI_COMPAT_X40": "1",
+       "MALI_COMPAT_X41": "1",
+       "MALI_COMPAT_X42": "1",
+       "MALI_COMPAT_X43": "1",
+       "MALI_COMPAT_X44": "1",
+       "MALI_COMPAT_X45": "1",
+       "MALI_COMPAT_X46": "1",
+       "MALI_COMPAT_X47": "1",
+       "MALI_COMPAT_X48": "1",
+       "MALI_COMPAT_X49": "1",
+       "MALI_COMPAT_X50": "1",
+       "MALI_COMPAT_X51": "1",
+       "MALI_COMPAT_X52": "1",
+       "MALI_COMPAT_X53": "1",
+       "MALI_COMPAT_X54": "1",
+       "MALI_COMPAT_X55": "1",
+       "MALI_COMPAT_X56": "1",
+       "MALI_COMPAT_X57": "1",
+       "MALI_COMPAT_X58": "1",
+       "MALI_COMPAT_X59": "1",
+       "MALI_COMPAT_X60": "1",
+       "MALI_COMPAT_X61": "1",
+       "MALI_COMPAT_X62": "1"
+      },
+      "env2": {
+       "GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0",
+       "BANNER_AUDIO_DIRECT_MS": "60"
+      },
+      "evidence": "test"
+     }
+    }
+   }
   }
  ],
  "valid": [
@@ -442,6 +652,27 @@
         "requires": "r"
        }
       ]
+     }
+    }
+   }
+  },
+  {
+   "why": "env2 with its exact names (older apps skip env2 and still accept the manifest)",
+   "manifest": {
+    "schema": "droiddeck-mali-env-defaults/1",
+    "version": "2026.11.06.1",
+    "games": {
+     "steam:1245620": {
+      "title": "Elden Ring",
+      "env": {
+       "VKD3D_FEATURE_LEVEL": "12_1"
+      },
+      "evidence": "test",
+      "env2": {
+       "GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0",
+       "BANNER_AUDIO_DIRECT_MS": "60",
+       "BANNER_AUDIO_DIRECT_PERIOD_MS": "20"
+      }
      }
     }
    }
