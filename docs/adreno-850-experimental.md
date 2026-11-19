@@ -63,7 +63,7 @@ Keep **Session → Performance → Session repair → Turnip: sysmem rendering**
 enabled as advised by the original Linux driver metadata.
 
 Test entering Steam separately from game rendering. If it fails, restore the
-previous drivers and restart the app. Preserve the **Share logs** ZIP,
+previous drivers and restart the app. Preserve the **Report a problem** ZIP,
 including `device.txt`, `session.log`, the exact chip ID and Android version.
 
 ## Validation

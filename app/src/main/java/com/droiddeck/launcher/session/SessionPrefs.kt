@@ -633,8 +633,8 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("bridgeNoPipelineLibrary", on).apply()
     }
 
-    // Wine's exception/DLL tracing in the Proton log of bridge games. Off by default: under FEX it costs a lot of CPU
-    // (every unaligned atomic is a traced exception); the log itself stays on.
+    // Wine's exception/DLL tracing and FEX's own log in the Proton log of every game. Off by default: under FEX it costs
+    // a lot of CPU (every unaligned atomic is a traced exception); the light log (errors/warnings) stays on.
     fun bridgeDebugLogs(context: Context): Boolean = prefs(context).getBoolean("bridgeDebugLogs", false)
 
     fun setBridgeDebugLogs(context: Context, on: Boolean) {

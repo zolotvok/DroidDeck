@@ -3,6 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <queries>
+        <package android:name="com.github.android" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
         <intent>
             <action android:name="android.content.pm.action.CONFIRM_INSTALL" />
         </intent>
@@ -114,6 +120,13 @@
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
+            android:theme="@style/AppTheme" />
+
+        <activity
+            android:name=".IssueWebActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.report"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode"
             android:theme="@style/AppTheme" />
 
         <activity

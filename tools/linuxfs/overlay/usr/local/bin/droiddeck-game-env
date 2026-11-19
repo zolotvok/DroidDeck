@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 GAME_TU_DEBUG = "DROIDDECK_GAME_TU_DEBUG"
@@ -472,6 +473,18 @@ def game_driver_choice(config, app_id):
     return choice if choice in ("bridge", "session") else None
 
 
+def session_driver(env):
+    """The session's Vulkan driver as the game inherits it, for the driver line."""
+    files = env.get("VK_DRIVER_FILES") or env.get("VK_ICD_FILENAMES") or ""
+    if env.get("BL_SESSION_PANVK") == "1":
+        name = "PanVK"
+    elif "mali_bridge" in files.lower():
+        name = "Mali system driver (bridge)"
+    else:
+        name = "the runtime's Vulkan driver"
+    return "session driver (%s), %s" % (name, files or "the Vulkan loader's default")
+
+
 def game_driver(command, env, choice=None, native=False):
     """BL_VK_GAME_DRIVER (set by the session when the Mali system driver, the bridge, is chosen): the game
     process draws with that Vulkan ICD while Steam, gamescope and the desktop stay on the session's driver.
@@ -480,18 +493,26 @@ def game_driver(command, env, choice=None, native=False):
     Only the game's own launch gets it (Proton's waitforexitandrun); a game's environment entry can still
     override VK_DRIVER_FILES afterwards. The bridge runs the phone's Android Vulkan driver through libhybris,
     which needs its vendor namespace (the shim also sets it when missing, but a running Wine process has other
-    threads reading the environment)."""
+    threads reading the environment). Every game launch prints one "game driver:" line with the reason, on both
+    paths, so a report says which driver the game had."""
+    if not native and (len(command) < 2 or command[1] != "waitforexitandrun"):
+        return env
     icd = env.get("BL_VK_GAME_DRIVER", "")
     if choice == "session":
-        icd = ""
+        icd, why = "", "the game's own setting (DROIDDECK_GAME_DRIVER=session)"
     elif choice == "bridge":
         icd = icd or env.get("BL_VK_BRIDGE_ICD", "")
-    if not icd or (not native and (len(command) < 2 or command[1] != "waitforexitandrun")):
-        return env
-    if not os.access(icd, os.R_OK):
+        why = ("the game's own setting (DROIDDECK_GAME_DRIVER=bridge)" if icd else
+               "the game's own setting asks for the bridge (DROIDDECK_GAME_DRIVER=bridge), but no bridge is installed")
+    else:
+        why = "the app's setting (games use the Mali system driver)" if icd else "the app's setting (games use the session driver)"
+    if icd and not os.access(icd, os.R_OK):
         print("droiddeck-game-env: game driver %s is not readable; using the session's" % icd, file=sys.stderr)
+        icd, why = "", "the bridge's manifest %s is not readable" % icd
+    if not icd:
+        print("droiddeck-game-env: game driver: %s; %s" % (session_driver(env), why), file=sys.stderr)
         return env
-    print("droiddeck-game-env: game driver: Mali system driver (bridge), %s" % icd, file=sys.stderr)
+    print("droiddeck-game-env: game driver: Mali system driver (bridge), %s; %s" % (icd, why), file=sys.stderr)
     res = dict(
         env,
         VK_DRIVER_FILES=icd,
@@ -500,8 +521,6 @@ def game_driver(command, env, choice=None, native=False):
         ENABLE_MALI_WSI="1",
         ENABLE_MALI_COMPAT="1",
         ENABLE_GAMESCOPE_WSI="1",
-        PROTON_LOG="1",
-        DXVK_LOG_LEVEL="info",
     )
     res.pop("VK_INSTANCE_LAYERS", None)
     if native:
@@ -509,13 +528,6 @@ def game_driver(command, env, choice=None, native=False):
         # stays on X11 and the gamescope WSI layer makes the Wayland hop host-side (docs/games/quake2rtx.md). The
         # Proton/DXVK keys below are inert for a native binary.
         res.setdefault("SDL_VIDEODRIVER", "x11")
-    # The Proton log stays on (vkd3d-proton, DXVK and the bridge layers write there), but Wine's exception and DLL
-    # tracing only with the app's "debug logs" setting (Performance > Mali system driver): under FEX every unaligned
-    # atomic is an exception, and +seh,+unwind wrote thousands of lines a second (HZD: CPU 10 FPS against GPU 26).
-    # Without it Wine keeps its err lines. Proton only sets WINEDEBUG when it is unset, and a WINEDEBUG from the
-    # session or the game's own settings still wins.
-    if env.get("BL_BRIDGE_DEBUG_LOGS", "0") != "1":
-        res.setdefault("WINEDEBUG", "+timestamp,+pid,+tid,fixme-all")
     # Measuring switches from the app (Performance > Mali system driver): the WSI layer's present-rate log
     # (/root/mali-wsi-fps.txt) and the compat layer's GPU timing (/root/mali-gputime-*.txt). A game's own entry wins.
     if env.get("BL_BRIDGE_FPS_LOG", "0") == "1":
@@ -711,6 +723,127 @@ def apply_game_debug_logs(env, config, debug_dir):
         "WINEDEBUG": game_debug_channels(env.get("WINEDEBUG"), env.get("PROTON_LOG")),
     })
     return result
+
+
+# Default game logs, every game on every driver path: Proton's log file (~/steam-<SteamGameId>.log, in the report)
+# with Wine's err lines, DXVK's info lines (adapter, driver and extensions, once per device) and vkd3d-proton's warn
+# lines. None of them writes per frame or per call. PROTON_LOG=1 also switches FEX's own logger on (Proton writes
+# SilentLog 0), which logs every handled unaligned atomic: 4.2 M lines, 420 MB in one Watch Dogs 2 run with the err-only
+# WINEDEBUG. FEX_SILENTLOG=1 (its env layer wins over Proton's file) keeps that off. Wine's exception/DLL tracing
+# (+seh,+unwind,+loaddll, Proton's own PROTON_LOG=1 WINEDEBUG) and the FEX log stay behind the app's debug-log switches.
+GAME_LOGS = {"PROTON_LOG": "1", "DXVK_LOG_LEVEL": "info", "VKD3D_DEBUG": "warn"}
+GAME_LOGS_QUIET = {"WINEDEBUG": "+timestamp,+pid,+tid,fixme-all", "FEX_SILENTLOG": "1"}
+
+
+def game_logs(env, heavy=False, own=()):
+    """The default log keys, each only when unset and not one of the user's own game-setting names ([own]: a setting
+    that removes a key keeps it removed): the user's launch options and game settings win. An explicit PROTON_LOG=0 (or
+    empty) turns the Proton log and these defaults off; an explicit PROTON_LOG=1 gets Proton's own WINEDEBUG trace."""
+    if "PROTON_LOG" in env and env["PROTON_LOG"] in ("", "0"):
+        print("droiddeck-game-env: game logs off (PROTON_LOG=%s); no Wine/DXVK log for this launch" % env["PROTON_LOG"],
+              file=sys.stderr)
+        return env
+    result = dict(env)
+    defaults = dict(GAME_LOGS)
+    heavy = heavy or env.get("BL_BRIDGE_DEBUG_LOGS", "0") == "1"
+    if not heavy:
+        defaults["FEX_SILENTLOG"] = GAME_LOGS_QUIET["FEX_SILENTLOG"]
+        # A PROTON_LOG the user set (launch option, game setting, the report's "next launch" switch) asks for Proton's
+        # own WINEDEBUG trace; the FEX log still needs a debug switch.
+        if "PROTON_LOG" not in env:
+            defaults["WINEDEBUG"] = GAME_LOGS_QUIET["WINEDEBUG"]
+    for name, value in defaults.items():
+        if name not in own:
+            result.setdefault(name, value)
+    print("droiddeck-game-env: game logs: %s, %s" % (
+        " ".join("%s=%s" % (name, result[name]) for name in ("PROTON_LOG", "WINEDEBUG", "DXVK_LOG_LEVEL", "VKD3D_DEBUG",
+                                                             "FEX_SILENTLOG") if name in result),
+        "with the debug tracing" if heavy else "errors and warnings only"), file=sys.stderr)
+    return result
+
+
+def proton_log(env):
+    """Where Proton writes this launch's log, or None when it writes none."""
+    if env.get("PROTON_LOG", "") in ("", "0"):
+        return None
+    game = env.get("SteamGameId", "")
+    if not re.fullmatch(r"[0-9]+", game):
+        return None
+    folder = env.get("PROTON_LOG_DIR") or env.get("HOME") or ""
+    return os.path.join(folder, "steam-%s.log" % game) if os.path.isabs(folder) else None
+
+
+# The low byte of the NTSTATUS a crashed Windows program exits with (Wine passes it on as the exit status).
+NTSTATUS_LOW_BYTE = {
+    0x05: "0xC0000005 access violation",
+    0x1D: "0xC000001D illegal instruction",
+    0xFD: "0xC00000FD stack overflow",
+    0x09: "0xC0000409 stack buffer overrun / fail-fast",
+    0x96: "0xC0000096 privileged instruction",
+}
+LOG_HEAD = 512 * 1024
+LOG_TAIL = 1024 * 1024
+SUMMARY_LINES = 20
+SUMMARY_LINE = re.compile(r"(?:^|:)(?:err|warn):|\b(?:error|fatal|failed|unhandled|exception)\b", re.IGNORECASE)
+HAL_LINE = re.compile(r"mali-bridge: (?:vendor HAL|hybris)")
+
+
+def read_window(path, start, size):
+    with open(path, "rb") as source:
+        source.seek(start)
+        return source.read(size)
+
+
+def log_excerpt(path):
+    """(head, tail, skipped) of a log, each cut at line ends: the whole file when it is small."""
+    size = os.path.getsize(path)
+    if size <= LOG_HEAD + LOG_TAIL:
+        return read_window(path, 0, size), b"", 0
+    head = read_window(path, 0, LOG_HEAD)
+    head = head[:head.rfind(b"\n") + 1]
+    tail = read_window(path, size - LOG_TAIL, LOG_TAIL)
+    tail = tail[tail.find(b"\n") + 1:]
+    return head, tail, size - len(head) - len(tail)
+
+
+def exit_text(returncode, seconds):
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = "signal %d" % -returncode
+        return "game ended by %s (signal %d) after %.0f s" % (name, -returncode, seconds)
+    text = "game exited with status %d after %.0f s" % (returncode, seconds)
+    if returncode in NTSTATUS_LOW_BYTE:
+        text += " (if it crashed: low byte of %s)" % NTSTATUS_LOW_BYTE[returncode]
+    return text
+
+
+def game_finished(env, returncode, seconds):
+    """After the game: its exit in the session log and, for a failed exit, the bridge's HAL lines and the last
+    err/warn lines of its Proton log (session.log is in both "Share logs" and the problem report)."""
+    print("droiddeck-game-env: " + exit_text(returncode, seconds), file=sys.stderr)
+    if returncode == 0:
+        return
+    path = proton_log(env)
+    if not path:
+        print("droiddeck-game-env: no Proton log for this launch (PROTON_LOG off)", file=sys.stderr)
+        return
+    if not os.path.isfile(path):
+        print("droiddeck-game-env: no Proton log found at %s" % path, file=sys.stderr)
+        return
+    head, tail, _ = log_excerpt(path)
+    lines = (head + b"\n" + tail).decode("utf-8", "replace").splitlines()
+    hal = []
+    for line in lines:
+        if HAL_LINE.search(line) and line not in hal:
+            hal.append(line)
+    hal = hal[:5]
+    last = [line for line in lines if SUMMARY_LINE.search(line)][-SUMMARY_LINES:]
+    print("droiddeck-game-env: failure summary from %s (%d bridge HAL lines, last %d err/warn lines):"
+          % (os.path.basename(path), len(hal), len(last)), file=sys.stderr)
+    for line in hal + last:
+        print("droiddeck-game-env: | " + line[:400], file=sys.stderr)
 
 
 def sync_config(config, app_id):
@@ -1056,39 +1189,60 @@ def ego_core_plan(command, env):
     return "%s had no thread plan for %d cores; added a copy of its %s-core plan" % (EGO_RESTRICTIONS, count, source.group(2))
 
 
-def wait_forwarding_signals(process):
+def run_forwarding_signals(launch, launch_env, after=None):
+    """Starts the launch as exec would (inherited fds and signal dispositions) and waits for it, passing SIGTERM, SIGINT
+    and SIGHUP on; a signal that arrives before the child exists is sent once it does. [after] runs once the child has
+    started and ended (not when it could not start). Returns (process, exit code)."""
+    state = {"process": None, "pending": []}
+    # A signal the launch chain ignores (nohup's SIGHUP) stays ignored for the game, as with exec.
+    forwarded = [s for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP) if signal.getsignal(s) != signal.SIG_IGN]
+
     def forward(signum, frame):
+        if state["process"] is None:
+            state["pending"].append(signum)
+            return
         try:
-            process.send_signal(signum)
+            state["process"].send_signal(signum)
         except OSError:
             pass
 
-    previous = {signum: signal.signal(signum, forward) for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    previous = {signum: signal.signal(signum, forward) for signum in forwarded}
     try:
-        code = process.wait()
+        if state["pending"]:
+            return None, 128 + state["pending"][0]
+        process = subprocess.Popen(launch, env=launch_env, close_fds=False, restore_signals=False)
+        state["process"] = process
+        try:
+            for signum in state["pending"]:
+                forward(signum, None)
+            code = process.wait()
+        finally:
+            if after:
+                try:
+                    after()
+                except OSError as error:
+                    print("droiddeck-game-env: DiRT telemetry fix: prefix ws2_32 not put back (%s); the next launch does it"
+                          % error, file=sys.stderr)
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
-    return 128 - code if code < 0 else code
+    return process, (128 - code if code < 0 else code)
 
 
-def start(launch, launch_env, digest, after=None):
-    if after:
-        process = subprocess.Popen(launch, env=launch_env)
+def start(launch, launch_env, digest, after=None, finished=None):
+    """Runs the launch. A game launch (finished) waits for it to log its exit; everything else is exec'd."""
+    if not (after or digest or finished):
+        return os.execvpe(launch[0], launch, launch_env)
+    began = time.monotonic()
+    process, code = run_forwarding_signals(launch, launch_env, after)
+    if digest and code == 0:
+        record_install_scripts(digest, launch_env)
+    if finished and process is not None:
         try:
-            return wait_forwarding_signals(process)
-        finally:
-            try:
-                after()
-            except OSError as error:
-                print("droiddeck-game-env: DiRT telemetry fix: prefix ws2_32 not put back (%s); the next launch does it" % error,
-                      file=sys.stderr)
-    if digest:
-        code = subprocess.run(launch, env=launch_env, check=False).returncode
-        if code == 0:
-            record_install_scripts(digest, launch_env)
-        return code
-    return os.execvpe(launch[0], launch, launch_env)
+            finished(process.returncode, time.monotonic() - began)
+        except Exception as error:
+            print("droiddeck-game-env: game exit not logged (%s)" % error, file=sys.stderr)
+    return code
 
 
 LAUNCH_WRAPPERS = ("pw-audio-namespace", "steam-launch-wrapper")
@@ -1168,6 +1322,7 @@ def main():
         except (OSError, ValueError):
             config = False
     env = game_driver(command, env, game_driver_choice(config, app_id))
+    driver_files = (env.get("VK_DRIVER_FILES"), env.get("VK_ICD_FILENAMES"))
     mic_enabled = env.get("BL_MIC_ENABLED")
     debug_dir = env.get("BL_DEBUG_DIR", "")
     scripts = mark_install_scripts(command, env)
@@ -1228,12 +1383,17 @@ def main():
         except (OSError, ValueError, TypeError, AttributeError):
             print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
         env.pop(GAME_DRIVER, None)
+        if waiting and (env.get("VK_DRIVER_FILES"), env.get("VK_ICD_FILENAMES")) != driver_files:
+            print("droiddeck-game-env: game driver: %s; a game or env-default setting of VK_DRIVER_FILES/VK_ICD_FILENAMES "
+                  "(replaces the line above)" % (env.get("VK_DRIVER_FILES") or env.get("VK_ICD_FILENAMES")
+                                                 or "the Vulkan loader's default"), file=sys.stderr)
         if waiting:
             env = ray_tracing(env, own_keys(config, app_id), app_id)
             before_debug = env
             env = apply_game_debug_logs(env, config if isinstance(config, dict) else {}, debug_dir)
             if env is not before_debug:
                 print("droiddeck-game-env: game debug logs enabled for this launch", file=sys.stderr)
+            env = game_logs(env, heavy=env is not before_debug, own=own_keys(config, app_id))
             if mali:
                 try:
                     note = mali["fex_patch"](command, env, app_id)
@@ -1293,15 +1453,18 @@ def main():
                           "and the next launch puts the file back" % undo, file=sys.stderr)
     sync = load_sync()
     launch, launch_env = select_sync(command, env, sync)
+    finished = None
+    if app_id and len(command) > 1 and command[1] == "waitforexitandrun":
+        finished = lambda returncode, seconds: game_finished(launch_env, returncode, seconds)
     if launch[0] != command[0]:
         try:
-            return start(launch, launch_env, digest, after)
+            return start(launch, launch_env, digest, after, finished)
         except OSError as error:
             print("droiddeck-game-env: %s could not start (%s); stock launch" % (launch[0], error), file=sys.stderr)
             launch, launch_env = command, without_pack(launch_env, env)
             record_stock(sync, launch, launch_env)
     try:
-        return start(launch, launch_env, digest, after)
+        return start(launch, launch_env, digest, after, finished)
     except OSError:
         if after:
             try:

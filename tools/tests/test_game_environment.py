@@ -4,12 +4,14 @@ import io
 import json
 import os
 import shutil
+import signal
 from pathlib import Path
 import runpy
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from unittest import mock
 import unittest
 
@@ -466,6 +468,174 @@ class GameDebugLoggingTest(unittest.TestCase):
             self.assertEqual(json.loads(config_path.read_text())["shared"], config["shared"])
 
 
+class GameLogsTest(unittest.TestCase):
+    DEFAULT = {"PROTON_LOG": "1", "WINEDEBUG": "+timestamp,+pid,+tid,fixme-all", "DXVK_LOG_LEVEL": "info",
+               "VKD3D_DEBUG": "warn", "FEX_SILENTLOG": "1"}
+
+    def logs(self, env, **kwargs):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return MODULE["game_logs"](env, **kwargs)
+
+    def test_light_logs_are_the_default_and_never_per_call_tracing(self):
+        result = self.logs({"CUSTOM": "x"})
+        self.assertEqual({k: result[k] for k in self.DEFAULT}, self.DEFAULT)
+        channels = result["WINEDEBUG"].split(",")
+        for heavy in ("+seh", "+unwind", "+loaddll", "+relay", "+server"):
+            self.assertNotIn(heavy, channels)
+        self.assertNotIn(result["DXVK_LOG_LEVEL"], ("debug", "trace"))
+
+    def test_heavy_switches_leave_wine_and_fex_tracing_to_proton(self):
+        for env, kwargs in (({"BL_BRIDGE_DEBUG_LOGS": "1"}, {}), ({}, {"heavy": True})):
+            result = self.logs(env, **kwargs)
+            self.assertEqual(result["PROTON_LOG"], "1")
+            self.assertNotIn("WINEDEBUG", result)
+            self.assertNotIn("FEX_SILENTLOG", result)
+
+    def test_the_users_own_values_win(self):
+        own = {"WINEDEBUG": "-all,+relay", "DXVK_LOG_LEVEL": "none", "VKD3D_DEBUG": "none", "FEX_SILENTLOG": "0",
+               "PROTON_LOG": "+fex"}
+        self.assertEqual(self.logs(own), {**own})
+        for explicit in ("1", "+fex"):
+            full = self.logs({"PROTON_LOG": explicit})
+            self.assertEqual((full["PROTON_LOG"], full["DXVK_LOG_LEVEL"], full["VKD3D_DEBUG"]), (explicit, "info", "warn"))
+            self.assertNotIn("WINEDEBUG", full)
+            self.assertEqual(full["FEX_SILENTLOG"], "1")
+        removed = self.logs({}, own={"FEX_SILENTLOG", "WINEDEBUG"})
+        self.assertNotIn("FEX_SILENTLOG", removed)
+        self.assertNotIn("WINEDEBUG", removed)
+        self.assertEqual(removed["PROTON_LOG"], "1")
+        for off in ("0", ""):
+            env = {"PROTON_LOG": off, "CUSTOM": "x"}
+            self.assertIs(self.logs(env), env)
+
+    def test_game_launch_gets_the_logs_on_the_bridge_and_the_session_driver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            icd = home / "icd.json"
+            icd.write_text("{}")
+            probe = home / "proton"
+            probe.write_text("#!" + sys.executable + "\nimport json, os\nprint(json.dumps(dict(os.environ)))\n")
+            probe.chmod(0o755)
+            config = home / ".config/droiddeck/game-environment.json"
+            config.parent.mkdir(parents=True)
+            base = {k: v for k, v in os.environ.items() if k not in self.DEFAULT and not k.startswith(("BL_", "VK_"))}
+            base.update(HOME=tmp, STEAM_COMPAT_DATA_PATH=str(home / "compatdata/42"), BL_MALI_GAME_DEFAULTS="0")
+            cases = (({"BL_VK_GAME_DRIVER": str(icd)}, {}, "Mali system driver (bridge)"),
+                     ({"BL_VK_GAME_DRIVER": str(icd)}, {"42": {"DROIDDECK_GAME_DRIVER": "session"}}, "session driver"),
+                     ({}, {}, "session driver"))
+            for extra, games, driver in cases:
+                with self.subTest(driver=driver, games=games):
+                    config.write_text(json.dumps({"version": 1, "games": games}))
+                    result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun"],
+                                            env={**base, **extra}, text=True, capture_output=True, check=True)
+                    env = json.loads(result.stdout)
+                    self.assertEqual({k: env.get(k) for k in self.DEFAULT}, self.DEFAULT)
+                    self.assertIn("droiddeck-game-env: game driver: " + driver, result.stderr)
+                    self.assertIn("droiddeck-game-env: game logs: PROTON_LOG=1", result.stderr)
+                    self.assertIn("droiddeck-game-env: game exited with status 0", result.stderr)
+            config.write_text(json.dumps({"version": 1, "games": {"42": {"VK_DRIVER_FILES": "/own.json"}}}))
+            result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun"],
+                                    env={**base, "BL_VK_GAME_DRIVER": str(icd)}, text=True, capture_output=True, check=True)
+            self.assertIn("droiddeck-game-env: game driver: /own.json; a game or env-default setting", result.stderr)
+            debug_dir = home / "session"
+            debug_dir.mkdir()
+            config.write_text(json.dumps({"version": 1, "gameDebugLogs": True}))
+            result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun"],
+                                    env={**base, "BL_DEBUG_DIR": str(debug_dir)}, text=True, capture_output=True, check=True)
+            env = json.loads(result.stdout)
+            self.assertIn("+seh", env["WINEDEBUG"].split(","))
+            self.assertNotIn("FEX_SILENTLOG", env)
+            self.assertEqual(env["DXVK_LOG_LEVEL"], "debug")
+
+
+class GameExitTest(unittest.TestCase):
+    def launch(self, home, body, game_id="7"):
+        probe = home / "proton"
+        probe.write_text("#!" + sys.executable + "\nimport os, signal, sys\n" + body)
+        probe.chmod(0o755)
+        session = home / "session"
+        session.mkdir(exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("BL_", "PROTON_", "WINEDEBUG"))}
+        env.update(HOME=str(home), STEAM_COMPAT_DATA_PATH=str(home / "compatdata/42"), SteamGameId=game_id,
+                   BL_DEBUG_DIR=str(session), BL_MALI_GAME_DEFAULTS="0")
+        result = subprocess.run([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun"],
+                                env=env, text=True, capture_output=True)
+        return result, session
+
+    WRITE_LOG = ("open(os.path.join(os.environ['HOME'], 'steam-' + os.environ['SteamGameId'] + '.log'), 'w').write("
+                 "'mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)\\n'"
+                 " + ''.join('0010.0:0020:0024:err:module:line %d\\n' % i for i in range(30))"
+                 " + 'warn:  DXVK: last warning\\n' + 'plain trailing line\\n')\n")
+
+    def test_failed_exit_writes_a_summary_to_the_session_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            result, session = self.launch(home, self.WRITE_LOG + "sys.exit(5)\n")
+            self.assertEqual(result.returncode, 5)
+            err = result.stderr
+            self.assertIn("droiddeck-game-env: game exited with status 5 after", err)
+            self.assertIn("low byte of 0xC0000005 access violation", err)
+            self.assertIn("failure summary from steam-7.log (1 bridge HAL lines, last 20 err/warn lines)", err)
+            self.assertIn("droiddeck-game-env: | mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so", err)
+            self.assertIn("droiddeck-game-env: | warn:  DXVK: last warning", err)
+            self.assertIn("err:module:line 29", err)
+            self.assertNotIn("err:module:line 10\n", err)
+            self.assertNotIn("plain trailing line", err)
+            self.assertEqual(list(session.iterdir()), [])
+
+    def test_clean_exit_has_no_summary_and_a_signal_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            result, session = self.launch(home, self.WRITE_LOG + "sys.exit(0)\n")
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("game exited with status 0", result.stderr)
+            self.assertNotIn("failure summary", result.stderr)
+            result, _ = self.launch(home, "os.kill(os.getpid(), signal.SIGSEGV)\n")
+            self.assertEqual(result.returncode, 128 + signal.SIGSEGV)
+            self.assertIn("game ended by SIGSEGV (signal 11) after", result.stderr)
+
+    def test_a_stop_signal_reaches_the_game(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            probe = home / "proton"
+            probe.write_text("#!" + sys.executable + "\nimport os, signal, sys, time\n"
+                             "signal.signal(signal.SIGTERM, lambda *a: sys.exit(42))\n"
+                             "open(os.path.join(os.environ['HOME'], 'up'), 'w').close()\ntime.sleep(30)\n")
+            probe.chmod(0o755)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("BL_", "PROTON_", "WINEDEBUG"))}
+            env.update(HOME=tmp, STEAM_COMPAT_DATA_PATH=str(home / "compatdata/42"), BL_MALI_GAME_DEFAULTS="0")
+            wrapper = subprocess.Popen([sys.executable, str(BIN / "droiddeck-game-env"), str(probe), "waitforexitandrun"],
+                                       env=env, stderr=subprocess.PIPE, text=True)
+            for _ in range(200):
+                if (home / "up").exists():
+                    break
+                time.sleep(0.05)
+            wrapper.send_signal(signal.SIGTERM)
+            _, err = wrapper.communicate(timeout=20)
+            self.assertEqual(wrapper.returncode, 42)
+            self.assertIn("game exited with status 42", err)
+
+    def test_no_proton_log_is_said_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, session = self.launch(Path(tmp), "sys.exit(3)\n", game_id="not-a-number")
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("no Proton log for this launch", result.stderr)
+            result, _ = self.launch(Path(tmp), "sys.exit(4)\n")
+            self.assertIn("no Proton log found at %s/steam-7.log" % tmp, result.stderr)
+
+    def test_summary_reads_a_bounded_head_and_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "steam-9.log"
+            line = b"x" * 99 + b"\n"
+            log.write_bytes(b"mali-bridge: vendor HAL: first\n" + line * 100_000 + b"err: the end\n")
+            head, tail, skipped = MODULE["log_excerpt"](str(log))
+            self.assertLessEqual(len(head), MODULE["LOG_HEAD"])
+            self.assertLessEqual(len(tail), MODULE["LOG_TAIL"])
+            self.assertTrue(head.startswith(b"mali-bridge: vendor HAL: first\n") and head.endswith(b"\n"))
+            self.assertTrue(tail.endswith(b"err: the end\n") and tail.startswith(b"x"))
+            self.assertEqual(len(head) + len(tail) + skipped, log.stat().st_size)
+
+
 class ReadConfigMappingTest(unittest.TestCase):
     def test_missing_parent_or_unbalanced_vdf_is_not_treated_as_absent_choices(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -519,18 +689,49 @@ class GameDriverTest(unittest.TestCase):
         session = {"VKD3D_DISABLE_EXTENSIONS": "VK_EXT_present_timing"}
         self.assertEqual(MODULE["game_driver"](self.LAUNCH, session), session)
 
-    def test_bridge_wine_tracing_only_with_debug_logs(self):
+    def driver_line(self, *args, **kwargs):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = MODULE["game_driver"](*args, **kwargs)
+        lines = [l for l in err.getvalue().splitlines() if "game driver:" in l]
+        return result, lines
+
+    def test_driver_line_names_the_driver_and_the_reason_on_every_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             icd = Path(tmp) / "icd.json"
             icd.write_text("{}")
-            env = {"BL_VK_GAME_DRIVER": str(icd)}
-            game = MODULE["game_driver"](self.LAUNCH, env)
-            self.assertEqual(game["PROTON_LOG"], "1")
-            self.assertEqual(game["WINEDEBUG"], "+timestamp,+pid,+tid,fixme-all")
-            env["BL_BRIDGE_DEBUG_LOGS"] = "1"
-            self.assertNotIn("WINEDEBUG", MODULE["game_driver"](self.LAUNCH, env))
-            env.update(BL_BRIDGE_DEBUG_LOGS="0", WINEDEBUG="+loaddll")
-            self.assertEqual(MODULE["game_driver"](self.LAUNCH, env)["WINEDEBUG"], "+loaddll")
+            panvk = {"VK_DRIVER_FILES": "/panvk.json", "BL_SESSION_PANVK": "1"}
+            cases = [
+                ({"BL_VK_GAME_DRIVER": str(icd)}, None,
+                 "game driver: Mali system driver (bridge), %s; the app's setting (games use the Mali system driver)" % icd),
+                ({**panvk, "BL_VK_BRIDGE_ICD": str(icd)}, "bridge",
+                 "game driver: Mali system driver (bridge), %s; the game's own setting (DROIDDECK_GAME_DRIVER=bridge)" % icd),
+                ({**panvk, "BL_VK_GAME_DRIVER": str(icd)}, "session",
+                 "game driver: session driver (PanVK), /panvk.json; the game's own setting (DROIDDECK_GAME_DRIVER=session)"),
+                (panvk, None, "game driver: session driver (PanVK), /panvk.json; the app's setting (games use the session driver)"),
+                (panvk, "bridge", "game driver: session driver (PanVK), /panvk.json; the game's own setting asks for the "
+                                  "bridge (DROIDDECK_GAME_DRIVER=bridge), but no bridge is installed"),
+                ({**panvk, "BL_VK_GAME_DRIVER": tmp + "/missing.json"}, None,
+                 "game driver: session driver (PanVK), /panvk.json; the bridge's manifest %s/missing.json is not readable" % tmp),
+                ({}, None, "game driver: session driver (the runtime's Vulkan driver), the Vulkan loader's default; "
+                           "the app's setting (games use the session driver)"),
+            ]
+            for env, choice, line in cases:
+                with self.subTest(line=line):
+                    _, lines = self.driver_line(self.LAUNCH, env, choice)
+                    self.assertEqual(lines, ["droiddeck-game-env: " + line])
+            _, lines = self.driver_line(["/q2rtx"], panvk, None, native=True)
+            self.assertIn("session driver (PanVK)", lines[0])
+            for other in (["/proton", "getcompatpath", "/x"], ["/proton"], []):
+                self.assertEqual(self.driver_line(other, {"BL_VK_GAME_DRIVER": str(icd)})[1], [])
+
+    def test_driver_choice_sets_no_log_keys_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            icd = Path(tmp) / "icd.json"
+            icd.write_text("{}")
+            game, _ = self.driver_line(self.LAUNCH, {"BL_VK_GAME_DRIVER": str(icd)})
+            for name in ("PROTON_LOG", "WINEDEBUG", "DXVK_LOG_LEVEL", "VKD3D_DEBUG", "FEX_SILENTLOG"):
+                self.assertNotIn(name, game)
 
     def test_game_choice_overrides_the_apps_driver(self):
         with tempfile.TemporaryDirectory() as tmp:

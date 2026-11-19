@@ -921,7 +921,6 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
                     endedDetail = loading.endedDetail,
                     onRetry = { retrySession() },
                     onRepair = if (repairOffered) ({ repairRuntime() }) else null,
-                    onShareLogs = { shareCurrentSessionLogs() },
                     onReport = { ReportActivity.start(this@SessionActivity, crash = true) },
                     onClose = { finish() },
                     flood = floodColor?.let { androidx.compose.ui.graphics.Color(it) },
@@ -1384,7 +1383,6 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             unfoldedControlsWithController = unfoldedControlsWithController,
             onUnfoldedControlsWithController = ::chooseUnfoldedControlsWithController,
             onBackground = { drawerOpen = false; pip.background(); moveTaskToBack(true) },
-            onShareLogs = { drawerOpen = false; shareCurrentSessionLogs() },
             onReport = { drawerOpen = false; ReportActivity.start(this@SessionActivity, crash = drawerGameCrashed) },
             gameCrashed = drawerGameCrashed,
             onStop = { drawerOpen = false; SessionService.stop(this@SessionActivity); finish() },
@@ -1823,25 +1821,6 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             android.widget.Toast.makeText(this@SessionActivity,
                 if (file != null) getString(R.string.hud_export_done, file.path) else getString(R.string.hud_export_failed),
                 android.widget.Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun shareCurrentSessionLogs() {
-        val folder = SessionPaths.current() ?: SessionPaths.lastEnded()
-        if (folder == null || !folder.isDirectory) {
-            Toast.makeText(this, R.string.session_no_logs, Toast.LENGTH_LONG).show()
-            return
-        }
-        SessionLogShare.prepare(this, { folder }) { zip ->
-            if (zip == null) {
-                Toast.makeText(this, R.string.session_logs_archive_failed, Toast.LENGTH_LONG).show()
-            } else {
-                runCatching { startActivity(SessionLogShare.shareIntent(this, zip)) }
-                    .onFailure {
-                        Log.w(TAG, "could not share current session logs", it)
-                        Toast.makeText(this, R.string.session_logs_share_failed, Toast.LENGTH_LONG).show()
-                    }
-            }
         }
     }
 

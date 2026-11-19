@@ -34,6 +34,42 @@ class ReportSummaryTest {
         assertTrue(ReportSummary.table(info(source = "dev", commit = "a28a42d6aaaa")).contains("| Blobferry | 1.0.0-rc1 @ a28a42d (dev), shim"))
     }
 
+    @Test fun theLastLaunchKeepsItsDriverExitSummaryAndHalLines() {
+        val session = sequenceOf(
+            "droiddeck-game-env: game driver: session driver (PanVK), /p.json; the app's setting (games use the session driver)",
+            "droiddeck-game-env: game exited with status 0 after 30 s",
+            "unrelated line",
+            "droiddeck-game-env: game driver: Mali system driver (bridge), /b/icd.json; the app's setting (games use the Mali system driver)",
+            "droiddeck-game-env: game logs: PROTON_LOG=1 WINEDEBUG=+timestamp,+pid,+tid,fixme-all, errors and warnings only",
+            "droiddeck-game-env: Windows sees 8 cores (8:0,1,2,3,4,5,6,7)",
+            "droiddeck-game-env: game exited with status 5 after 12 s (if it crashed: low byte of 0xC0000005 access violation)",
+            "droiddeck-game-env: failure summary from steam-1.log (1 bridge HAL lines, last 1 err/warn lines):",
+            "droiddeck-game-env: | mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)",
+            "droiddeck-game-env: | 0010.0:0020:0024:err:module:import_dll failed",
+        )
+        val proton = sequenceOf(
+            "mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)",
+            "mali-bridge: vendor HAL candidate rejected: /vendor/lib64/hw/vulkan.x.so (via scan): dlopen failed: nope",
+            "err:something else",
+        )
+        val launch = ReportSummary.lastLaunch(session, proton)
+        assertEquals(7, launch.size)
+        assertTrue(launch.first().contains("Mali system driver (bridge)"))
+        assertFalse(launch.any { it.contains("Windows sees") || it.contains("status 0") })
+        assertEquals("mali-bridge: vendor HAL candidate rejected: /vendor/lib64/hw/vulkan.x.so (via scan): dlopen failed: nope", launch.last())
+        val text = ReportSummary.markdown(ReportSummary.Info(
+            written = "w", appVersion = "v", appId = "a", buildType = "b", sourceCommit = "", device = "d", android = "an", soc = "s",
+            gpu = "g", vendorDriver = "", blobferryVersion = "", blobferryCommit = "", blobferrySource = "none", blobferryShimMd5 = "",
+            fexDllMd5 = "", proton = "p", displayDriver = "auto", runtimeDriver = "r", sessionDriver = "s", gameDriver = "g", game = "x",
+            gameEnv = emptyMap(), focusGuard = "f", boost = "b", logs = "l", protonLog = "p", lastExit = "e", vulkanError = false,
+            lastLaunch = launch + "a ``` fence",
+        ))
+        assertTrue(text, text.contains("## Last game launch\n\n```\ndroiddeck-game-env: game driver: Mali system driver (bridge)"))
+        assertTrue(text.contains("a ` ` ` fence\n```\n"))
+        assertFalse(ReportSummary.markdown(info()).contains("Last game launch"))
+        assertEquals(emptyList<String>(), ReportSummary.lastLaunch(emptySequence(), emptySequence()))
+    }
+
     @Test fun categoriesPickTheRepoTheUserDecided() {
         for (c in listOf(Category.GRAPHICS, Category.GPU_FAULT, Category.DRIVER_LAYER, Category.BRIDGE_CRASH, Category.MALI_PERF)) {
             assertEquals(c.key, Repo.BLOBFERRY, ReportSummary.suggestRepo(c, vulkanError = false))
@@ -85,6 +121,23 @@ class ReportSummaryTest {
     @Test fun tableCellsCannotBreakTheTable() {
         val text = ReportSummary.table(info(env = mapOf("X" to "a|b")))
         assertTrue(text.contains("X=a\\|b"))
+    }
+
+    @Test fun theIssueLinkKeepsTheBodyOrFallsBackToAShortOneNamingTheZip() {
+        val attach = ReportSummary.attachLine("DroidDeck-report-20261120-0130.zip", saved = true)
+        assertTrue(attach.startsWith("**Attach the logs:**"))
+        assertTrue(attach.contains("`DroidDeck-report-20261120-0130.zip` from Downloads/DroidDeck"))
+        assertTrue(ReportSummary.attachLine("x.zip", saved = false).contains("use Share"))
+        val short = ReportSummary.shortIssue(attach)
+        assertTrue(short.startsWith(attach) && short.contains("Paste the copied report text here"))
+        val (fits, cut) = ReportSummary.issueLink(Repo.FORK, "t", attach + "body", short)
+        assertFalse(cut)
+        assertTrue(fits.startsWith("https://github.com/zolotvok/DroidDeck/issues/new?title=t&body=") && fits.contains("DroidDeck-report-20261120-0130.zip"))
+        val (long, shortened) = ReportSummary.issueLink(Repo.FORK, "t", attach + "x".repeat(9000), short)
+        assertTrue(shortened)
+        assertTrue(long.length <= ReportSummary.ISSUE_URL_MAX)
+        assertTrue(long.contains("Paste%20the%20copied%20report%20text%20here") && long.contains("DroidDeck-report-20261120-0130.zip"))
+        assertEquals("https://github.com/zolotvok/blobferry/issues", Repo.BLOBFERRY.issues)
     }
 
     @Test fun issueUrlDropsALongBody() {

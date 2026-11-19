@@ -55,6 +55,8 @@ class ReportUi(
     val suggested: ReportSummary.Repo,
     val nextLaunchLog: Boolean,
     val message: String?,
+    /** The GitHub app is installed: its button comes first. */
+    val githubApp: Boolean = false,
 )
 
 class ReportActions(
@@ -67,6 +69,8 @@ class ReportActions(
     val onRepo: (ReportSummary.Repo) -> Unit,
     val onCopyIssue: () -> Unit,
     val onOpenIssue: () -> Unit,
+    val onOpenIssueInApp: () -> Unit,
+    val onOpenIssueGithubApp: () -> Unit = {},
     val onNextLaunchLog: (Boolean) -> Unit,
     val onLogsOn: () -> Unit,
     val onCrashAnswer: (Boolean) -> Unit,
@@ -143,11 +147,13 @@ fun ReportScreen(state: ReportUi, actions: ReportActions) {
             state.busy?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
             state.message?.let { Text(it, fontSize = 13.sp, color = pal.signal) }
             val idle = state.busy == null && !state.collecting && state.rows.any { it.ticked }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Hinted(R.string.report_share_hint) {
                 PrimaryButton(stringResource(R.string.report_share), enabled = idle, modifier = Modifier.testTag("report-share"), onClick = actions.onShare)
-                SecondaryButton(stringResource(R.string.report_save), enabled = idle, modifier = Modifier.testTag("report-save"), onClick = actions.onSave)
-                SecondaryButton(stringResource(R.string.report_close), onClick = actions.onClose)
             }
+            Hinted(R.string.report_save_hint) {
+                SecondaryButton(stringResource(R.string.report_save), enabled = idle, modifier = Modifier.testTag("report-save"), onClick = actions.onSave)
+            }
+            SecondaryButton(stringResource(R.string.report_close), onClick = actions.onClose)
 
             Text(stringResource(R.string.report_issue_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground,
                 modifier = Modifier.padding(top = 8.dp))
@@ -175,11 +181,23 @@ fun ReportScreen(state: ReportUi, actions: ReportActions) {
                     )
                 }
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (state.githubApp) Hinted(R.string.report_open_issue_github_hint) {
+                PrimaryButton(stringResource(R.string.report_open_issue_github), enabled = idle, modifier = Modifier.testTag("report-open-issue-github"),
+                    onClick = actions.onOpenIssueGithubApp)
+            }
+            Hinted(R.string.report_open_issue_hint) {
+                if (state.githubApp) SecondaryButton(stringResource(R.string.report_open_issue), enabled = idle,
+                    modifier = Modifier.testTag("report-open-issue"), onClick = actions.onOpenIssue)
+                else PrimaryButton(stringResource(R.string.report_open_issue), enabled = idle, modifier = Modifier.testTag("report-open-issue"),
+                    onClick = actions.onOpenIssue)
+            }
+            Hinted(R.string.report_open_issue_app_hint) {
+                SecondaryButton(stringResource(R.string.report_open_issue_app), enabled = idle, modifier = Modifier.testTag("report-open-issue-app"),
+                    onClick = actions.onOpenIssueInApp)
+            }
+            Hinted(R.string.report_copy_issue_hint) {
                 SecondaryButton(stringResource(R.string.report_copy_issue), enabled = !state.collecting, modifier = Modifier.testTag("report-copy-issue"),
                     onClick = actions.onCopyIssue)
-                SecondaryButton(stringResource(R.string.report_open_issue), enabled = !state.collecting, modifier = Modifier.testTag("report-open-issue"),
-                    onClick = actions.onOpenIssue)
             }
         }
     }
@@ -194,5 +212,14 @@ fun ReportScreen(state: ReportUi, actions: ReportActions) {
             },
             confirmButton = { FocusText(stringResource(R.string.report_close), pal.signal, onClick = actions.onClosePreview) },
         )
+    }
+}
+
+/** A button with one line under it that says what it does. */
+@Composable
+private fun Hinted(hint: Int, button: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        button()
+        Text(stringResource(hint), fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

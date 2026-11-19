@@ -9,6 +9,7 @@ object ReportSummary {
         FORK("zolotvok/DroidDeck");
 
         val newIssue: String get() = "https://github.com/$slug/issues/new"
+        val issues: String get() = "https://github.com/$slug/issues"
     }
 
     /** [repo] null = decided by the logs: Blobferry when they show a Vulkan/driver error, otherwise the fork. */
@@ -82,7 +83,30 @@ object ReportSummary {
         val panvk: String = "",
         /** The env defaults in force: version (source), games; empty = not a Mali report. */
         val envDefaults: String = "",
+        /** The last game launch as droiddeck-game-env logged it ([lastLaunch]): driver, logs, exit, failure summary, HAL. */
+        val lastLaunch: List<String> = emptyList(),
     )
+
+    private val LAUNCH_START = Regex("droiddeck-game-env: game driver:")
+    private val LAUNCH_LINE = Regex(
+        "droiddeck-game-env: (?:game driver:|game logs|game exited|game ended|failure summary|\\| |no Proton log)"
+    )
+    private val HAL_LINE = Regex("mali-bridge: (?:vendor HAL|hybris)")
+    private const val LAUNCH_MAX = 40
+    private const val HAL_MAX = 5
+
+    /** The last launch's game-env lines in session.log (from its "game driver:" line on), plus the bridge ICD's
+     *  vendor-HAL lines of the game's Proton log that the session log does not already carry. */
+    fun lastLaunch(session: Sequence<String>, proton: Sequence<String>): List<String> {
+        var launch = ArrayList<String>()
+        for (line in session) {
+            if (LAUNCH_START.containsMatchIn(line)) launch = ArrayList()
+            if (LAUNCH_LINE.containsMatchIn(line) && launch.size < LAUNCH_MAX) launch += line.trim()
+        }
+        val hal = proton.filter { HAL_LINE.containsMatchIn(it) }.map { it.trim() }.distinct().take(HAL_MAX)
+            .filter { h -> launch.none { it.endsWith(h) } }.toList()
+        return launch + hal
+    }
 
     /** The Blobferry cell: version @ commit (source), or the dev build without a commit and what it changed. */
     fun blobferryCell(info: Info): String {
@@ -124,6 +148,11 @@ object ReportSummary {
         append("Written ").append(info.written).append(". Account names, tokens, ids and home paths are redacted; no saves are included.\n\n")
         append(table(info))
         if (info.vulkanError) append("\nThe session or Proton log shows a Vulkan/driver error.\n")
+        if (info.lastLaunch.isNotEmpty()) {
+            append("\n## Last game launch\n\n```\n")
+            info.lastLaunch.forEach { append(it.replace("```", "` ` `")).append('\n') }
+            append("```\n")
+        }
     }
 
     fun issueTitle(category: Category, info: Info): String =
@@ -136,6 +165,26 @@ object ReportSummary {
         append(table(info))
         append("\nLogs: attach ").append(zipName ?: "the DroidDeck-report zip").append(" (drag it onto the issue)\n")
     }
+
+    /** The issue text's first line: which file to attach and where it is ([saved]: in Downloads/DroidDeck). */
+    fun attachLine(zipName: String, saved: Boolean): String =
+        if (saved) "**Attach the logs:** tap \"Attach files\" (or \"Paste, drop, or click to add files\") below and pick " +
+            "`$zipName` from Downloads/DroidDeck.\n\n"
+        else "**Attach the logs:** the report `$zipName` could not be saved to Downloads; use Share on the report screen to send it.\n\n"
+
+    /** Links longer than this lose the prefill in some browsers (and GitHub refuses very long ones). */
+    const val ISSUE_URL_MAX = 8000
+
+    /** The new-issue link with the full [body], or with [shortBody] when that link would be too long; second = shortened. */
+    fun issueLink(repo: Repo, title: String, body: String, shortBody: String, max: Int = ISSUE_URL_MAX): Pair<String, Boolean> {
+        val full = issueUrl(repo, title, body, maxBody = Int.MAX_VALUE)
+        if (full.length <= max) return full to false
+        return issueUrl(repo, title, shortBody, maxBody = Int.MAX_VALUE) to true
+    }
+
+    /** The short body: the attach line and where the full text is (the clipboard). */
+    fun shortIssue(attach: String): String =
+        attach + "**Paste the copied report text here** (DroidDeck put it on the clipboard; long-press, Paste).\n"
 
     /** The new-issue link; the body rides along only while the link stays short enough for the browser. */
     fun issueUrl(repo: Repo, title: String, body: String, maxBody: Int = 6000): String {

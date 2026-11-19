@@ -3,12 +3,6 @@ package com.droiddeck.launcher.session
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import com.droiddeck.launcher.R
 import com.droiddeck.launcher.core.LogRedactor
@@ -18,26 +12,8 @@ import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+/** Session-folder zips (redacted) and the share sheet. The app's one user-facing report is ReportActivity (ReportBundle). */
 object SessionLogShare {
-    private val main = Handler(Looper.getMainLooper())
-
-    var progress by mutableStateOf<Float?>(null)
-        private set
-
-    fun prepare(context: Context, folder: () -> File?, done: (File?) -> Unit) {
-        if (progress != null) return
-        progress = 0f
-        Thread({
-            val zip = runCatching { folder()?.let { dir -> zipFolder(context, dir) { p -> main.post { if (progress != null) progress = p } } } }
-                .onFailure { Log.w("SessionLogShare", "could not package session logs", it) }
-                .getOrNull()
-            main.post { progress = null; done(zip) }
-        }, "share-logs").start()
-    }
-
-    fun latest(context: Context): File? = SessionPaths.sessionFolders(context).lastOrNull()
-
-
     fun zipFolder(context: Context, folder: File, onProgress: ((Float) -> Unit)? = null): File? {
         if (!folder.isDirectory) return null
         val files = folder.walkTopDown().filter { it.isFile }
@@ -90,9 +66,9 @@ object SessionLogShare {
 
     private fun shareDir(context: Context): File = File(context.cacheDir, "share")
 
-    private const val BATTLENET_DIR = "battlenet"
+    const val BATTLENET_DIR = "battlenet"
 
-    private fun battleNetLogs(context: Context): List<Pair<String, File>> {
+    internal fun battleNetLogs(context: Context): List<Pair<String, File>> {
         val drive = File(BattleNet.prefix(context), "pfx/drive_c")
         val data = File(drive, "ProgramData/Battle.net")
         fun logsUnder(dir: File, prefix: String) = dir.listFiles { f -> f.isDirectory && f.name.startsWith(prefix) }.orEmpty().map { File(it, "Logs") }

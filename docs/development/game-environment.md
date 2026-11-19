@@ -52,6 +52,34 @@ environment entries and is intentionally narrower than **Reset game profile**.
 Values are literal strings, with no shell expansion; quotes are only needed when
 the consuming program expects them.
 
+## Default game logs
+
+Every Windows game launch, on the Mali system driver (bridge) and on the session
+driver alike, prints one line naming the game's Vulkan driver and why, for example
+`droiddeck-game-env: game driver: session driver (PanVK), <icd>; the game's own
+setting (DROIDDECK_GAME_DRIVER=session)`. It also gets these log keys, each only
+when it is not already set by a launch option or a game setting:
+
+| Key | Default | What it writes |
+| --- | --- | --- |
+| `PROTON_LOG` | `1` | Proton's log, `~/steam-<SteamGameId>.log`, recreated at each launch |
+| `WINEDEBUG` | `+timestamp,+pid,+tid,fixme-all` | Wine's `err` lines only |
+| `DXVK_LOG_LEVEL` | `info` | DXVK's adapter, driver and extension lines, once per device |
+| `VKD3D_DEBUG` | `warn` | vkd3d-proton warnings |
+| `FEX_SILENTLOG` | `1` | Nothing: `PROTON_LOG=1` alone switches FEX's logger on, which writes one line per handled unaligned atomic |
+
+None of them writes per frame or per API call. `PROTON_LOG=0` (or empty) as a
+launch option or game setting turns all of them off. Wine's exception and DLL
+tracing and the FEX log come back with **Game debug logs** (below) or the bridge's
+Wine debug logs switch.
+
+The game's exit status (or the signal that ended it) is written to the session
+log. After a failed exit the same place gets a short summary: the bridge ICD's
+vendor-HAL lines and the last 20 `err`/`warn` lines of the game's Proton log.
+**Report a problem** (the one report path; the old session-only "Share logs"
+is gone) carries the newest Proton logs, redacted and trimmed to head and tail,
+and its summary shows the last launch's driver, exit and failure lines.
+
 ## Game debug logs
 
 Under **Setup > Diagnostics**, enable **Session logs** and **Game debug logs**
@@ -148,7 +176,8 @@ values. Custom variables have editable names and literal values.
 | `mesa_glthread` | OpenGL threading; test with the affected game. |
 | `DXVK_CONFIG` | DXVK configuration options; recent builds accept `dxvk.maxFrameRate = 60`. |
 | `VKD3D_FRAME_RATE` | D3D12 frame-rate limit. |
-| `DXVK_HUD`, `PROTON_LOG` | Optional diagnostics; leave unset for ordinary play. |
+| `DXVK_HUD` | Optional diagnostics; leave unset for ordinary play. |
+| `PROTON_LOG` | On by default (see Default game logs); `0` turns the game's logs off. |
 | `PROTON_USE_WINED3D` | D3D9–11 OpenGL fallback for compatibility testing. |
 | `PROTON_USE_XALIA` | Proton's gamepad-navigation helper toggle. |
 

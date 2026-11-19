@@ -150,7 +150,6 @@ fun LoadingOverlay(
     endedDetail: String? = null,
     onRetry: (() -> Unit)? = null,
     onRepair: (() -> Unit)? = null,
-    onShareLogs: (() -> Unit)? = null,
     onReport: (() -> Unit)? = null,
     onClose: (() -> Unit)? = null,
     flood: Color? = null,
@@ -216,7 +215,7 @@ fun LoadingOverlay(
                 textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 12.dp).widthIn(max = 520.dp),
             )
-            if (ended) EndedActions(onRetry, onRepair, onShareLogs, onReport, onClose)
+            if (ended) EndedActions(onRetry, onRepair, onReport, onClose)
         }
         if (!ended && hint.isNotEmpty()) Text(
             hint, fontSize = 13.sp, lineHeight = 18.sp, color = colors.onSurfaceVariant.copy(alpha = 0.8f), textAlign = TextAlign.Center,
@@ -229,7 +228,7 @@ fun LoadingOverlay(
 }
 
 @Composable
-private fun EndedActions(onRetry: (() -> Unit)?, onRepair: (() -> Unit)?, onShareLogs: (() -> Unit)?, onReport: (() -> Unit)?, onClose: (() -> Unit)?) {
+private fun EndedActions(onRetry: (() -> Unit)?, onRepair: (() -> Unit)?, onReport: (() -> Unit)?, onClose: (() -> Unit)?) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         androidx.compose.runtime.withFrameNanos { }
@@ -243,8 +242,6 @@ private fun EndedActions(onRetry: (() -> Unit)?, onRepair: (() -> Unit)?, onShar
             if (onRepair != null) SecondaryButton(stringResource(R.string.store_try_again), modifier = claim(), onClick = onRetry)
             else PrimaryButton(stringResource(R.string.store_try_again), modifier = claim(), onClick = onRetry)
         }
-        if (onShareLogs != null) SecondaryButton(stringResource(R.string.drawer_share_logs), modifier = claim(),
-            progress = com.droiddeck.launcher.session.SessionLogShare.progress, onClick = onShareLogs)
         if (onReport != null) SecondaryButton(stringResource(R.string.report_crash_button), modifier = claim(), onClick = onReport)
         if (onClose != null) SecondaryButton(stringResource(R.string.mode_back), modifier = claim(), onClick = onClose)
     }

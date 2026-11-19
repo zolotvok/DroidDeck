@@ -74,6 +74,9 @@ class ReportActivity : ComponentActivity() {
     private var logsOff by mutableStateOf(false)
     private var message by mutableStateOf<String?>(null)
     private var built: File? = null
+    /** Where the built zip was saved (Downloads/...), so each action saves it once: MediaStore numbers repeats. */
+    @Volatile private var saved: Pair<File, String>? = null
+    private val githubApp by lazy { runCatching { packageManager.getPackageInfo(IssueBrowser.GITHUB_APP, 0) }.isSuccess }
 
     override fun attachBaseContext(newBase: Context) = super.attachBaseContext(AppLanguage.wrap(newBase))
 
@@ -93,7 +96,7 @@ class ReportActivity : ComponentActivity() {
         crash = crash, askCrashAt = askCrashAt, collecting = collecting,
         rows = rows.map { (path, size) -> ReportRow(path, size, ticked[path] != false) },
         notes = notes, logsOff = logsOff, busy = busy, preview = preview, category = category, repo = repo,
-        suggested = suggested(), nextLaunchLog = nextLaunchLog, message = message,
+        suggested = suggested(), nextLaunchLog = nextLaunchLog, message = message, githubApp = githubApp,
     )
 
     private fun suggested() = ReportSummary.suggestRepo(category, plan?.info?.vulkanError == true)
@@ -106,7 +109,7 @@ class ReportActivity : ComponentActivity() {
         onSave = {
             build { zip ->
                 Thread({
-                    val where = ReportBundle.saveToDownloads(this, zip)
+                    val where = saveOnce(zip)
                     main.post { message = if (where != null) getString(R.string.report_saved, where) else getString(R.string.report_save_failed) }
                 }, "report-save").start()
             }
@@ -114,7 +117,9 @@ class ReportActivity : ComponentActivity() {
         onCategory = { c -> category = c; if (!repoChosen) repo = suggested() },
         onRepo = { r -> repo = r; repoChosen = true },
         onCopyIssue = { copyIssue() },
-        onOpenIssue = { openIssue() },
+        onOpenIssue = { openIssue(IssueTarget.BROWSER) },
+        onOpenIssueInApp = { openIssue(IssueTarget.IN_APP) },
+        onOpenIssueGithubApp = { openIssue(IssueTarget.GITHUB_APP) },
         onNextLaunchLog = { on ->
             nextLaunchLog = on
             Thread({ SessionPrefs.setNextLaunchLog(this, on) }, "report-next-log").start()
@@ -136,7 +141,8 @@ class ReportActivity : ComponentActivity() {
                 collecting = false
                 if (p == null) { message = getString(R.string.report_build_failed); return@post }
                 rows = p.parts.map { it.path to if (it.size >= 0) FileUtils.sizeToString(it.size) else "…" }
-                ticked = p.parts.associate { it.path to true }
+                // Battle.net logs carry account details the redactor may not know: in only when ticked.
+                ticked = p.parts.associate { it.path to !it.path.startsWith(SessionLogShare.BATTLENET_DIR + "/") }
                 notes = p.notes
                 if (!repoChosen) repo = suggested()
                 if (crash) ReportBundle.markCrashSeen(this)
@@ -171,6 +177,7 @@ class ReportActivity : ComponentActivity() {
                 busy = null
                 if (result == null) { toast(R.string.report_build_failed); return@post }
                 built = result.zip
+                saved = null
                 val trimmed = result.entries.count { it.trimmed }
                 val hits = result.entries.sumOf { it.hits }
                 message = getString(R.string.report_built, result.zip.name, FileUtils.sizeToString(result.zip.length()), hits, trimmed)
@@ -193,12 +200,47 @@ class ReportActivity : ComponentActivity() {
         return true
     }
 
-    private fun openIssue() {
-        val (title, body) = issueText() ?: return
-        copyIssue()
-        val url = ReportSummary.issueUrl(repo, title, body)
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)) }
-            .onFailure { toast(R.string.report_no_browser) }
+    private fun saveOnce(zip: File): String? {
+        saved?.takeIf { it.first == zip }?.let { return it.second }
+        return ReportBundle.saveToDownloads(this, zip)?.also { saved = zip to it }
+    }
+
+    private enum class IssueTarget { GITHUB_APP, BROWSER, IN_APP }
+
+    /** Saves the zip to Downloads/DroidDeck, copies the issue text (naming the zip) and opens GitHub: the repository's
+     *  issues in the GitHub app (it has no link to a prefilled new issue), or the prefilled new-issue page in the
+     *  default browser by its package (the GitHub app would take the link and drop the prefill), or inside the app. */
+    private fun openIssue(target: IssueTarget) {
+        if (plan == null) return
+        build { zip ->
+            Thread({
+                val where = saveOnce(zip)
+                main.post { openIssuePage(where?.substringAfterLast('/') ?: zip.name, where != null, target) }
+            }, "report-issue").start()
+        }
+    }
+
+    private fun openIssuePage(zipName: String, saved: Boolean, target: IssueTarget) {
+        val p = plan ?: return
+        val attach = ReportSummary.attachLine(zipName, saved)
+        val title = ReportSummary.issueTitle(category, p.info)
+        val body = attach + ReportRedactor.redactText(ReportSummary.issue(p.info, category, zipName))
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        if (target == IssueTarget.GITHUB_APP) {
+            clipboard?.setPrimaryClip(ClipData.newPlainText("DroidDeck issue", title + "\n\n" + body))
+            val issues = Intent(Intent.ACTION_VIEW, Uri.parse(repo.issues)).setPackage(IssueBrowser.GITHUB_APP)
+            if (runCatching { startActivity(issues) }.isSuccess) {
+                message = if (saved) getString(R.string.report_issue_github_next, zipName) else getString(R.string.report_issue_not_saved, zipName)
+                return
+            }
+        }
+        clipboard?.setPrimaryClip(ClipData.newPlainText("DroidDeck issue", body))
+        val (url, shortened) = ReportSummary.issueLink(repo, title, body, ReportSummary.shortIssue(attach))
+        val opened = (target != IssueTarget.IN_APP && IssueBrowser.open(this, url)) ||
+            runCatching { startActivity(IssueWebActivity.intent(this, url)) }.isSuccess
+        if (!opened) { toast(R.string.report_no_browser); return }
+        message = (if (saved) getString(R.string.report_issue_next, zipName) else getString(R.string.report_issue_not_saved, zipName)) +
+            if (shortened) " " + getString(R.string.report_issue_paste) else ""
     }
 
     private fun toast(id: Int) = Toast.makeText(this, id, Toast.LENGTH_LONG).show()

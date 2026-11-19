@@ -1072,22 +1072,30 @@ class LauncherTest(SyncTestCase):
         env = self.env(STEAM_COMPAT_APP_ID="2630", PROTON_NO_NTSYNC="1", BL_SYNC="1", WINEESYNC="1")
         calls = []
 
-        def execvpe(path, args, environment):
-            calls.append((path, list(args), dict(environment)))
-            if len(calls) == 1:
-                raise PermissionError("denied")
-            raise SystemExit(0)
+        class Popen:
+            returncode = 0
 
+            def __init__(self, args, env, **kwargs):
+                calls.append((args[0], list(args), dict(env)))
+                if len(calls) == 1:
+                    raise PermissionError("denied")
+
+            def wait(self):
+                return 0
+
+        # A game launch (waitforexitandrun) waits for the game to log its exit, so it starts it instead of exec'ing.
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sys, "argv", ["droiddeck-game-env"] + command), \
-                mock.patch("os.execvpe", execvpe), contextlib.redirect_stderr(io.StringIO()) as said:
-            with self.assertRaises(SystemExit):
-                game_env["main"]()
+                mock.patch("subprocess.Popen", Popen), contextlib.redirect_stderr(io.StringIO()) as said:
+            self.assertEqual(game_env["main"](), 0)
         self.assertEqual([call[:2] for call in calls], [(str(dist / "proton"), [str(dist / "proton")] + command[1:]),
                                                         (str(tool / "proton"), command)])
         self.assertEqual((calls[0][2]["WINEESYNC"], calls[0][2]["PROTON_NO_ESYNC"], calls[0][2]["BL_SYNC_PACK"]), ("0", "1", pack["id"]))
         self.assertEqual(calls[1][2], self.env(STEAM_COMPAT_APP_ID="2630", PROTON_NO_NTSYNC="1", BL_SYNC="0", WINEESYNC="1",
                                                vblank_mode="0", GAMESCOPE_WSI_MIN_IMAGE_COUNT="8",
-                                               GAMESCOPE_WSI_ENSURE_MIN_IMAGE_COUNT="1"))
+                                               GAMESCOPE_WSI_ENSURE_MIN_IMAGE_COUNT="1", PROTON_LOG="1",
+                                               WINEDEBUG="+timestamp,+pid,+tid,fixme-all", DXVK_LOG_LEVEL="info",
+                                               VKD3D_DEBUG="warn", FEX_SILENTLOG="1"))
+        self.assertIn("game exited with status 0", said.getvalue())
         self.assertIn("could not start (", said.getvalue())
 
     def test_generated_launchers_run_the_dist_proton(self):

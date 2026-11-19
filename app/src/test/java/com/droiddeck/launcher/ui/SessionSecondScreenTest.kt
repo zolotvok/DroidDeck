@@ -294,5 +294,5 @@ class SessionSecondScreenTest {
             onHud = {}, onFrameGenPick = {}, onImportLossless = {}, onKeyboard = {}, onHardwareKeyboard = {},
             onSteamMenu = null, onQam = null, onOsc = {}, onSuspendPolicy = {}, onBackActionsInverted = {},
             onTouch = {}, onFexPreset = {}, onSecondScreenMode = select, onSecondScreenDisplay = {},
-            onLaunchAndroidApp = { _, _ -> }, onBackground = {}, onShareLogs = {}, onStop = {}, onClose = {})
+            onLaunchAndroidApp = { _, _ -> }, onBackground = {}, onStop = {}, onClose = {})
 }

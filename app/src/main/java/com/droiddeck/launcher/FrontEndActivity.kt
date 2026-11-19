@@ -1271,12 +1271,6 @@ class FrontEndActivity : ComponentActivity() {
                             if (limit == com.droiddeck.launcher.core.BackgroundAppLimit.OFF) com.droiddeck.launcher.core.BackgroundAppLimit.restoreAsync(this)
                         },
                         onReport = { ReportActivity.start(this) },
-                        onShareLogs = {
-                            SessionLogShare.prepare(this, { SessionLogShare.latest(this) }) { zip ->
-                                if (zip == null) android.widget.Toast.makeText(this, R.string.main_no_logs_yet, android.widget.Toast.LENGTH_LONG).show()
-                                else startActivity(SessionLogShare.shareIntent(this, zip))
-                            }
-                        },
                         onClearLogs = {
                             Thread({
                                 val cleared = runCatching { SessionArtifacts.clearAll(this) }.getOrDefault(0)

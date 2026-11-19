@@ -330,7 +330,7 @@ report "the store engine is not available".
 Store log lines (the engines' included) go through `StoresState.logLine`, which redacts them
 (`StoreLog.redactLine`) and writes them to logcat and to `filesDir/logs/stores/stores-<date>.log`
 (`StoreLogFiles`: one file a day, seven days kept, ~2 MB each before it rolls to `.1`). Nothing
-shows them in the app; the session's Share logs zip carries them under `stores/`.
+shows them in the app; the Report a problem zip carries them under `stores/`.
 
 Store URLs are logged through `StoreLog.redactUrl`, which drops the query string where the signed
 tokens live.

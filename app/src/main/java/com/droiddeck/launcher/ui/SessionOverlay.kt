@@ -311,7 +311,6 @@ class DrawerActions(
     val onUnfoldedControls: (Boolean) -> Unit = {},
     val unfoldedControlsWithController: Boolean = false,
     val onUnfoldedControlsWithController: (Boolean) -> Unit = {},
-    val onShareLogs: () -> Unit,
     val onReport: () -> Unit = {},
     val gameCrashed: Boolean = false,
     val onStop: () -> Unit,
@@ -786,13 +785,6 @@ internal fun SessionDrawer(open: Boolean, requestedPage: SessionDrawerPage, cont
                                 SettingsRow(stringResource(R.string.drawer_driver_games), gameDriver?.let { manager.getDriverName(it) } ?: sessionName) {}
                             }
                             SettingsGroup(stringResource(R.string.drawer_support)) {
-                                SettingsRow(stringResource(R.string.drawer_logs), stringResource(R.string.drawer_logs_hint)) {
-                                    DrawerOutlineButton(stringResource(R.string.drawer_share_logs), modifier = focus.track(page, "share-logs"),
-                                        progress = com.droiddeck.launcher.session.SessionLogShare.progress) {
-                                        host.open = null
-                                        a.onShareLogs()
-                                    }
-                                }
                                 SettingsRow(stringResource(if (a.gameCrashed) R.string.report_crash_title else R.string.report_problem),
                                     stringResource(R.string.report_problem_hint)) {
                                     DrawerOutlineButton(stringResource(if (a.gameCrashed) R.string.report_crash_button else R.string.report_open),

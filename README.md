@@ -100,7 +100,7 @@ Smart glasses setup is in the [support matrix](docs/smart-glasses-support.md). R
 
 Mali/PanVK problems: open an issue in this fork. The upstream Discord and bug forum are for the official, Adreno-only builds.
 
-Help, Preview builds and device reports are on [Discord](https://discord.gg/JRGAvawjsm). For bugs, post in **#bug-reports** with the zip from **Share logs**.
+Help, Preview builds and device reports are on [Discord](https://discord.gg/JRGAvawjsm). For bugs, post in **#bug-reports** with the zip from **Report a problem** (Setup > Diagnostics, or the in-session menu).
 
 ## Build
 

@@ -125,6 +125,10 @@ object ReportBundle {
         val logs = LinuxRuntime.logDir(context)
         SessionLogShare.recent(File(logs, SessionLogShare.STORES_DIR)).filter { allowed(it.name) && !LogRedactor.isBinary(it) }
             .forEach { parts += Part("stores/${it.name}", Kind.STORES, it.length(), file = it) }
+        SessionLogShare.recent(File(logs, SessionPaths.TOOLS_DIR)).filter { allowed(it.name) && !LogRedactor.isBinary(it) }
+            .forEach { parts += Part("${SessionPaths.TOOLS_DIR}/${it.name}", Kind.STORES, it.length(), file = it) }
+        runCatching { SessionLogShare.battleNetLogs(context) }.getOrDefault(emptyList()).filter { !LogRedactor.isBinary(it.second) }
+            .forEach { (name, f) -> parts += Part("${SessionLogShare.BATTLENET_DIR}/$name", Kind.STORES, f.length(), file = f) }
         val layerSources = proton.take(2) + listOfNotNull(latest?.let { File(it, "session.log") }?.takeIf { it.isFile })
         parts += Part("layers/compat.log", Kind.LAYERS, -1, text = { layerLines(layerSources, COMPAT_LINE) })
         parts += Part("layers/wsi.log", Kind.LAYERS, -1, text = { layerLines(layerSources, WSI_LINE) })
@@ -338,6 +342,11 @@ object ReportBundle {
         }.getOrNull() else null
         val scan = listOfNotNull(protonLog, latest?.let { File(it, "session.log") }).filter { it.isFile }
         val vulkanError = scan.any { f -> runCatching { ReportSummary.vulkanDriverError(tailLines(f, 1024 * 1024)) }.getOrDefault(false) }
+        val lastLaunch = runCatching {
+            val session = latest?.let { File(it, "session.log") }?.takeIf { it.isFile }
+            ReportSummary.lastLaunch(session?.let { tailLines(it, LAUNCH_SCAN_BYTES) }.orEmpty(),
+                protonLog?.let { headLines(it, LAUNCH_SCAN_BYTES) }.orEmpty())
+        }.getOrDefault(emptyList())
         return ReportSummary.Info(
             written = SimpleDateFormat("yyyy-MM-dd HH:mm zzz", Locale.US).format(Date()),
             appVersion = pm?.let { "${it.versionName} (${if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else 0})" } ?: "?",
@@ -383,6 +392,7 @@ object ReportBundle {
             }.getOrDefault("?"),
             envDefaults = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) "" else
                 runCatching { MaliEnvDefaults.status(context).label }.getOrDefault("?"),
+            lastLaunch = lastLaunch,
         ).also { knownHashes(context, bf, it) }
     }
 
@@ -396,6 +406,13 @@ object ReportBundle {
         hashes += info.fexDllMd5.split(", ")
         if (info.panvk.isNotEmpty()) runCatching { hashes += com.droiddeck.launcher.gpu.PanvkPackage.status(context).soMd5 }
         ReportRedactor.allowHashes(hashes.filter { it.isNotEmpty() })
+    }
+
+    private const val LAUNCH_SCAN_BYTES = 2L * 1024 * 1024
+
+    private fun headLines(f: File, bytes: Long): Sequence<String> {
+        val text = RandomAccessFile(f, "r").use { r -> ByteArray(minOf(r.length(), bytes).toInt()).also { r.readFully(it) } }
+        return String(text, Charsets.ISO_8859_1).lineSequence()
     }
 
     private fun tailLines(f: File, bytes: Long): Sequence<String> {
@@ -525,9 +542,10 @@ object ReportBundle {
     }
 
     private fun writeFile(f: File, allowed: Long, out: Writer, raw: Boolean, stats: ReportRedactor.Stats) {
-        val size = f.length()
-        if (size <= allowed) { f.inputStream().use { emit(it, out, raw, stats) }; return }
+        // A live log (a running game's) grows while it is read: read only the [size] bytes the budget was made for.
         RandomAccessFile(f, "r").use { raf ->
+            val size = raf.length()
+            if (size <= allowed) { RangeStream(raf, 0, size).use { emit(it, out, raw, stats) }; return }
             writeTrimmed({ s, e -> RangeStream(raf, s, e) }, size, allowed, out, raw, stats) { s, e -> lineBounds(raf, s, e) }
         }
     }
@@ -620,7 +638,13 @@ object ReportBundle {
                 resolver.delete(uri, null, null)
                 throw e
             }
-            "Download/DroidDeck/${zip.name}"
+            // MediaStore renames a repeat ("name (1).zip"): report the name the file really has.
+            val name = runCatching {
+                resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }.getOrNull() ?: zip.name
+            "Download/DroidDeck/$name"
         } else {
             val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "DroidDeck").apply { mkdirs() }
             zip.copyTo(File(dir, zip.name), overwrite = true)
@@ -673,11 +697,23 @@ object ReportBundle {
 
     internal fun crashIn(lines: Sequence<String>): Boolean = lines.any { GAME_CRASH.containsMatchIn(it) }
 
-    /** The newest Proton log shows a crash and was written after the last report (and within [withinMs]). */
+    private val GAME_EXIT = Regex("droiddeck-game-env: game (?:exited with status (\\d+)|ended by (SIG[A-Z0-9]+))")
+
+    /** The last game exit in the session log was a failure: a non-zero status or a signal other than a stop request. */
+    internal fun failedExitIn(lines: Sequence<String>): Boolean {
+        val last = lines.mapNotNull { GAME_EXIT.find(it) }.lastOrNull() ?: return false
+        val status = last.groupValues[1]
+        return if (status.isNotEmpty()) status != "0" else last.groupValues[2] !in setOf("SIGTERM", "SIGINT", "SIGHUP")
+    }
+
+    /** The newest Proton log shows a crash and was written after the last report (and within [withinMs]), and the
+     *  session log says a game ended with a failure (every game writes a Proton log, so the log alone is not enough). */
     fun recentGameCrash(context: Context, withinMs: Long = 30 * 60_000L): Boolean {
         val log = protonLogs(LinuxRuntime.rootDir(context)).firstOrNull() ?: return false
         val m = log.lastModified()
         if (m <= handled(context) || m < System.currentTimeMillis() - withinMs) return false
-        return runCatching { crashIn(tailLines(log, 512 * 1024)) }.getOrDefault(false)
+        val session = (SessionPaths.current() ?: SessionPaths.sessionFolders(context).lastOrNull())?.let { File(it, "session.log") }
+            ?.takeIf { it.isFile } ?: return false
+        return runCatching { crashIn(tailLines(log, 512 * 1024)) && failedExitIn(tailLines(session, 512 * 1024)) }.getOrDefault(false)
     }
 }

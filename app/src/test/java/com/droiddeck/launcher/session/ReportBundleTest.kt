@@ -161,6 +161,15 @@ class ReportBundleTest {
         for (p in listOf("session.log", "steam/content_log.txt", "crash-app.txt")) assertTrue(p, ReportBundle.allowed(p))
     }
 
+    @Test fun onlyTheLastGameExitCountsAndAStopIsNoCrash() {
+        assertTrue(ReportBundle.failedExitIn(sequenceOf("droiddeck-game-env: game exited with status 5 after 12 s")))
+        assertTrue(ReportBundle.failedExitIn(sequenceOf("droiddeck-game-env: game ended by SIGSEGV (signal 11) after 3 s")))
+        assertFalse(ReportBundle.failedExitIn(sequenceOf("droiddeck-game-env: game ended by SIGTERM (signal 15) after 3 s")))
+        assertFalse(ReportBundle.failedExitIn(sequenceOf("droiddeck-game-env: game exited with status 5 after 12 s",
+            "droiddeck-game-env: game exited with status 0 after 40 s")))
+        assertFalse(ReportBundle.failedExitIn(sequenceOf("droiddeck-game-env: game logs: PROTON_LOG=1")))
+    }
+
     @Test fun gameCrashMarkersAreFound() {
         assertTrue(ReportBundle.crashIn(sequenceOf("ok", "wine: Unhandled page fault on read access to 0000000000000000")))
         assertFalse(ReportBundle.crashIn(sequenceOf("info: DXVK: v2.4", "fixme:ntdll:NtQuerySystemInformation")))
@@ -169,6 +178,9 @@ class ReportBundleTest {
     @Test fun recentGameCrashNeedsANewCrashingProtonLog() {
         val log = File(root, "root/steam-447040.log")
         log.writeText("wine: Unhandled exception 0xc0000005\n")
+        val s = session("2026-11-20-01-steam", "droiddeck-game-env: game exited with status 0 after 30 s\n")
+        assertFalse(ReportBundle.recentGameCrash(app))
+        File(s, "session.log").appendText("droiddeck-game-env: game exited with status 5 after 12 s\n")
         assertTrue(ReportBundle.recentGameCrash(app))
         ReportBundle.markReported(app, log.lastModified() + 1)
         assertFalse(ReportBundle.recentGameCrash(app))
