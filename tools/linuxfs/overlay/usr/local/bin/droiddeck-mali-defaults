@@ -116,7 +116,9 @@ RECIPES = {
         WINE_CPU_TOPOLOGY="4:4,5,6,7",
         WINEDLLOVERRIDES="d3dcompiler_43=n,b",
     )),
-    "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1"}),
+    # 2026.11.20.1: GAMESCOPE_WSI_FRAME_LIMITER_AWARE=0 (manifest "env2"; yooka-wsi-1120: 448 s of frames, no swapchain forcing).
+    "epic:Duckbill": Recipe("Yooka-Laylee and the Impossible Lair", {"MALI_COMPAT_XFB_VS": "1",
+                                                                     "GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0"}),
     # The only GPU vendor spoof: DOOM Eternal's launcher accepts NVIDIA/AMD/Intel only (doom_eternal.md). Never global.
     # 2026.11.19.1: DESC_POOL_SCALE (dd1106 WIN: the title is reached) and BDA_EXT (doom-gfx-1112: the textures appear).
     "steam:782330": Recipe("DOOM Eternal", {"MALI_COMPAT_VENDOR_ID": "10de", "MALI_COMPAT_FAKE_LIMITS": "1",

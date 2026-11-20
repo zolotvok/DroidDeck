@@ -621,7 +621,7 @@ class ComponentCtlTest(FakeAdbTest):
         self.provider(session="READY")
         code, out = self.run_ctl("env-defaults", "install", str(self.MANIFEST))
         self.assertEqual(0, code, out)
-        self.assertRegex(out["manifest"]["version"], r"^2026\.11\.19\.[0-9]+$")
+        self.assertRegex(out["manifest"]["version"], r"^2026\.11\.20\.[0-9]+$")
         self.assertEqual([], self.calls("stop"))
         self.assertEqual("install", self.calls("envdefaults")[0]["request"]["op"])
         bad = self.dir / "bad.json"

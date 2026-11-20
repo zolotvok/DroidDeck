@@ -1,8 +1,8 @@
 {
   "schema": "droiddeck-mali-env-defaults/1",
-  "version": "2026.11.19.1",
-  "date": "2026-11-19",
-  "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env applies; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off. Every game's global D3D12 defaults come from the app (GameEnvironment.defaults: VKD3D_FEATURE_LEVEL=12_1, VKD3D_SHADER_MODEL=6_6, no VKD3D_CONFIG, no GPU vendor spoof, no nvapi); an entry here only adds what that game needs to start or a measured winner (docs/agents/env-defaults-1106.md).",
+  "version": "2026.11.20.1",
+  "date": "2026-11-20",
+  "about": "Per-game env defaults for games on the Mali system driver (Blobferry bridge), read by droiddeck-mali-defaults at every game start. Keys: steam:<app id> or <store>:<store id> (never a per-install Steam shortcut id). Only env and env2 (the few names older apps refuse, applied after env by v0.3.2 and later) apply; pending entries are documented candidates and are never applied. The user's own game settings and shared settings always win key by key; BL_MALI_GAME_DEFAULTS=0 turns all of it off. Every game's global D3D12 defaults come from the app (GameEnvironment.defaults: VKD3D_FEATURE_LEVEL=12_1, VKD3D_SHADER_MODEL=6_6, no VKD3D_CONFIG, no GPU vendor spoof, no nvapi); an entry here only adds what that game needs to start or a measured winner (docs/agents/env-defaults-1106.md).",
   "games": {
     "epic:Angelonia": {
       "title": "Watch Dogs 2",
@@ -211,7 +211,10 @@
       "env": {
         "MALI_COMPAT_XFB_VS": "1"
       },
-      "evidence": "verified: XFB_VS only (Y8, 80-90 fps), defaults.md \u00a7 2; the pack never ran on Yooka, so it is left out."
+      "env2": {
+        "GAMESCOPE_WSI_FRAME_LIMITER_AWARE": "0"
+      },
+      "evidence": "verified: XFB_VS only (Y8, 80-90 fps), defaults.md \u00a7 2; the pack never ran on Yooka, so it is left out. 2026.11.20.1 adds GAMESCOPE_WSI_FRAME_LIMITER_AWARE=0 (env2, the swapchain-recreation freeze fix of the Village / The Witcher 3 / Control freeze class): a Blobferry 0.3.3 rc2 user report showed Yooka drawing about 22 fps for 20 s and then freezing (2 of 2 starts, 11-20 11:3x; the Proton log has 'Forcing swapchain recreation as frame limiter changed' and the swapchain is never 'Destroyed'); with the key, run yooka-wsi-1120 (2026-11-20 13:36-13:46, layer 94dcc32d) played 448 s at 79.6 fps average (39.9-88.3) with no swapchain forcing (created 3, destroyed 2 = destroying 2) and no zero-fps window (docs/games/yooka_laylee_impossible_lair.md l.34). A screening, not a measured rate: the freeze is intermittent (the user also played Yooka for a long time without the key), so the key stays on the strength of the same freeze class in The Witcher 3 and Resident Evil Village."
     },
     "steam:782330": {
       "title": "DOOM Eternal",

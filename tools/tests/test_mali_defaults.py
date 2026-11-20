@@ -602,7 +602,7 @@ class EnvDefaultsManifestTest(unittest.TestCase):
 
     def test_the_shipped_manifest_is_valid_and_keeps_every_built_in_recipe(self):
         version, recipes = MALI["load_manifest"](MANIFEST)
-        self.assertRegex(version, r"^2026\.11\.19\.[0-9]+$")
+        self.assertRegex(version, r"^2026\.11\.20\.[0-9]+$")
         self.assertEqual(set(recipes), set(MALI["RECIPES"]))
         for key, built_in in MALI["RECIPES"].items():
             self.assertEqual(recipes[key].env, built_in.env, key)
