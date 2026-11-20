@@ -4129,6 +4129,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     private fun steamVrAction(action: String) {
+        Log.i(TAG, "SteamVR button: $action (status ${steamVrStatus ?: "unknown"})")
         if (action == "start" && com.droiddeck.launcher.session.QuestExperimental.isSupported()) {
             startActivity(android.content.Intent(this, QuestXrActivity::class.java))
             return

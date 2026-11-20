@@ -55,6 +55,7 @@ class SteamVrHelperTest(unittest.TestCase):
         self.environment.update(HOME=str(self.home), XDG_RUNTIME_DIR=str(self.runtime),
                                 STEAMVR=str(self.steamvr), DROIDDECK_VR_DIR=str(self.root / 'driver'),
                                 DROIDDECK_VR_SETTINGS_HELPER=str(SOURCE.with_name('droiddeck-steamvr-settings')),
+                                DROIDDECK_VR_START_CHECK='0',
                                 PATH=str(self.commands) + os.pathsep + os.environ['PATH'])
 
     def executable(self, destination, body):
@@ -72,6 +73,54 @@ class SteamVrHelperTest(unittest.TestCase):
                 return log
             time.sleep(0.01)
         self.fail('Startup log did not arrive')
+
+    def checked_start(self, pgrep_body):
+        self.environment['DROIDDECK_VR_START_CHECK'] = '6'
+        self.executable(self.commands / 'pgrep', pgrep_body)
+        return subprocess.run(['sh', str(self.helper), 'start'], env=self.environment,
+                              capture_output=True, text=True, timeout=10)
+
+    def test_a_steamvr_that_dies_at_start_up_is_a_failure(self):
+        logs = self.home / '.local/share/Steam/logs'
+        self.executable(self.steamvr / 'bin/linuxarm64/vrstartup',
+                        'echo "Fri Nov 20 2026 18:04:15.434406 - [Error] - Failed to create VkDevice." > "$HOME/.local/share/Steam/logs/vrcompositor.txt"')
+        # vrserver answers the first check, then is gone (the 2026-11-20 18:08 report: it lived 1.3 s)
+        count = self.root / 'count'
+        result = self.checked_start('[ "$1" = -x ] && [ "$2" = vrserver ] || exit 1\n'
+                                    f'n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n'
+                                    '[ "$n" = 2 ]')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Failed to create VkDevice', result.stdout)
+        self.assertIn('Failed to create VkDevice', (self.runtime / 'droiddeck-steamvr/failed').read_text())
+        self.assertFalse((self.runtime / 'droiddeck-steamvr/active').exists())
+        log = (self.runtime / 'droiddeck-steamvr/start.log').read_text()
+        self.assertIn('start requested', log)
+        self.assertIn('start: FAILED', log)
+        self.assertTrue(logs.is_dir())
+
+    def test_a_startup_that_ends_without_a_server_is_a_failure(self):
+        result = self.checked_start('exit 1')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('vrserver did not stay up', (self.runtime / 'droiddeck-steamvr/failed').read_text())
+
+    def test_a_slow_start_with_vrstartup_still_working_is_not_killed(self):
+        result = self.checked_start('[ "$1" = -x ] && [ "$2" = vrstartup ]')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_one_missed_check_after_the_server_came_up_is_no_failure(self):
+        count = self.root / 'count'
+        result = self.checked_start('[ "$1" = -x ] && [ "$2" = vrserver ] || exit 1\n'
+                                    f'n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n'
+                                    '[ "$n" != 0 ] && [ "$n" != 1 ] && [ "$n" != 3 ]')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_server_that_stays_up_is_a_success(self):
+        (self.runtime / 'droiddeck-steamvr').mkdir(parents=True)
+        (self.runtime / 'droiddeck-steamvr/failed').write_text('old failure\n')
+        result = self.checked_start('[ "$1" = -x ] && [ "$2" = vrserver ]')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.runtime / 'droiddeck-steamvr/failed').exists())
+        self.assertIn('start: running', (self.runtime / 'droiddeck-steamvr/start.log').read_text())
 
     def test_fresh_runtime_mode_is_selected_and_log_survives_runtime_cleanup(self):
         log = self.start()

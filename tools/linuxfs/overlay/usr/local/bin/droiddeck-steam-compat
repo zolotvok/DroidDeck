@@ -446,6 +446,16 @@ VR_JS = r"""
       run.call(item.receiver, item.id, ...item.args);
     }
   };
+  self.fail = (message, keep = []) => {
+    const ids = Array.from(self.pending.keys()).filter(id => !keep.includes(id));
+    for (const id of ids) {
+      clearTimeout(self.pending.get(id).timer);
+      self.pending.delete(id);
+    }
+    self.lastError = message;
+    console.error("DroidDeck: " + message);
+    return ids;
+  };
   if (typeof SteamClient.OpenVR?.RegisterForVRModeChange === "function") {
     self.subscription = SteamClient.OpenVR.RegisterForVRModeChange(running => {
       self.running = !!running;
@@ -491,6 +501,10 @@ VR_JS = r"""
   return "installed";
 })()
 """.replace("__BINDING__", VR_BINDING)
+
+
+VR_START_FAILED = ("SteamVR did not start, so the VR game was not launched. "
+                   "Report a problem from DroidDeck to send the SteamVR logs.")
 
 
 def launch_steamvr():
@@ -891,6 +905,42 @@ class Helper:
             rc = e.__class__.__name__
         say("frame limit: Steam's limit is off but gamescope still limits the game; gamescopectl debug_set_fps_limit 0: %s" % rc)
 
+    def check_vr_launch(self, keep=()):
+        proc = self.vr_launch
+        code = None if proc is None else proc.poll()
+        if code is None:
+            return
+        self.vr_launch = None
+        if code == 0:
+            return
+        say("SteamVR library launch failed (helper exit %s)" % code)
+        try:
+            dropped = self.page.evaluate("window.__droiddeckSteamVr?.fail(%s, %s) ?? []" %
+                                         (json.dumps(VR_START_FAILED), json.dumps(sorted(keep))))
+            if dropped:
+                say("dropped the queued VR launch of app(s): " + ", ".join(str(game) for game in dropped))
+        except Exception as e:
+            say("could not drop the queued VR launch (%s)" % e)
+        self.show_message(VR_START_FAILED)
+
+    def gui_command(self, mode):
+        command = [sys.executable, os.path.realpath(__file__), mode]
+        data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        for root in (self.steam_root, os.path.join(data, "Steam")):
+            reaper = os.path.join(root, "steamrtarm64", "reaper")
+            if os.access(reaper, os.X_OK):
+                return [reaper, "SteamLaunch", "AppId=769", "--"] + command
+        return command
+
+    def show_message(self, message):
+        try:
+            proc = subprocess.Popen(self.gui_command("--message"), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+            proc.stdin.write(message.encode("utf-8"))
+            proc.stdin.close()
+        except OSError as e:
+            say("could not show a message (%s)" % e)
+
     def open_chooser(self, payload):
         try:
             request = json.loads(payload)
@@ -904,13 +954,7 @@ class Helper:
         if self.chooser is not None:
             self.finish_chooser(ident, None)
             return
-        command = [sys.executable, os.path.realpath(__file__), "--choose-file"]
-        data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-        for root in (self.steam_root, os.path.join(data, "Steam")):
-            reaper = os.path.join(root, "steamrtarm64", "reaper")
-            if os.access(reaper, os.X_OK):
-                command = [reaper, "SteamLaunch", "AppId=769", "--"] + command
-                break
+        command = self.gui_command("--choose-file")
         try:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, start_new_session=True)
@@ -1110,6 +1154,7 @@ class Helper:
         vr_games = {game for game in vr_games if isinstance(game, str) and game.isascii() and
                     game.isdecimal() and not game.startswith("0") and len(game) <= 20 and
                     int(game) <= 0xffffffffffffffff}
+        self.check_vr_launch(keep=vr_games)
         if vr_games and (self.vr_launch is None or self.vr_launch.poll() is not None):
             say("preparing SteamVR for library app(s): " + ", ".join(sorted(vr_games)))
             self.vr_launch = launch_steamvr()
@@ -1124,6 +1169,7 @@ class Helper:
         say("attached to the client on port %d for its file dialogs" % self.port)
         while True:
             self.sync_controls()
+            self.check_vr_launch()
             sources = [self.page.ws] + ([self.chooser[1].stdout] if self.chooser is not None else [])
             queued = self.page.ws.pending() or bool(self.page.events)
             ready = [self.page.ws] if queued else select.select(sources, [], [], 0.25)[0]
@@ -1142,6 +1188,7 @@ class Helper:
         self.ensure_tools()
         while True:
             self.sync_controls()
+            self.check_vr_launch()
             self.sync_frame_limit()
             self.sync_limiter()
             sources = [self.page.ws] + ([watcher] if watcher.fileno() >= 0 else [])
@@ -1190,6 +1237,24 @@ def chooser_main():
     if not path:
         return 1
     print(json.dumps(path))
+    return 0
+
+
+def message_main():
+    text = sys.stdin.read().strip()
+    if not text:
+        return 1
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+    except (ImportError, ValueError):
+        return 2
+    dialog = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK, text="DroidDeck")
+    dialog.format_secondary_text(text)
+    dialog.set_keep_above(True)
+    dialog.run()
+    dialog.destroy()
     return 0
 
 
@@ -1247,6 +1312,8 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--choose-file"]:
         sys.exit(chooser_main())
+    if sys.argv[1:2] == ["--message"]:
+        sys.exit(message_main())
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         sys.exit(main())

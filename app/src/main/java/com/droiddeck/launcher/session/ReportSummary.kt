@@ -49,7 +49,10 @@ object ReportSummary {
 
     /** The first line that shows a Vulkan or driver failure: the evidence the summary quotes. */
     fun vulkanErrorLine(lines: Sequence<String>): String? =
-        lines.firstOrNull { VULKAN_ERROR.containsMatchIn(it) && !LIKELY_CAUSE.containsMatchIn(it) }?.trim()
+        lines.firstOrNull { VULKAN_ERROR.containsMatchIn(it) && !LIKELY_CAUSE.containsMatchIn(it) && !STATS_LINE.containsMatchIn(it) }?.trim()
+
+    /** The layers' periodic statistics ("mali-compat: sync-diag 10.0s …: … fails 0 | …"): counters, not failures. */
+    private val STATS_LINE = Regex("mali-compat: sync-diag\\b|\\[stats\\] last 10 s:")
 
     /** game-env's own "likely cause" sentences: our words about a log line, not evidence. */
     private val LIKELY_CAUSE = Regex("droiddeck-game-env: likely cause: ")

@@ -954,6 +954,64 @@ class SwitchToDesktopTest(unittest.TestCase):
             helper.drain()
             self.assertEqual(patched["launch_steamvr"].call_count, 2)
 
+    def test_a_failed_steamvr_start_drops_the_queued_vr_game_and_says_so(self):
+        helper = LIVE["Helper"]("/steam", 1)
+        helper.page = mock.Mock()
+        helper.page.drain.return_value = []
+        helper.page.evaluate.return_value = ["611670"]
+        child = mock.Mock()
+        child.poll.return_value = 1
+        helper.vr_launch = child
+        with mock.patch.object(self.globals["subprocess"], "Popen") as popen:
+            helper.drain()
+            helper.drain()
+        helper.page.evaluate.assert_called_once()
+        self.assertIn("__droiddeckSteamVr?.fail(", helper.page.evaluate.call_args.args[0])
+        self.assertIn(json.dumps(LIVE["VR_START_FAILED"]), helper.page.evaluate.call_args.args[0])
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0][-1], "--message")
+        popen.return_value.stdin.write.assert_called_once_with(LIVE["VR_START_FAILED"].encode("utf-8"))
+        self.assertIsNone(helper.vr_launch)
+
+    def test_the_loop_notices_a_failed_steamvr_start_without_any_page_event(self):
+        helper = LIVE["Helper"]("/steam", 1)
+        helper.page = mock.Mock()
+        helper.page.evaluate.return_value = []
+        child = mock.Mock()
+        child.poll.return_value = 1
+        helper.vr_launch = child
+        with mock.patch.object(self.globals["subprocess"], "Popen") as popen:
+            helper.check_vr_launch()
+        self.assertIn(", []) ?? []", helper.page.evaluate.call_args.args[0])
+        popen.assert_called_once()
+
+    def test_games_queued_in_the_failing_round_stay_queued(self):
+        helper = LIVE["Helper"]("/steam", 1)
+        helper.page = mock.Mock()
+        helper.page.evaluate.return_value = []
+        helper.page.drain.return_value = [{"method": "Runtime.bindingCalled", "params": {
+            "name": LIVE["VR_BINDING"], "payload": "1234567"}}]
+        child = mock.Mock()
+        child.poll.return_value = 1
+        helper.vr_launch = child
+        with mock.patch.dict(self.globals, {"launch_steamvr": mock.Mock()}) as patched, \
+                mock.patch.object(self.globals["subprocess"], "Popen"):
+            helper.drain()
+            patched["launch_steamvr"].assert_called_once_with()
+        self.assertIn(', ["1234567"]) ?? []', helper.page.evaluate.call_args.args[0])
+
+    def test_a_steamvr_start_that_worked_shows_nothing(self):
+        helper = LIVE["Helper"]("/steam", 1)
+        helper.page = mock.Mock()
+        helper.page.drain.return_value = []
+        child = mock.Mock()
+        child.poll.return_value = 0
+        helper.vr_launch = child
+        with mock.patch.object(self.globals["subprocess"], "Popen") as popen:
+            helper.drain()
+        helper.page.evaluate.assert_not_called()
+        popen.assert_not_called()
+
     def test_vr_launch_runs_helper_without_shell_in_background(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": tmp}):
             with mock.patch.object(self.globals["subprocess"], "Popen") as popen:

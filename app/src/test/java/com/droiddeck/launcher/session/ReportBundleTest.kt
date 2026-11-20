@@ -221,7 +221,9 @@ class ReportBundleTest {
         assertEquals(old, ReportBundle.launchProtonLog(logs, named, 5_000_000L))
         assertEquals(new, ReportBundle.launchProtonLog(logs, listOf("droiddeck-game-env: game driver: x"), 5_000_000L))
         assertNull(ReportBundle.launchProtonLog(logs, listOf("droiddeck-game-env: game driver: x"), 10_000_000L))
-        assertEquals(new, ReportBundle.launchProtonLog(logs, emptyList(), 10_000_000L))
+        assertNull("without a launch an older session's Proton log is not this report's", ReportBundle.launchProtonLog(logs, emptyList(), 10_000_000L))
+        assertEquals(new, ReportBundle.launchProtonLog(logs, emptyList(), 5_000_000L))
+        assertEquals(new, ReportBundle.launchProtonLog(logs, emptyList(), null))
         old.delete(); new.delete()
     }
 

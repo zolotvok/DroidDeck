@@ -141,31 +141,70 @@ object ReportBundle {
         val logcatText = lazy { logcat(context, LOGCAT_LINES) }
         parts += Part("logcat.txt", Kind.LOGCAT, -1, text = { logcatText.value })
         crashParts(context, notes).let { parts += it }
+        steamVrStateParts(context).forEach { parts += it }
         val sessionLog = latest?.let { File(it, "session.log") }?.takeIf { it.isFile }
-        val launch = runCatching { ReportSummary.launchLines(sessionLog?.let { tailLines(it, LAUNCH_SCAN_BYTES) }.orEmpty()) }.getOrDefault(emptyList())
+        val sessionTail = runCatching { sessionLog?.let { tailLines(it, LAUNCH_SCAN_BYTES).toList() } }.getOrNull().orEmpty()
         val since = latest?.let { sessionStart(it) }
-        val gameLog = launchProtonLog(proton, launch, since)
-        val appId = SessionState.gameId?.takeIf { GameEnvironment.validScope(it) && it.isNotEmpty() }
-            ?: (gameLog ?: proton.firstOrNull())?.let { appIdOf(it) }
+        val zone = java.util.TimeZone.getDefault()
+        val steamFiles = latest?.let { l -> File(l, "steam").listFiles { f -> f.isFile && SteamLogAllowlist.allowed(f.name) }?.toList() }.orEmpty() +
+            latest?.let { runCatching { SessionLogShare.liveSteamLogs(context, it) }.getOrNull() }.orEmpty()
+        val steam = runCatching { steamLines(steamFiles, since, zone) }.getOrDefault(emptyList())
+        // a launch asked for after the last game-env launch (a VR-only game held for SteamVR): the report is about it
+        val request = runCatching { ReportCause.requestedLaunch(sessionTail, steam) }.getOrNull()
+        val launch = if (request != null) emptyList()
+            else runCatching { ReportSummary.launchLines(sessionTail.asSequence()) }.getOrDefault(emptyList())
+        val gameLog = if (request != null) proton.firstOrNull { appIdOf(it) == request.appId && (since == null || it.lastModified() >= since) }
+            else launchProtonLog(proton, launch, since)
+        val appId = request?.appId ?: SessionState.gameId?.takeIf { GameEnvironment.validScope(it) && it.isNotEmpty() }
+            ?: gameLog?.let { appIdOf(it) }
         val scope = ReportSummary.scopeOf(appId)
         val env = envText(context, scope)
         parts += Part("env/game-env.txt", Kind.ENV, env.length.toLong(), text = { env })
         // the updater's install log (gpu/ComponentLog): what was installed, rolled back or refused, and when
         com.droiddeck.launcher.gpu.ComponentLog.file(context.filesDir).takeIf { it.isFile }
             ?.let { parts += Part("components/install.log", Kind.ENV, it.length(), file = it) }
-        val info = info(context, appId, scope, gameLog, launch, since, logcatText)
+        val notStarted = request?.takeIf { !ReportCause.started(it, sessionTail, steam) }
+        // SteamVR's failures belong to a VR launch, or to a session without a game launch (the SteamVR button)
+        val steamVr = if (request?.vrHeld == true || (request == null && launch.isEmpty())) ReportCause.steamVrBullets(steam) else emptyList()
+        val noProtonLog = when {
+            gameLog != null -> null
+            request != null -> "none for ${request.appId} in this session"
+            proton.isNotEmpty() && since != null -> "none from this session (the newest, ${proton.first().name}, is older)"
+            else -> null
+        }
+        val info = info(context, appId, scope, gameLog, launch, since, logcatText, steamVr, notStarted, noProtonLog)
         if (info.vulkanError) notes += if (info.cause.isNotEmpty()) "The logs show a Vulkan/driver error (quoted under \"What went wrong\" in summary.md)."
             else "The logs show a Vulkan/driver error."
         parts.add(0, Part("summary.md", Kind.SUMMARY, -1, text = { ReportSummary.markdown(info) }))
         return Plan(parts.filter { it.path !in options.skip }, notes, info)
     }
 
-    /** The Proton log of the last launch: the one its failure summary names; else, after a launch, the newest one
-     *  written since the session began; without a launch, the newest one. */
+    /** The Proton log of the last launch: the one its failure summary names; else the newest one written since the
+     *  session began (an older one is another session's game, not this report's). */
     internal fun launchProtonLog(logs: List<File>, launch: List<String>, since: Long?): File? {
         ReportSummary.summaryLogName(launch)?.let { name -> return logs.firstOrNull { it.name == name } }
-        if (launch.isEmpty()) return logs.firstOrNull()
         return logs.firstOrNull { since == null || it.lastModified() >= since }
+    }
+
+    private val STEAM_SUMMARY_LOG = Regex("(?:vrcompositor|vrserver|vrstartup|vrclient_[a-z0-9_]+|gameprocess_log|console_log|droiddeck-vrstartup)\\.(?:txt|log)")
+    private const val STEAM_SCAN_BYTES = 1L * 1024 * 1024
+
+    /** This session's lines of the Steam logs the summary reads (SteamVR, game processes, Steam's console). */
+    internal fun steamLines(files: List<File>, since: Long?, zone: java.util.TimeZone): List<String> =
+        files.filter { it.isFile && STEAM_SUMMARY_LOG.matches(it.name) }.distinctBy { it.name }.flatMap { f ->
+            ReportCause.sinceSession(tailLines(f, STEAM_SCAN_BYTES).toList(), since, since == null || f.lastModified() >= since, zone)
+        }
+
+    private val STEAMVR_STATE = setOf("start.log", "library-launch.log", "install.log", "failed", "active", "installing")
+
+    /** droiddeck-steamvr's state in the session's runtime dir (/run/droiddeck in the guest): its start log and markers. */
+    internal fun steamVrStateParts(context: Context): List<Part> {
+        val dir = File(context.filesDir, ".wayland-rt/droiddeck-steamvr")
+        val since = System.currentTimeMillis() - RECENT_MS
+        return dir.listFiles { f ->
+            f.name in STEAMVR_STATE && f.isFile && !java.nio.file.Files.isSymbolicLink(f.toPath()) && f.lastModified() >= since &&
+                !LogRedactor.isBinary(f)
+        }.orEmpty().sortedBy { it.name }.map { Part("steamvr/${it.name}", Kind.SESSION, it.length(), file = it) }
     }
 
     private val COMPAT_LINE = Regex("mali-compat:|mali-bridge:|hybris-lazyinit:|libhybris|droiddeck-game-env: game driver")
@@ -347,6 +386,7 @@ object ReportBundle {
 
     private fun info(
         context: Context, appId: String?, scope: String?, protonLog: File?, launch: List<String>, since: Long?, logcat: Lazy<String>,
+        steamVr: List<String> = emptyList(), notStarted: ReportCause.Request? = null, noProtonLog: String? = null,
     ): ReportSummary.Info {
         val pm = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
         val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -384,13 +424,18 @@ object ReportBundle {
             ProtonDefault.selectedId(context, all)?.let { id -> all.firstOrNull { it.id == id }?.let { "${it.name} ${it.version}".trim() } ?: id }
         }.getOrNull()
         val exit = ReportCause.exitOf(launch)
+        val outcome = notStarted?.let { ReportCause.notStarted("${gameName ?: "app"} (${it.appId})", it, steamVr.isNotEmpty()) }
         // the app's own exit only when it ended during this session (an older force stop is not this launch's exit)
         val appExit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && since != null) runCatching {
             context.getSystemService(android.app.ActivityManager::class.java).getHistoricalProcessExitReasons(context.packageName, 0, 1)
                 .firstOrNull()?.takeIf { it.timestamp >= since }
                 ?.let { "app: " + com.droiddeck.launcher.core.DeviceReport.exitSummary(it.processName, it.reason, it.status, it.description) }
         }.getOrNull() else null
-        val lastExit = listOfNotNull(exit?.text ?: if (launch.isNotEmpty()) "no game exit logged for the last launch" else "no game launch in this session",
+        val lastExit = listOfNotNull(exit?.text ?: when {
+            notStarted != null -> "the requested launch of ${notStarted.appId} never started"
+            launch.isNotEmpty() -> "no game exit logged for the last launch"
+            else -> "no game launch in this session"
+        },
             appExit).joinToString("; ")
         val protonLines = protonLog?.let { runCatching { excerptLines(it) }.getOrNull() }.orEmpty()
         // only this launch's lines: an earlier launch's error in session.log is not this one's
@@ -402,7 +447,7 @@ object ReportBundle {
         }.getOrDefault(emptyList())
         val finding = runCatching {
             ReportCause.analyse(launch, protonLines, logcat.value.lineSequence().toList(), System.currentTimeMillis(),
-                java.util.TimeZone.getDefault(), vulkanErrorLine, since)
+                java.util.TimeZone.getDefault(), vulkanErrorLine, since, before = steamVr, outcome = outcome)
         }.getOrNull()
         val defaults = fromLaunch?.second?.let { key -> runCatching { MaliEnvDefaults.inForceGames(context)[key]?.env }.getOrNull() }
         return ReportSummary.Info(
@@ -439,6 +484,7 @@ object ReportBundle {
             protonLog = when {
                 SessionPrefs.nextLaunchLog(context) -> "armed for the next launch"
                 protonLog != null -> "found (${protonLog.name})"
+                noProtonLog != null -> noProtonLog
                 else -> "not found (PROTON_LOG off)"
             },
             lastExit = lastExit,
@@ -486,11 +532,13 @@ object ReportBundle {
 
     private val EVENT_TIME = Regex("\"t\":(\\d+)")
 
-    /** When a session began: the first event's time in its events.jsonl, else the folder's own time. */
+    /** When a session began: the first event's time in its events.jsonl, else its oldest file's time (the folder's own
+     *  time moves when the session ends). */
     internal fun sessionStart(folder: File): Long? = runCatching {
         File(folder, "events.jsonl").takeIf { it.isFile }?.bufferedReader()?.use { it.readLine() }
             ?.let { EVENT_TIME.find(it)?.groupValues?.get(1)?.toLongOrNull() }
-    }.getOrNull() ?: folder.lastModified().takeIf { it > 0 }
+    }.getOrNull() ?: folder.listFiles()?.filter { it.isFile }?.minOfOrNull { it.lastModified() }?.takeIf { it > 0 }
+        ?: folder.lastModified().takeIf { it > 0 }
 
     private fun tailLines(f: File, bytes: Long): Sequence<String> {
         val size = f.length()

@@ -232,6 +232,102 @@ object ReportCause {
         return Stall(((run.last().endMs - run.first().endMs) / 1000 + 10).toInt(), false, untilWhat)
     }
 
+    // ---- SteamVR and launches that never ran (Steam's own logs) ----
+
+    /** SteamVR dying at start-up (docs/analysis/vr-erc-1120.md): compositor, server, startup, client, process exit. */
+    val STEAMVR_CAUSES = listOf(
+        "SteamVR failed: its compositor could not create its Vulkan device" to "Failed to create VkDevice",
+        "SteamVR failed: its server quit because the compositor exited" to "Compositor exited unexpectedly",
+        "SteamVR failed: it could not start (VR_Init error)" to "VR_Init error",
+        "SteamVR failed: its client could not start the compositor" to "Failed to start vrcompositor",
+        "SteamVR failed: it exited with an error" to "AppID 250820 no longer tracking PID \\d+, exit code -?[1-9]",
+    ).map { (label, pattern) -> label to Regex(pattern) }
+
+    /** One bullet per SteamVR failure kind found in [steam] (this session's Steam log lines), its last line quoted. The
+     *  process exit alone is no failure (a stop may end SteamVR with a non-zero code); it only joins the others. */
+    fun steamVrBullets(steam: List<String>): List<String> {
+        val found = STEAMVR_CAUSES.mapNotNull { (label, pattern) ->
+            steam.lastOrNull { pattern.containsMatchIn(it) }?.let { label to "$label: ${code(it)}" }
+        }
+        return if (found.all { it.first == STEAMVR_CAUSES.last().first }) emptyList() else found.map { it.second }
+    }
+
+    /** A game launch the logs show as asked for: [vrHeld] = Steam's VR-only game waiting for SteamVR; [index]: its line
+     *  in session.log (held) or in the Steam lines (LaunchApp). */
+    class Request(val appId: String, val vrHeld: Boolean, val index: Int = -1)
+
+    private val VR_PREPARE = Regex("droiddeck-steam-compat: preparing SteamVR for library app\\(s\\): ([0-9, ]+)")
+    private val GAME_ACTION = Regex("GameAction \\[AppID (\\d+), ActionID \\d+\\] : LaunchApp")
+    private val GAME_ENV_START = Regex("droiddeck-game-env: game driver:")
+
+    /**
+     * The launch asked for last, when no game-env launch block follows it in session.log: a VR-only game the Steam
+     * hook held for SteamVR, or, in a session without any game-env launch, Steam's last LaunchApp in [steam]. Null
+     * when the last thing in session.log is a game-env launch (the summary's launch block is that one).
+     */
+    fun requestedLaunch(session: List<String>, steam: List<String>): Request? {
+        var last: Request? = null
+        var launched = false
+        session.forEachIndexed { i, line ->
+            VR_PREPARE.find(line)?.let { m ->
+                m.groupValues[1].split(',').map { it.trim() }.lastOrNull { it.isNotEmpty() && it != STEAMVR_APP }
+                    ?.let { last = Request(it, true, i) }
+            }
+            if (GAME_ENV_START.containsMatchIn(line)) { last = null; launched = true }
+        }
+        if (last != null || launched) return last
+        for (i in steam.indices.reversed()) {
+            val id = GAME_ACTION.find(steam[i])?.groupValues?.get(1) ?: continue
+            if (id != STEAMVR_APP) return Request(id, false, i)
+        }
+        return null
+    }
+
+    private const val STEAMVR_APP = "250820"
+
+    /** Whether a process of the requested game ran after the request: Steam's game process lines (its stdout in
+     *  session.log, gameprocess_log, console_log) or its Proton log name. */
+    fun started(request: Request, session: List<String>, steam: List<String>): Boolean {
+        val id = Regex.escape(request.appId)
+        val ran = Regex("Game process added : AppID $id\\b|AppID $id adding PID|for gameID $id\\b|steam-$id\\.log")
+        val after = if (request.vrHeld) session.drop(request.index + 1) else session + steam.drop(request.index + 1)
+        return after.any { ran.containsMatchIn(it) }
+    }
+
+    /** The last words of "What went wrong" for a launch that never started. */
+    fun notStarted(game: String, request: Request, steamVrFailed: Boolean): String =
+        if (request.vrHeld) "The launch of $game was requested, but the game never started: Steam holds a VR-only game until " +
+            "SteamVR runs, and " + (if (steamVrFailed) "SteamVR failed (above)." else "SteamVR was not reported running.")
+        else "The launch of $game was requested (Steam LaunchApp), but no game process started."
+
+    private val STEAM_STAMP = Regex("^\\[(\\d{4})-(\\d\\d)-(\\d\\d) (\\d\\d):(\\d\\d):(\\d\\d)]")
+    private val VR_STAMP = Regex("^[A-Z][a-z]{2} ([A-Z][a-z]{2}) (\\d\\d) (\\d{4}) (\\d\\d):(\\d\\d):(\\d\\d)")
+    private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+    /** A Steam log line's own time ("[2026-11-20 18:04:03] …" or SteamVR's "Fri Nov 20 2026 18:04:15.434406 - …"). */
+    fun steamLineTime(line: String, zone: TimeZone): Long? {
+        val f = STEAM_STAMP.find(line)?.groupValues?.drop(1)?.map { it.toInt() }
+            ?: VR_STAMP.find(line)?.groupValues?.let { g ->
+                val month = MONTHS.indexOf(g[1]).takeIf { it >= 0 } ?: return null
+                listOf(g[3].toInt(), month + 1, g[2].toInt(), g[4].toInt(), g[5].toInt(), g[6].toInt())
+            } ?: return null
+        val cal = Calendar.getInstance(zone, Locale.US)
+        cal.clear()
+        cal.set(f[0], f[1] - 1, f[2], f[3], f[4], f[5])
+        return cal.timeInMillis
+    }
+
+    /** The lines of one Steam log written from [since] on: a line without a time belongs to the last timed one above
+     *  it; lines above the first timed one count only when the file itself was written since then ([fresh]). */
+    fun sinceSession(lines: List<String>, since: Long?, fresh: Boolean, zone: TimeZone): List<String> {
+        if (since == null) return lines
+        var keep = fresh
+        return lines.filter { line ->
+            steamLineTime(line, zone)?.let { keep = it >= since - 1_000L }
+            keep
+        }
+    }
+
     // ---- the summary's "What went wrong" ----
 
     class Finding(val bullets: List<String>, val wsiLines: List<String>)
@@ -239,8 +335,9 @@ object ReportCause {
     private fun code(line: String) = "`" + line.trim().take(300).replace("`", "'") + "`"
 
     /** The bullets of "What went wrong", most telling first, and the last swapchain/WSI lines when they matter. */
-    fun findings(proton: List<String>, exit: Exit?, stall: Stall?, vulkanErrorLine: String? = null, launched: Boolean = true): Finding {
-        val bullets = ArrayList<String>()
+    fun findings(proton: List<String>, exit: Exit?, stall: Stall?, vulkanErrorLine: String? = null, launched: Boolean = true,
+                 before: List<String> = emptyList(), outcome: String? = null): Finding {
+        val bullets = ArrayList<String>(before)
         val stopped = exit?.stopped == true
         stall?.let { bullets += it.text + "." }
         val hung = hungDestroys(proton).map { proton[it] }
@@ -259,6 +356,8 @@ object ReportCause {
             bullets += "Vulkan/driver error: ${code(vulkanErrorLine)}"
         if (bullets.isEmpty()) bullets += "No known cause pattern was found in the logs; the key lines are under \"Last game launch\"."
         bullets += when {
+            outcome != null -> outcome
+            !launched && proton.isEmpty() -> "No game launch was logged in this session."
             !launched -> "No game launch was logged in this session; the lines above are from the newest Proton log."
             exit == null -> "No game exit was logged for this launch (the game may still have been running)."
             stopped -> exit.text.replaceFirstChar { it.uppercase() } + " (a stop signal: the session or Steam stopped it)."
@@ -269,11 +368,12 @@ object ReportCause {
 
     /** "What went wrong" for the last launch ([launch]: its game-env lines), or null without a launch and a Proton log. */
     fun analyse(launch: List<String>, proton: List<String>, logcat: List<String>, nowMs: Long, zone: TimeZone,
-                vulkanErrorLine: String? = null, sessionStart: Long? = null): Finding? {
-        if (launch.isEmpty() && proton.isEmpty()) return null
+                vulkanErrorLine: String? = null, sessionStart: Long? = null,
+                before: List<String> = emptyList(), outcome: String? = null): Finding? {
+        if (launch.isEmpty() && proton.isEmpty() && before.isEmpty() && outcome == null) return null
         val exit = exitOf(launch)
         val stall = if (launch.isEmpty()) null
             else stall(windows(logcat, nowMs, zone), stopRequests(logcat, nowMs, zone), exit, nowMs, sessionStart)
-        return findings(proton, exit, stall, vulkanErrorLine, launched = launch.isNotEmpty())
+        return findings(proton, exit, stall, vulkanErrorLine, launched = launch.isNotEmpty(), before = before, outcome = outcome)
     }
 }

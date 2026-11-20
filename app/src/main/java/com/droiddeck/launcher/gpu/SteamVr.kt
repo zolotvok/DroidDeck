@@ -1,6 +1,7 @@
 package com.droiddeck.launcher.gpu
 
 import android.content.Context
+import android.util.Log
 import com.droiddeck.launcher.agent.AgentGuest
 import org.json.JSONObject
 
@@ -38,8 +39,17 @@ object SteamVr {
 
     fun run(context: Context, action: String): Boolean = runCatching {
         require(action in setOf("install", "start", "stop"))
-        succeeded(action, AgentGuest.call(context, JSONObject().put("kind", "vr").put("action", action), ACTION_TIMEOUT_MS))
-    }.getOrDefault(false)
+        val answer = AgentGuest.call(context, JSONObject().put("kind", "vr").put("action", action), ACTION_TIMEOUT_MS)
+        succeeded(action, answer).also { ok -> Log.i(TAG, describe(action, answer, ok)) }
+    }.getOrElse { e ->
+        Log.w(TAG, "SteamVR $action: no answer from the guest (${e.javaClass.simpleName})")
+        false
+    }
+
+    /** One app.log line per SteamVR action: the helper's exit code and its last output line (the failure reason). */
+    internal fun describe(action: String, answer: JSONObject, ok: Boolean): String =
+        "SteamVR $action: " + (if (ok) "ok" else "FAILED") + ", exit " + answer.opt("exitCode") +
+            (answer.optString("output").trim().lineSequence().lastOrNull()?.takeIf { it.isNotEmpty() }?.let { ": " + it.take(300) } ?: "")
 
     fun succeeded(action: String, answer: JSONObject): Boolean = when {
         !answer.optBoolean("ok", false) -> false
@@ -57,6 +67,7 @@ object SteamVr {
         else -> Status.READY
     }
 
+    private const val TAG = "SteamVr"
     private const val STATUS_TIMEOUT_MS = 10_000L
     private const val ACTION_TIMEOUT_MS = 40_000L
 }

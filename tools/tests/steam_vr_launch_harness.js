@@ -81,3 +81,28 @@ assert.strictEqual(apps.RunGame('611670', '', -1, 100), 'native');
 assert.strictEqual(apps.RunGame('250820', '', -1, 100), 'native');
 assert.deepStrictEqual(openvr.StartVR(true), [true]);
 assert.strictEqual(calls.length, 7);
+
+// SteamVR died while a VR-only launch waited: the helper's failure drops the queue and its timer
+context.droiddeckLaunchSteamVr = id => requests.push(id);
+changed(false);
+apps.RunGame('611670', '', -1, 100);
+assert.strictEqual(context.__droiddeckSteamVr.pending.size, 1);
+assert.strictEqual(timers.size, 1);
+assert.deepStrictEqual(Array.from(context.__droiddeckSteamVr.fail('SteamVR did not start')), ['611670']);
+assert.strictEqual(context.__droiddeckSteamVr.pending.size, 0);
+assert.strictEqual(timers.size, 0);
+assert.strictEqual(context.__droiddeckSteamVr.lastError, 'SteamVR did not start');
+assert.strictEqual(errors[errors.length - 1], 'DroidDeck: SteamVR did not start');
+changed(true);
+assert.strictEqual(calls.length, 7);
+assert.strictEqual(context.__droiddeckSteamVr.fail('again').length, 0);
+
+// a game queued in the same round as the failure stays queued for the retry
+changed(false);
+apps.RunGame('611670', '', -1, 100);
+apps.RunGame('1234567', '', -1, 100);
+overview.set('1234567', {vr_only: true});
+apps.RunGame('1234567', '', -1, 100);
+assert.deepStrictEqual(Array.from(context.__droiddeckSteamVr.fail('SteamVR did not start', ['1234567'])), ['611670']);
+assert.deepStrictEqual(Array.from(context.__droiddeckSteamVr.pending.keys()), ['1234567']);
+assert.strictEqual(timers.size, 1);

@@ -15,6 +15,40 @@ PKG_URL=https://steamdeck-packages.steamos.cloud/archlinux-deckard-hotfixes/rele
 PKG_SHA256=90a600775eb3e8856dc475f83166a93a290a0b1f3b4e82a69c8e2a8f06b9ddc9
 
 running() { pgrep -x vrserver >/dev/null 2>&1; }
+note() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$state/start.log"; }
+
+# vrstartup is only spawned: SteamVR counts as started once vrserver answered 3 one-second checks in a row.
+# It dies within ~1 s when its compositor cannot open the GPU (vr-erc-1120), so a bare spawn is no success.
+check_started() {
+    check=${DROIDDECK_VR_START_CHECK:-15}
+    [ "$check" -gt 0 ] || return 0
+    seen=0
+    missed=0
+    waited=0
+    while [ "$waited" -lt "$check" ]; do
+        sleep 1
+        waited=$((waited + 1))
+        if running; then
+            seen=$((seen + 1))
+            missed=0
+            [ "$seen" -lt 3 ] || return 0
+        elif [ "$seen" -gt 0 ]; then
+            seen=0
+            missed=$((missed + 1))
+            [ "$missed" -lt 2 ] || return 1
+        elif [ "$waited" -ge 3 ] && ! pgrep -x vrstartup >/dev/null 2>&1; then
+            return 1
+        fi
+    done
+    # a slow first start: vrserver not up yet but vrstartup still working; the status poll decides from here
+    running || pgrep -x vrstartup >/dev/null 2>&1
+}
+
+start_failure() {
+    find "$logs" -maxdepth 1 -name 'vr*.txt' -newer "$state/active" 2>/dev/null |
+        xargs -r grep -h -E 'Failed to create VkDevice|Compositor exited unexpectedly|VR_Init error|Failed to start vrcompositor' 2>/dev/null |
+        tail -n 1 | cut -c1-300
+}
 installed() { [ -x "$steamvr/bin/linuxarm64/vrstartup" ]; }
 quest_settings() {
     backup=$HOME/.local/share/droiddeck/steamvr-quest-settings.json
@@ -81,7 +115,7 @@ launch)
         "$0" install || exit $?
         while [ -f "$state/installing" ]; do sleep 1; done
     fi
-    "$0" start
+    DROIDDECK_VR_START_WAIT=1 "$0" start
     ;;
 status)
     i=0; installed && i=1
@@ -119,7 +153,13 @@ unregister)
     ;;
 start)
     exec 9>"$state/start.lock"
-    flock -n 9 || { echo "SteamVR start already in progress"; exit 0; }
+    # a library launch waits for a start in progress (the app's button) and then reports its own outcome
+    if [ -n "${DROIDDECK_VR_START_WAIT:-}" ]; then
+        flock -w 60 9 || { echo "SteamVR start did not finish"; exit 1; }
+    else
+        flock -n 9 || { echo "SteamVR start already in progress"; exit 0; }
+    fi
+    note "start requested"
     installed || { echo "SteamVR is not installed (droiddeck-steamvr install)"; exit 1; }
     [ -f "$driver/bin/linuxarm64/driver_droiddeck.so" ] || { echo "the Cardboard driver is missing from $driver"; exit 1; }
     if [ -f "$state/active" ] && { running || pgrep -x vrstartup >/dev/null 2>&1; }; then
@@ -247,6 +287,17 @@ JSON
     ln -sf "$startup_log" "$state/vrstartup.log"
     setsid ./vrstartup 8>&- 9>&- > "$startup_log" 2>&1 < /dev/null &
     startup_handed_off=1
+    note "start: vrstartup spawned"
+    if ! check_started; then
+        reason=$(start_failure)
+        note "start: FAILED, vrserver did not stay up${reason:+: $reason}"
+        printf '%s %s\n' "$(date +%s)" "${reason:-vrserver did not stay up}" > "$state/failed"
+        stop >/dev/null 2>&1 || true
+        echo "SteamVR stopped during start-up${reason:+: $reason}; logs in $logs"
+        exit 1
+    fi
+    rm -f "$state/failed"
+    note "start: running"
     echo "SteamVR starting; logs in $logs and $state/vrstartup.log"
     ;;
 *)
