@@ -1,0 +1,5 @@
+11-20 11:08:39.804 10421 10689 I DroidDeckWayland: [stats] last 10 s: 384 frames on screen (38.4 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:09:49.843 10421 10689 I DroidDeckWayland: [stats] last 10 s: 283 frames on screen (28.3 fps) | 108 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:09:59.876 10421 10689 I DroidDeckWayland: [stats] last 10 s: 258 frames on screen (25.8 fps) | 43 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:10:09.891 10421 10689 I DroidDeckWayland: [stats] last 10 s: 287 frames on screen (28.7 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:10:19.914 10421 10689 I DroidDeckWayland: [stats] last 10 s: 399 frames on screen (39.9 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open

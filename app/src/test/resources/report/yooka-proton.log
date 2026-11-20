@@ -1,0 +1,129 @@
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-ntsync: up and running.
+Failed to read /etc/machine-id, error Cannot allocate memory.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+1174813.480:003c:0094:err:nsi:poll_events bind failed, errno 13.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+1174813.653:009c:00b8:err:hid:get_container_id_for_usb_udev_device Failed to get parent device.
+1174813.675:009c:00bc:err:hid:sdl_bus_init could not init SDL: Could not initialize UDEV
+1174813.835:009c:00d0:err:wineusb:usb_init Failed to initialize libusb: Other error
+1174813.842:009c:00a8:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+library "libc.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libm.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl_android.so" needed or dlopened by "/system/lib64/libvndksupport.so" is not accessible for the namespace "(default)"
+hybris-lazyinit: blobferry-hybris-lazyinit-cas-1 active (pid 18639)
+mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)
+mali-compat: heapBudget min(heap, 6144 MiB), cumulative usage (old report, MALI_COMPAT_BUDGET_MB unset), budget log off, memlog off
+Could not open module param file '/sys/module/mali_kbase/parameters/large_page_conf'
+mali-compat: created VkInstance 0x3000132590 (key=0x30001396e0)
+[Gamescope WSI] Forcing on VK_EXT_swapchain_maintenance1.
+mali-compat: subgroup real stages 0x3f30 ops 0x6ff -> reported stages 0x3f30 ops 0x6ff (real=1); minStorageBufferOffsetAlignment real 64 -> reported 64 (real=1)
+mali-compat: real storage16 1111 storage8 111 (only false bits are masked)
+mali-compat: vkCreateDevice masks 4 core feature(s) the driver lacks: fillModeNonSolid(13) textureCompressionBC(22) shaderClipDistance(37) shaderCullDistance(38)
+mali-compat: pipeline cache /root/.cache/mali-compat/YLILWin64.exe.pcache: loaded 1960970 bytes
+mali-compat: pc2-restore-1 active: VkDevice 0x30011defd0, driver vkCmdPushConstants2 no, vkCmdPushConstants2KHR yes
+mali-compat: created VkDevice 0x30011defd0 (key=0x30011c6a70)
+Fossilize INFO: Overriding serialization path: "/root/.local/share/Steam/steamapps/shadercache/3160697503/fozpipelinesv6/steamapprun_pipeline_cache".
+info:  Memory type mask for buffer resources: 0x3, usage: 0x219ff
+info:  Graphics pipeline libraries not supported
+info:  Binding model: Legacy
+warn:  D3D11DeviceFeatures: Some formats not supported for resource sharing
+info:  D3D11InternalCreateDevice: Maximum supported feature level: D3D_FEATURE_LEVEL_11_0
+info:  D3D11InternalCreateDevice: Using feature level D3D_FEATURE_LEVEL_11_0
+info:  DXGI: VK_FORMAT_A8_UNORM_KHR -> VK_FORMAT_R8_UNORM
+info:  Found cache file: C:\users\steamuser\AppData\Local\dxvk\3c6f0cf0f7be03c7.dxvk.bin
+info:  Cache: 1280 shaders (3.4 MB)
+info:  DXVK: Using 9 compiler threads
+[Gamescope WSI] Creating Gamescope surface: xid: 0x2400030
+[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.
+[Gamescope WSI] Made gamescope surface for xid: 0x2400030
+[Gamescope WSI] Surface state:
+  steam app id:                  3160697503
+  window xid:                    0x2400030
+  wayland surface res id:        6
+  layer client flags:            0x4
+  server hdr output enabled:     false
+  hdr formats exposed to client: false
+warn:  D3D11DXGIDevice::QueryInterface: Unknown interface query
+warn:  <redacted:guid>
+warn:  DXGI: MakeWindowAssociation: Ignoring flags
+mali-compat: emulating BC image 0x7ad400a520: orig=134 -> decoded=43 (2048x2048)
+mali-compat: emulating BC image 0x7ad400a9d0: orig=138 -> decoded=43 (2048x2048)
+mali-compat: emulating BC image 0x7ad400b2d0: orig=138 -> decoded=43 (2048x2048)
+mali-compat: emulating BC image 0x7ad400b780: orig=138 -> decoded=43 (512x512)
+mali-compat: emulating BC image 0x7ad400bc30: orig=138 -> decoded=43 (2048x1024)
+mali-compat: emulating BC image 0x7ad400c510: orig=138 -> decoded=43 (1024x1024)
+mali-compat: emulating BC image 0x7ad400c9c0: orig=138 -> decoded=43 (2048x2048)
+mali-compat: emulating BC image 0x7ad400ce70: orig=138 -> decoded=43 (2048x2048)
+mali-compat: emulating BC image 0x7ad400d320: orig=138 -> decoded=43 (2048x1024)
+mali-compat: emulating BC image 0x7ad400d7d0: orig=138 -> decoded=43 (256x256)
+mali-compat: emulating BC image 0x7ad400dc80: orig=138 -> decoded=43 (1320x544)
+mali-compat: emulating BC image 0x7ad400e130: orig=138 -> decoded=43 (432x360)
+mali-compat: emulating BC image 0x7ad400e5e0: orig=138 -> decoded=43 (2016x1632)
+mali-compat: emulating BC image 0x7ad4010480: orig=143 -> decoded=97 (128x128)
+DirectAudio: relay: connected - out 48000/12000 frames burst 256 buf 512 (10 ms) ring target 1920; mic off
+mali-compat: initialized PanVK BC compute pipelines successfully
+mali-compat: pipeline cache: thread 'dxvk-cs' uses it
+[Gamescope WSI] minImageCount overridden by GAMESCOPE_WSI_MIN_IMAGE_COUNT: 8
+info:  Presenter: Actual swapchain properties:
+info:    Format:          VK_FORMAT_R8G8B8A8_UNORM
+info:    Color space:     VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+info:    Present mode:    VK_PRESENT_MODE_FIFO_KHR (dynamic: yes)
+info:    Buffer size:     2800x1260
+info:    Image count:     4
+info:    Timing:          no
+[Gamescope WSI] Creating swapchain for xid: 0x2400030 - oldSwapchain: (nil) - provided minImageCount: 4 - minImageCount: 4 - format: VK_FORMAT_R8G8B8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true
+[Gamescope WSI] Created swapchain for xid: 0x2400030 swapchain: 0x7ad40b40b0 - imageCount: 4
+[Gamescope WSI] Swapchain received new refresh cycle: 33.33ms
+mali-compat: emulating BC image 0x7ad4069730: orig=138 -> decoded=43 (256x256)
+mali-compat: emulating BC image 0x7ad4069be0: orig=138 -> decoded=43 (2048x1024)
+mali-compat: emulating BC image 0x7ad406a090: orig=138 -> decoded=43 (1800x940)
+mali-compat: emulating BC image 0x7ad406a540: orig=138 -> decoded=43 (1024x768)
+mali-compat: emulating BC image 0x7ad406a9f0: orig=138 -> decoded=43 (420x96)
+mali-compat: emulating BC image 0x7ad406aea0: orig=138 -> decoded=43 (512x512)
+mali-compat: emulating BC image 0x7ad406b350: orig=138 -> decoded=43 (512x128)
+mali-compat: emulating BC image 0x7ad406b800: orig=138 -> decoded=43 (512x128)
+mali-compat: emulating BC image 0x7ad406bcb0: orig=138 -> decoded=43 (64x64)
+mali-compat: emulating BC image 0x7ad406c160: orig=138 -> decoded=43 (512x128)
+mali-compat: emulating BC image 0x7ad406c610: orig=138 -> decoded=43 (512x128)
+mali-compat: emulating BC image 0x7ad406cac0: orig=138 -> decoded=43 (512x128)
+mali-compat: emulating BC image 0x7ad406cf70: orig=138 -> decoded=43 (1320x544)
+mali-compat: emulating BC image 0x7ad406d420: orig=138 -> decoded=43 (1024x512)
+mali-compat: emulating BC image 0x7ad406e870: orig=138 -> decoded=43 (1024x768)
+[Gamescope WSI] Swapchain received new refresh cycle: 16.67ms
+[Gamescope WSI] Forcing swapchain recreation as frame limiter changed, and we want the app to know the exposed modes changed.
+info:  Presenter: Got VK_ERROR_OUT_OF_DATE_KHR, recreating swapchain
+[Gamescope WSI] Destroying swapchain: 0x7ad40b40b0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pipeline cache saved: 1960970 bytes (+7 pipelines)
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+mali-compat: pc2: v1 pushes 0, v2 pushes 1751, v2 unrecorded 0, BC decodes 380, decodes replaying v2 0
+1174925.916:009c:00b8:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x7c4634e0fc stack 0x7ff8dd60
+terminate called without an active exception
+1174925.916:0164:0188:err:seh:call_seh_handlers invalid frame 1010fe110 (0000000004F52000-0000000005050000)
+1174925.916:0164:0188:err:seh:NtRaiseException Exception frame is not in stack limits => unable to dispatch exception.
+wine client error:188: write: Bad file descriptor
+1174925.944:003c:0098:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x7c2769e0fc stack 0x7ff4dd60
+pid 18581 != 18579, skipping destruction (fork without exec?)

@@ -258,6 +258,14 @@ object MaliEnvDefaults {
     private fun installed(layout: Layout): Manifest? = File(layout.store, "active.json").takeIf { it.isFile }
         ?.let { runCatching { parse(it.readBytes()) }.onFailure { e -> Log.w(TAG, "installed env defaults refused", e) }.getOrNull() }
 
+    /** The games of the manifest in force (the installed one when it is newer than the bundled one), by key. */
+    fun inForceGames(context: Context): Map<String, Game> {
+        val installed = installed(layout(context))
+        val bundled = host(context).bundled()?.let { runCatching { parse(it) }.getOrNull() }
+        val useInstalled = installed != null && (bundled == null || compare(installed.version, bundled.version) > 0)
+        return (if (useInstalled) installed else bundled)?.games.orEmpty()
+    }
+
     fun status(layout: Layout, host: Host): Status {
         var problem: String? = null
         val installed = File(layout.store, "active.json").takeIf { it.isFile }

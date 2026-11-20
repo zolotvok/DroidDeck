@@ -784,8 +784,51 @@ NTSTATUS_LOW_BYTE = {
 LOG_HEAD = 512 * 1024
 LOG_TAIL = 1024 * 1024
 SUMMARY_LINES = 20
+CAUSE_LINES = 12
 SUMMARY_LINE = re.compile(r"(?:^|:)(?:err|warn):|\b(?:error|fatal|failed|unhandled|exception)\b", re.IGNORECASE)
 HAL_LINE = re.compile(r"mali-bridge: (?:vendor HAL|hybris)")
+# Start-up lines every Proton launch here prints; they never name the failure (docs/analysis/yooka-rc2-1120.md section 4).
+STARTUP_NOISE = re.compile("|".join((
+    r"ld\.so: object '[^']*gameoverlayrenderer\.so' from LD_PRELOAD cannot be preloaded",
+    r"err:wineusb:usb_init Failed to initialize libusb",
+    r"err:ntoskrnl:ZwLoadDriver failed to create driver .*winebth",
+    r"err:steamclient:steamclient_init_registry Failed to connect to Steam",
+    r"OpenXR: Unable to get required Vulkan",
+    r"D3D11DeviceFeatures: Some formats not supported for resource sharing",
+    r"QueryInterface: Unknown interface query",
+    r"^warn:\s+(?:<redacted:guid>|\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?)\s*$",
+    r"MakeWindowAssociation: Ignoring flags",
+    r"xdg_backend:.*Compositor released us but we were not acquired",
+    r"Proton: Error while copying to .*(?:amdxcffx64|igdext64)\.dll",
+    r"Proton: Error: unable to use parent for game drive",
+    r"unable to check /proc/modules for NV driver presence",
+    r"Failed to read /etc/machine-id",
+    r"err:nsi:poll_events bind failed",
+    r"err:hid:(?:get_container_id_for_usb_udev_device|sdl_bus_init|udev_bus_init)",
+)))
+# What Wine prints while a game the session stopped (SIGINT/SIGTERM/SIGHUP/SIGKILL) is torn down.
+TEARDOWN_NOISE = re.compile("|".join((
+    r"err:virtual:virtual_setup_exception nested exception on signal stack",
+    r"^terminate called without an active exception",
+    r"err:seh:call_seh_handlers invalid frame",
+    r"err:seh:NtRaiseException Exception frame is not in stack limits",
+    r"^wine client error:\S+: write: Bad file descriptor",
+    r"skipping destruction \(fork without exec\?\)",
+)))
+KNOWN_CAUSE = re.compile("|".join((
+    r"VK_ERROR_DEVICE_LOST",
+    r"GROUP_ERROR_FATAL|TRANSLATION_FAULT|GPU (?:page )?fault",
+    r"hybris_dlopen\(.*\) failed",
+    r"mali-bridge: (?:vendor HAL candidate rejected|no vendor HAL|vendor HAL .*(?:missing|not found|failed))",
+)), re.IGNORECASE)
+# A swapchain recreation is routine; it is a cause only next to a swapchain destroy that never returned.
+WSI_CAUSE = re.compile(r"\[Gamescope WSI\] Forcing swapchain recreation|VK_ERROR_OUT_OF_DATE_KHR", re.IGNORECASE)
+DESTROYING = re.compile(r"\[Gamescope WSI\] Destroying swapchain: (0x[0-9a-fA-F]+)")
+DESTROYED = re.compile(r"\[Gamescope WSI\] Destroyed swapchain: (0x[0-9a-fA-F]+)")
+WINE_LINE = re.compile(r"^(\d+\.\d+):[0-9a-fA-F]+:[0-9a-fA-F]+:(err|warn|fixme|trace):")
+WINE_ERR_SECONDS = 30
+# The signals a stop sends (the session, Steam's Stop); SIGKILL is the low-memory killer's, not a stop.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def read_window(path, start, size):
@@ -819,10 +862,69 @@ def exit_text(returncode, seconds):
     return text
 
 
+def repeat_key(line):
+    """A line without its Wine time/pid/tid prefix and its addresses: repeats of one message share it."""
+    line = WINE_LINE.sub(r"\2:", line)
+    return re.sub(r"0x[0-9a-fA-F]+", "0x?", line).strip()
+
+
+def hung_destroys(lines):
+    """Indexes of `Destroying swapchain` lines the WSI layer never followed with `Destroyed swapchain`."""
+    open_destroys = {}
+    for index, line in enumerate(lines):
+        match = DESTROYING.search(line)
+        if match:
+            open_destroys[match.group(1)] = index
+            continue
+        match = DESTROYED.search(line)
+        if match:
+            open_destroys.pop(match.group(1), None)
+    return set(open_destroys.values())
+
+
+def summary_lines(lines, stopped):
+    """(cause lines, other lines, hung destroy lines) of a Proton log, each in log order: start-up noise (and teardown
+    noise when a stop ended the game) left out, repeats folded into their last copy. Causes are the known-cause
+    patterns and a swapchain destroy that never returned (with the recreation lines before it), then, for a game that
+    was not stopped, Wine errors of the last 30 s before the log ends."""
+    hung = hung_destroys(lines)
+    times = [float(m.group(1)) for m in map(WINE_LINE.match, lines) if m]
+    end = max(times) if times else None
+    picked = {}
+    for index, line in enumerate(lines):
+        if STARTUP_NOISE.search(line) or (stopped and TEARDOWN_NOISE.search(line)):
+            continue
+        wine = WINE_LINE.match(line)
+        if index in hung or KNOWN_CAUSE.search(line) or (hung and WSI_CAUSE.search(line)):
+            rank = 2
+        elif (not stopped and wine and wine.group(2) == "err" and end is not None
+              and float(wine.group(1)) >= end - WINE_ERR_SECONDS):
+            rank = 1
+        else:
+            rank = 0
+        if not rank and not SUMMARY_LINE.search(line):
+            continue
+        key = repeat_key(line)
+        _, _, count, was = picked.get(key, (0, "", 0, 0))
+        picked[key] = (index, line, count + 1, max(rank, was))
+    def shown(item):
+        _, line, count, _ = item
+        return line if count == 1 else "%s (%d times)" % (line, count)
+    ordered = sorted(picked.values())
+    strong = [item for item in ordered if item[3] == 2][-CAUSE_LINES:]
+    late = [item for item in ordered if item[3] == 1]
+    late = late[-(CAUSE_LINES - len(strong)):] if CAUSE_LINES > len(strong) else []
+    causes = sorted(strong + late)
+    others = [item for item in ordered if not item[3]]
+    room = SUMMARY_LINES - len(causes)
+    others = others[-room:] if room > 0 else []
+    return [shown(item) for item in causes], [shown(item) for item in others], [lines[i] for i in sorted(hung)]
+
+
 def game_finished(env, returncode, seconds):
-    """After the game: its exit in the session log and, for a failed exit, the bridge's HAL lines and the last
-    err/warn lines of its Proton log (session.log is in the problem report)."""
-    print("droiddeck-game-env: " + exit_text(returncode, seconds), file=sys.stderr)
+    """After the game: its exit in the session log and, for a failed exit, the bridge's HAL lines, the known-cause
+    lines and the last other err/warn lines of its Proton log (session.log is in the problem report)."""
+    print("droiddeck-game-env: %s; ended at unix time %d" % (exit_text(returncode, seconds), time.time()), file=sys.stderr)
     if returncode == 0:
         return
     path = proton_log(env)
@@ -839,10 +941,19 @@ def game_finished(env, returncode, seconds):
         if HAL_LINE.search(line) and line not in hal:
             hal.append(line)
     hal = hal[:5]
-    last = [line for line in lines if SUMMARY_LINE.search(line)][-SUMMARY_LINES:]
-    print("droiddeck-game-env: failure summary from %s (%d bridge HAL lines, last %d err/warn lines):"
-          % (os.path.basename(path), len(hal), len(last)), file=sys.stderr)
-    for line in hal + last:
+    stopped = returncode < 0 and -returncode in STOP_SIGNALS
+    causes, last, hung = summary_lines(lines, stopped)
+    if hung:
+        print("droiddeck-game-env: likely cause: a swapchain destroy never returned (%s has no Destroyed line)%s"
+              % (hung[-1].strip(), "; the game hung until it was stopped" if stopped else ""), file=sys.stderr)
+    print("droiddeck-game-env: failure summary from %s (%d bridge HAL lines, %d known-cause lines, last %d other "
+          "err/warn lines; start-up%s noise and repeats left out):"
+          % (os.path.basename(path), len(hal), len(causes), len(last), "/teardown" if stopped else ""), file=sys.stderr)
+    for line in hal:
+        print("droiddeck-game-env: | " + line[:400], file=sys.stderr)
+    for line in causes:
+        print("droiddeck-game-env: ! " + line[:400], file=sys.stderr)
+    for line in last:
         print("droiddeck-game-env: | " + line[:400], file=sys.stderr)
 
 

@@ -1,0 +1,9 @@
+droiddeck-game-env: oom_score_adj 0 for the Steam launch chain: 1756 reaper 900, 1749 pw-audio-namespace 900
+droiddeck-game-env: game driver: Mali system driver (bridge), <app-data>/files/linux_vulkan_drivers/Mali_Bridge/icd.json; the app's setting (games use the Mali system driver)
+droiddeck-game-env: Mali defaults for DOOM Eternal (steam:782330), env defaults 2026.11.19.1 (bundled)
+droiddeck-game-env: DOOM Eternal: your own MALI_COMPAT_BDA_EXT, MALI_COMPAT_DESC_POOL_SCALE, MALI_COMPAT_FAKE_LIMITS, MALI_COMPAT_VENDOR_ID kept over the defaults
+droiddeck-game-env: DOOM Eternal: reports the GPU as NVIDIA (RTX 2080) to this game only: its launcher accepts NVIDIA/AMD/Intel GPUs only
+droiddeck-game-env: game logs: PROTON_LOG=1 WINEDEBUG=+timestamp,+pid,+tid,fixme-all DXVK_LOG_LEVEL=info VKD3D_DEBUG=warn FEX_SILENTLOG=1, errors and warnings only
+droiddeck-game-env: FEX arm64ec: Proton Experimental (ARM64) has FEX-2611-45-gab135df (md5 <redacted:key>), no row of the bundled table 2026.11.13.1; left as it is
+droiddeck-game-env: OpenGL does not wait for the screen refresh (vblank_mode=0)
+droiddeck-game-env: Windows sees 8 cores (8:7,4,5,6,0,1,2,3)

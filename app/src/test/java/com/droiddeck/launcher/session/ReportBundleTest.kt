@@ -97,6 +97,7 @@ class ReportBundleTest {
         assertTrue(files.getValue("env/game-env.txt").contains("MALI_COMPAT_WLS_CLAMP=all"))
         assertTrue(files.getValue("env/game-env.txt").contains("EOS_TOKEN=<redacted:value>"))
         assertTrue(files.getValue("summary.md").contains("| Game | app (447040) |"))
+        assertTrue(files.getValue("summary.md").contains("## What went wrong\n\n- Vulkan device lost: `err: VK_ERROR_DEVICE_LOST`\n"))
         assertTrue(result.entries.first { it.path == "session/2026-11-05-01-steam/session.log" }.hits >= 3)
         assertTrue(result.entries.all { it.redacted })
     }
@@ -155,6 +156,23 @@ class ReportBundleTest {
         assertEquals(1, ReportBundle.filterLogcat(lines, setOf(1234), "x", 1).size)
     }
 
+    @Test fun logcatSpamIsCappedAndCounted() {
+        val spam = (0 until 100).map { "11-20 11:28:23.%03d  1234  1240 D SurfaceComposerClient: Transaction::setDataspace: 142671872".format(it) }
+        val stats = "11-20 11:28:31.123  1234  1250 I DroidDeckWayland: [stats] last 10 s: 474 frames on screen (47.4 fps) | 0 GPU frames from games |"
+        val kept = ReportBundle.filterLogcat((spam + stats).asSequence(), setOf(1234), "x", 1000)
+        assertEquals(ReportBundle.LOGCAT_SPAM_KEPT + 2, kept.size)
+        assertEquals(stats, kept[kept.size - 2])
+        assertEquals("# 80 more Transaction::setDataspace lines left out", kept.last())
+    }
+
+    @Test fun theWsiLayerPartIsLeftOutWhenNoLogHasItsLines() {
+        val log = File(app.cacheDir, "steam-1.log").apply { writeText("info: nothing\n") }
+        assertEquals("", ReportBundle.layerLines(listOf(log), ReportBundle.WSI_LINE, emptyIfNone = true))
+        log.writeText("[Gamescope WSI] Destroying swapchain: 0x7ad40b40b0\n")
+        assertTrue(ReportBundle.layerLines(listOf(log), ReportBundle.WSI_LINE, emptyIfNone = true).contains("(1 lines)\n[Gamescope WSI] Destroying"))
+        log.delete()
+    }
+
     @Test fun savesAndCredentialsAreNeverAllowed() {
         for (p in listOf("loginusers.vdf", "steam/config.vdf", "ssfn123456", "Saved Games/x.txt", "pfx/drive_c/users/steamuser/Documents/a.log",
                 "AppData/Roaming/x.log", "cookies.sqlite", "slot.sav")) assertFalse(p, ReportBundle.allowed(p))
@@ -193,6 +211,34 @@ class ReportBundleTest {
         assertNotNull(at)
         ReportBundle.markCrashSeen(app, at!! + 1)
         assertNull(ReportBundle.unreportedAppCrash(app))
+    }
+
+    @Test fun theLaunchsProtonLogIsTheOneItsSummaryNamesOrANewOne() {
+        val old = File(app.cacheDir, "steam-782330.log").apply { writeText("x\n"); setLastModified(1_000_000L) }
+        val new = File(app.cacheDir, "steam-447040.log").apply { writeText("x\n"); setLastModified(9_000_000L) }
+        val logs = listOf(new, old)
+        val named = listOf("droiddeck-game-env: game driver: x", "droiddeck-game-env: failure summary from steam-782330.log (1 bridge HAL lines):")
+        assertEquals(old, ReportBundle.launchProtonLog(logs, named, 5_000_000L))
+        assertEquals(new, ReportBundle.launchProtonLog(logs, listOf("droiddeck-game-env: game driver: x"), 5_000_000L))
+        assertNull(ReportBundle.launchProtonLog(logs, listOf("droiddeck-game-env: game driver: x"), 10_000_000L))
+        assertEquals(new, ReportBundle.launchProtonLog(logs, emptyList(), 10_000_000L))
+        old.delete(); new.delete()
+    }
+
+    @Test fun aShortcutsEnvIsReadUnderItsAppId() {
+        session("2026-11-20-14-steam", "droiddeck-game-env: game driver: Mali system driver (bridge), /b/icd.json; x\n" +
+            "droiddeck-game-env: Mali defaults for Yooka-Laylee and the Impossible Lair (epic:Duckbill), env defaults 2026.11.19.1 (bundled)\n" +
+            "droiddeck-game-env: Yooka-Laylee and the Impossible Lair: your own MALI_COMPAT_XFB_VS kept over the defaults\n" +
+            "droiddeck-game-env: game ended by SIGINT (signal 2) after 114 s\n")
+        File(root, "root/steam-13575092407967416320.log").writeText("[Gamescope WSI] Destroying swapchain: 0x7ad40b40b0\n")
+        GameEnvironmentStore.save(app, GameEnvironment.Config(games = mapOf("3160697503" to mapOf("MALI_COMPAT_XFB_VS" to "0"))))
+        val plan = ReportBundle.collect(app)
+        assertEquals("Yooka-Laylee and the Impossible Lair (epic:Duckbill, shortcut 3160697503)", plan.info.game)
+        assertTrue(plan.info.envCell!!, plan.info.envCell!!.startsWith("yours: MALI_COMPAT_XFB_VS=0"))
+        assertTrue(plan.info.lastExit, plan.info.lastExit.startsWith("game ended by SIGINT (signal 2) after 114 s"))
+        val env = plan.parts.first { it.path == "env/game-env.txt" }.text!!.invoke()
+        assertTrue(env, env.contains("[game 3160697503]\nMALI_COMPAT_XFB_VS=0\n"))
+        assertTrue(plan.info.cause.any { it.startsWith("A swapchain destroy never returned") })
     }
 
     @Test fun nextLaunchLogIsPublishedOnlyAndClearedAfterAGameLog() {

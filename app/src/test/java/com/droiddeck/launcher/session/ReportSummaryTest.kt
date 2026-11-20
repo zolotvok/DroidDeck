@@ -52,7 +52,7 @@ class ReportSummaryTest {
             "mali-bridge: vendor HAL candidate rejected: /vendor/lib64/hw/vulkan.x.so (via scan): dlopen failed: nope",
             "err:something else",
         )
-        val launch = ReportSummary.lastLaunch(session, proton)
+        val launch = ReportSummary.lastLaunch(ReportSummary.launchLines(session), proton.toList())
         assertEquals(7, launch.size)
         assertTrue(launch.first().contains("Mali system driver (bridge)"))
         assertFalse(launch.any { it.contains("Windows sees") || it.contains("status 0") })
@@ -67,7 +67,7 @@ class ReportSummaryTest {
         assertTrue(text, text.contains("## Last game launch\n\n```\ndroiddeck-game-env: game driver: Mali system driver (bridge)"))
         assertTrue(text.contains("a ` ` ` fence\n```\n"))
         assertFalse(ReportSummary.markdown(info()).contains("Last game launch"))
-        assertEquals(emptyList<String>(), ReportSummary.lastLaunch(emptySequence(), emptySequence()))
+        assertEquals(emptyList<String>(), ReportSummary.lastLaunch(emptyList(), emptyList()))
     }
 
     @Test fun categoriesPickTheRepoTheUserDecided() {
@@ -91,6 +91,10 @@ class ReportSummaryTest {
         assertTrue(ReportSummary.vulkanDriverError(sequenceOf("[gamescope] vulkan: failed to find physical device")))
         assertTrue(ReportSummary.vulkanDriverError(sequenceOf("kbase: GROUP_ERROR_FATAL TRANSLATION_FAULT at 0x7f00")))
         assertFalse(ReportSummary.vulkanDriverError(sequenceOf("Steam started", "== steam exited rc=0")))
+        // a swapchain's "recreate me" is no driver error (the Yooka report named one on it alone)
+        assertFalse(ReportSummary.vulkanDriverError(sequenceOf("info:  Presenter: Got VK_ERROR_OUT_OF_DATE_KHR, recreating swapchain")))
+        assertEquals("err: vkQueueSubmit failed: VK_ERROR_DEVICE_LOST",
+            ReportSummary.vulkanErrorLine(sequenceOf("ok", " err: vkQueueSubmit failed: VK_ERROR_DEVICE_LOST", "VK_ERROR_DEVICE_LOST again")))
     }
 
     @Test fun issueCarriesTheVersionTableAndTheZipName() {
@@ -113,9 +117,28 @@ class ReportSummaryTest {
         assertFalse(ReportSummary.table(info()).contains("| PanVK |"))
     }
 
-    @Test fun summaryMentionsAVulkanError() {
-        assertTrue(ReportSummary.markdown(info(vulkanError = true)).contains("Vulkan/driver error"))
-        assertFalse(ReportSummary.markdown(info()).contains("Vulkan/driver error"))
+    @Test fun theSummaryOpensWithWhatWentWrongAndNoUnbackedClaim() {
+        val plain = ReportSummary.markdown(info(vulkanError = true))
+        assertFalse(plain, plain.contains("shows a Vulkan/driver error"))
+        assertFalse(plain.contains("What went wrong"))
+        val text = ReportSummary.markdown(ReportSummary.Info(
+            written = "w", appVersion = "v", appId = "a", buildType = "b", sourceCommit = "", device = "d", android = "an", soc = "s",
+            gpu = "g", vendorDriver = "", blobferryVersion = "", blobferryCommit = "", blobferrySource = "none", blobferryShimMd5 = "",
+            fexDllMd5 = "", proton = "p", displayDriver = "auto", runtimeDriver = "r", sessionDriver = "s", gameDriver = "g", game = "x",
+            gameEnv = emptyMap(), focusGuard = "f", boost = "b", logs = "l", protonLog = "p", lastExit = "e", vulkanError = true,
+            cause = listOf("Game stalled (no frames for 90 s before it was stopped).", "GPU fault: `x`"),
+            causeWsi = listOf("[Gamescope WSI] Destroying swapchain: 0x1"), envCell = "yours: A=1",
+        ))
+        assertTrue(text, text.indexOf("## What went wrong\n\n- Game stalled (no frames for 90 s before it was stopped).\n- GPU fault: `x`\n") in 0 until text.indexOf("| DroidDeck |"))
+        assertTrue(text.contains("Last swapchain/WSI lines:\n\n```\n[Gamescope WSI] Destroying swapchain: 0x1\n```\n"))
+        assertTrue(text.contains("| Env | yours: A=1 |"))
+        assertTrue(ReportSummary.issue(ReportSummary.Info(
+            written = "w", appVersion = "v", appId = "a", buildType = "b", sourceCommit = "", device = "d", android = "an", soc = "s",
+            gpu = "g", vendorDriver = "", blobferryVersion = "", blobferryCommit = "", blobferrySource = "none", blobferryShimMd5 = "",
+            fexDllMd5 = "", proton = "p", displayDriver = "auto", runtimeDriver = "r", sessionDriver = "s", gameDriver = "g", game = "x",
+            gameEnv = emptyMap(), focusGuard = "f", boost = "b", logs = "l", protonLog = "p", lastExit = "e", vulkanError = false,
+            cause = listOf("GPU fault: `x`"),
+        ), Category.GPU_FAULT, null).contains("**What went wrong (from the logs)**\n\n- GPU fault: `x`\n"))
     }
 
     @Test fun tableCellsCannotBreakTheTable() {

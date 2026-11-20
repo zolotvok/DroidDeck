@@ -1,0 +1,43 @@
+Adding process 18574 for gameID 13575092407967416320
+droiddeck-game-env: oom_score_adj 0 for the Steam launch chain: 18477 bash 900, 18466 reaper 900, 18447 pw-audio-namespace 900
+droiddeck-game-env: game driver: Mali system driver (bridge), <app-data>/files/linux_vulkan_drivers/Mali_Bridge/icd.json; the app's setting (games use the Mali system driver)
+droiddeck-game-env: Unity: FEX with TSO
+droiddeck-game-env: Mali defaults for Yooka-Laylee and the Impossible Lair (epic:Duckbill), env defaults 2026.11.19.1 (bundled)
+droiddeck-game-env: Yooka-Laylee and the Impossible Lair: your own MALI_COMPAT_XFB_VS kept over the defaults
+droiddeck-game-env: game logs: PROTON_LOG=1 WINEDEBUG=+timestamp,+pid,+tid,fixme-all DXVK_LOG_LEVEL=info VKD3D_DEBUG=warn FEX_SILENTLOG=1, errors and warnings only
+droiddeck-game-env: FEX arm64ec: Proton Experimental (ARM64) has FEX-2611-45-gab135df (md5 <redacted:key>), no row of the bundled table 2026.11.13.1; left as it is
+droiddeck-game-env: OpenGL does not wait for the screen refresh (vblank_mode=0)
+droiddeck-game-env: Windows sees 8 cores (8:7,4,5,6,0,1,2,3)
+droiddeck-esync: pack valve-experimental-11.0-20261112-arm64-1794493414-f3c6f6ca51dd-r2 for Proton Experimental (ARM64) (1794497176 experimental-11.0-20261112-arm64, exact match); droiddeck-ntsync on, droiddeck-esync on, fds 32768/32768
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[gamescope] [[0;34mInfo[0m]  [0;37mxwm:[0m commit fences, last 10 s: 176 ready at import, 0 waited for
+== agent: padapply: adopt #1 of event16 seen (Steam pid 17925)
+droiddeck-game-env: game ended by SIGINT (signal 2) after 114 s
+droiddeck-game-env: failure summary from steam-13575092407967416320.log (1 bridge HAL lines, last 20 err/warn lines):
+droiddeck-game-env: | mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)
+droiddeck-game-env: | 1174813.835:009c:00d0:err:wineusb:usb_init Failed to initialize libusb: Other error
+droiddeck-game-env: | 1174813.842:009c:00a8:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | 1174815.846:0020:0024:err:steamclient:steamclient_init_registry Failed to connect to Steam
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | warn:  OpenXR: Unable to get required Vulkan instance extensions size
+droiddeck-game-env: | warn:  OpenXR: Unable to get required Vulkan Device extensions size
+droiddeck-game-env: | warn:  D3D11DeviceFeatures: Some formats not supported for resource sharing
+droiddeck-game-env: | warn:  D3D11DXGIDevice::QueryInterface: Unknown interface query
+droiddeck-game-env: | warn:  <redacted:guid>
+droiddeck-game-env: | warn:  DXGI: MakeWindowAssociation: Ignoring flags
+droiddeck-game-env: | 1174925.916:009c:00b8:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x7c4634e0fc stack 0x7ff8dd60
+droiddeck-game-env: | terminate called without an active exception
+droiddeck-game-env: | 1174925.916:0164:0188:err:seh:call_seh_handlers invalid frame 1010fe110 (0000000004F52000-0000000005050000)
+droiddeck-game-env: | 1174925.916:0164:0188:err:seh:NtRaiseException Exception frame is not in stack limits => unable to dispatch exception.
+droiddeck-game-env: | wine client error:188: write: Bad file descriptor
+droiddeck-game-env: | 1174925.944:003c:0098:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x7c2769e0fc stack 0x7ff4dd60
+Game Recording - game stopped [gameid=13575092407967416320]
+Removing process 18704 for gameID 13575092407967416320
+Removing process 18694 for gameID 13575092407967416320
+Removing process 18690 for gameID 13575092407967416320

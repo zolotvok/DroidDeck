@@ -1,0 +1,56 @@
+11-20 11:28:23.849 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.870 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.892 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.914 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.935 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.957 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:23.979 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.000 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.022 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.044 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.067 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.089 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.111 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.132 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.154 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.176 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.198 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.214 10421 10471 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.219 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.241 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.262 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.283 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.306 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.328 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.349 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.371 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.393 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.415 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.436 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:24.458 10421 10689 D SurfaceComposerClient: Transaction::setDataspace: 142671872
+11-20 11:28:31.123 10421 10689 I DroidDeckWayland: [stats] last 10 s: 474 frames on screen (47.4 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:28:41.133 10421 10689 I DroidDeckWayland: [stats] last 10 s: 508 frames on screen (50.8 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:28:51.141 10421 10689 I DroidDeckWayland: [stats] last 10 s: 558 frames on screen (55.8 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:01.141 10421 10689 I DroidDeckWayland: [stats] last 10 s: 703 frames on screen (70.3 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:11.148 10421 10689 I DroidDeckWayland: [stats] last 10 s: 624 frames on screen (62.4 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:21.154 10421 10689 I DroidDeckWayland: [stats] last 10 s: 602 frames on screen (60.2 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:31.161 10421 10689 I DroidDeckWayland: [stats] last 10 s: 601 frames on screen (60.1 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:41.168 10421 10689 I DroidDeckWayland: [stats] last 10 s: 601 frames on screen (60.1 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:29:47.835 10421 10421 I SessionService: stop requested from the notification
+11-20 11:29:51.168 10421 10689 I DroidDeckWayland: [stats] last 10 s: 451 frames on screen (45.1 fps) | 50 GPU frames from games | 0 window redraws | 0 windows open
+11-20 11:30:01.173 10421 10689 I DroidDeckWayland: [stats] last 10 s: 603 frames on screen (60.3 fps) | 116 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:30:11.180 10421 10689 I DroidDeckWayland: [stats] last 10 s: 558 frames on screen (55.8 fps) | 405 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:30:11.815 10421 18537 I StoreLaunch: epic launch id=Duckbill code=yes reason=ok
+11-20 11:30:21.182 10421 10689 I DroidDeckWayland: [stats] last 10 s: 522 frames on screen (52.2 fps) | 186 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:30:31.199 10421 10689 I DroidDeckWayland: [stats] last 10 s: 542 frames on screen (54.2 fps) | 218 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:30:41.211 10421 10689 I DroidDeckWayland: [stats] last 10 s: 529 frames on screen (52.9 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:30:51.211 10421 10689 I DroidDeckWayland: [stats] last 10 s: 834 frames on screen (83.4 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:01.212 10421 10689 I DroidDeckWayland: [stats] last 10 s: 889 frames on screen (88.9 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:11.212 10421 10689 I DroidDeckWayland: [stats] last 10 s: 872 frames on screen (87.2 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:21.217 10421 10689 I DroidDeckWayland: [stats] last 10 s: 878 frames on screen (87.8 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:31.217 10421 10689 I DroidDeckWayland: [stats] last 10 s: 883 frames on screen (88.3 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:41.217 10421 10689 I DroidDeckWayland: [stats] last 10 s: 885 frames on screen (88.5 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:31:51.218 10421 10689 I DroidDeckWayland: [stats] last 10 s: 870 frames on screen (87.0 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:32:01.218 10421 10689 I DroidDeckWayland: [stats] last 10 s: 877 frames on screen (87.7 fps) | 0 GPU frames from games | 0 window redraws | 1 windows open
+11-20 11:32:06.823 10421 10421 I SessionService: stop requested from the notification
+11-20 11:32:11.218 10421 10689 I DroidDeckWayland: [stats] last 10 s: 502 frames on screen (50.2 fps) | 38 GPU frames from games | 0 window redraws | 0 windows open

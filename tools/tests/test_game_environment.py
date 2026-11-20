@@ -16,6 +16,7 @@ from unittest import mock
 import unittest
 
 BIN = Path(__file__).resolve().parents[1] / "linuxfs/overlay/usr/local/bin"
+REPORT_FIXTURES = Path(__file__).resolve().parents[2] / "app/src/test/resources/report"
 MODULE = runpy.run_path(str(BIN / "droiddeck-game-env"))
 COMPAT = runpy.run_path(str(BIN / "steam-compatibility"))
 STATE = tempfile.TemporaryDirectory()
@@ -575,10 +576,13 @@ class GameExitTest(unittest.TestCase):
             err = result.stderr
             self.assertIn("droiddeck-game-env: game exited with status 5 after", err)
             self.assertIn("low byte of 0xC0000005 access violation", err)
-            self.assertIn("failure summary from steam-7.log (1 bridge HAL lines, last 20 err/warn lines)", err)
+            # all 30 Wine errors are in the last 30 s of the log: the newest 12 are causes, the warning fills up
+            self.assertIn("failure summary from steam-7.log (1 bridge HAL lines, 12 known-cause lines, last 1 other "
+                          "err/warn lines; start-up noise and repeats left out)", err)
             self.assertIn("droiddeck-game-env: | mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so", err)
             self.assertIn("droiddeck-game-env: | warn:  DXVK: last warning", err)
-            self.assertIn("err:module:line 29", err)
+            self.assertIn("droiddeck-game-env: ! 0010.0:0020:0024:err:module:line 29", err)
+            self.assertRegex(err, r"after \d+ s \(if it crashed: low byte of 0xC0000005 access violation\); ended at unix time \d{10}")
             self.assertNotIn("err:module:line 10\n", err)
             self.assertNotIn("plain trailing line", err)
             self.assertEqual(list(session.iterdir()), [])
@@ -622,6 +626,34 @@ class GameExitTest(unittest.TestCase):
             self.assertIn("no Proton log for this launch", result.stderr)
             result, _ = self.launch(Path(tmp), "sys.exit(4)\n")
             self.assertIn("no Proton log found at %s/steam-7.log" % tmp, result.stderr)
+
+    def test_a_stopped_hang_names_the_swapchain_and_drops_the_noise(self):
+        fixture = REPORT_FIXTURES / "yooka-proton.log"
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            body = ("open(os.path.join(os.environ['HOME'], 'steam-7.log'), 'w').write(open(%r).read())\n"
+                    "signal.signal(signal.SIGINT, signal.SIG_DFL)\nos.kill(os.getpid(), signal.SIGINT)\n" % str(fixture))
+            result, _ = self.launch(home, body)
+            err = result.stderr
+            self.assertIn("game ended by SIGINT (signal 2) after", err)
+            self.assertIn("droiddeck-game-env: likely cause: a swapchain destroy never returned ([Gamescope WSI] Destroying "
+                          "swapchain: 0x7ad40b40b0 has no Destroyed line); the game hung until it was stopped", err)
+            self.assertIn("droiddeck-game-env: ! [Gamescope WSI] Forcing swapchain recreation as frame limiter changed", err)
+            self.assertIn("droiddeck-game-env: ! info:  Presenter: Got VK_ERROR_OUT_OF_DATE_KHR, recreating swapchain", err)
+            self.assertIn("start-up/teardown noise and repeats left out", err)
+            for noise in ("gameoverlayrenderer", "OpenXR", "libusb", "nested exception", "Bad file descriptor", "<redacted:guid>"):
+                self.assertNotIn(noise, err)
+
+    def test_known_causes_win_over_the_err_lines_and_repeats_fold(self):
+        lines = (REPORT_FIXTURES / "doom-proton.log").read_text().splitlines()
+        causes, others, hung = MODULE["summary_lines"](lines, False)
+        self.assertEqual(causes[0], "==>[WARN] Received a GROUP_ERROR_FATAL error on group(0)")
+        self.assertIn("nested exception on signal stack", causes[1])
+        self.assertEqual(hung, [])
+        self.assertTrue(any(line.endswith("(2 times)") for line in others))
+        self.assertFalse(any("gameoverlayrenderer" in line or "OpenXR" in line for line in causes + others))
+        keys = [MODULE["repeat_key"](line) for line in causes + others]
+        self.assertEqual(len(keys), len(set(keys)))
 
     def test_summary_reads_a_bounded_head_and_tail(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -131,26 +131,50 @@ object ReportBundle {
             .forEach { (name, f) -> parts += Part("${SessionLogShare.BATTLENET_DIR}/$name", Kind.STORES, f.length(), file = f) }
         val layerSources = proton.take(2) + listOfNotNull(latest?.let { File(it, "session.log") }?.takeIf { it.isFile })
         parts += Part("layers/compat.log", Kind.LAYERS, -1, text = { layerLines(layerSources, COMPAT_LINE) })
-        parts += Part("layers/wsi.log", Kind.LAYERS, -1, text = { layerLines(layerSources, WSI_LINE) })
-        parts += Part("logcat.txt", Kind.LOGCAT, -1, text = { logcat(context, LOGCAT_LINES) })
+        val wsi = layerLines(layerSources, WSI_LINE, emptyIfNone = true)
+        if (wsi.isNotEmpty()) parts += Part("layers/wsi.log", Kind.LAYERS, wsi.length.toLong(), text = { wsi })
+        val logcatText = lazy { logcat(context, LOGCAT_LINES) }
+        parts += Part("logcat.txt", Kind.LOGCAT, -1, text = { logcatText.value })
         crashParts(context, notes).let { parts += it }
-        val appId = SessionState.gameId?.takeIf { GameEnvironment.validScope(it) && it.isNotEmpty() } ?: proton.firstOrNull()?.let { appIdOf(it) }
-        val env = envText(context, appId)
+        val sessionLog = latest?.let { File(it, "session.log") }?.takeIf { it.isFile }
+        val launch = runCatching { ReportSummary.launchLines(sessionLog?.let { tailLines(it, LAUNCH_SCAN_BYTES) }.orEmpty()) }.getOrDefault(emptyList())
+        val since = latest?.let { sessionStart(it) }
+        val gameLog = launchProtonLog(proton, launch, since)
+        val appId = SessionState.gameId?.takeIf { GameEnvironment.validScope(it) && it.isNotEmpty() }
+            ?: (gameLog ?: proton.firstOrNull())?.let { appIdOf(it) }
+        val scope = ReportSummary.scopeOf(appId)
+        val env = envText(context, scope)
         parts += Part("env/game-env.txt", Kind.ENV, env.length.toLong(), text = { env })
         // the updater's install log (gpu/ComponentLog): what was installed, rolled back or refused, and when
         com.droiddeck.launcher.gpu.ComponentLog.file(context.filesDir).takeIf { it.isFile }
             ?.let { parts += Part("components/install.log", Kind.ENV, it.length(), file = it) }
-        val info = info(context, appId, proton.firstOrNull(), latest)
-        if (info.vulkanError) notes += "The logs show a Vulkan/driver error."
+        val info = info(context, appId, scope, gameLog, launch, since, logcatText)
+        if (info.vulkanError) notes += if (info.cause.isNotEmpty()) "The logs show a Vulkan/driver error (quoted under \"What went wrong\" in summary.md)."
+            else "The logs show a Vulkan/driver error."
         parts.add(0, Part("summary.md", Kind.SUMMARY, -1, text = { ReportSummary.markdown(info) }))
         return Plan(parts.filter { it.path !in options.skip }, notes, info)
     }
 
-    private val COMPAT_LINE = Regex("mali-compat:|mali-bridge:|hybris-lazyinit:|libhybris|droiddeck-game-env: game driver")
-    private val WSI_LINE = Regex("mali-wsi|VK_LAYER_window_system_integration|gamescope-wsi|wsi:", RegexOption.IGNORE_CASE)
+    /** The Proton log of the last launch: the one its failure summary names; else, after a launch, the newest one
+     *  written since the session began; without a launch, the newest one. */
+    internal fun launchProtonLog(logs: List<File>, launch: List<String>, since: Long?): File? {
+        ReportSummary.summaryLogName(launch)?.let { name -> return logs.firstOrNull { it.name == name } }
+        if (launch.isEmpty()) return logs.firstOrNull()
+        return logs.firstOrNull { since == null || it.lastModified() >= since }
+    }
 
-    /** The layers write to stderr, which lands in the Proton log and session.log: their lines, per source file. */
-    internal fun layerLines(sources: List<File>, match: Regex, cap: Int = 20_000): String = buildString {
+    private val COMPAT_LINE = Regex("mali-compat:|mali-bridge:|hybris-lazyinit:|libhybris|droiddeck-game-env: game driver")
+    internal val WSI_LINE = Regex("mali-wsi|VK_LAYER_window_system_integration|gamescope[- ]wsi|wsi:", RegexOption.IGNORE_CASE)
+
+    /** The layers write to stderr, which lands in the Proton log and session.log: their lines, per source file.
+     *  [emptyIfNone]: "" when no source has a matching line. */
+    internal fun layerLines(sources: List<File>, match: Regex, cap: Int = 20_000, emptyIfNone: Boolean = false): String {
+        var any = false
+        val text = layerText(sources, match, cap) { any = true }
+        return if (emptyIfNone && !any) "" else text
+    }
+
+    private fun layerText(sources: List<File>, match: Regex, cap: Int, found: () -> Unit): String = buildString {
         append("# Extracted from the Proton log and session.log (the layers log to stderr).\n")
         for (f in sources) {
             if (!f.isFile) continue
@@ -163,6 +187,7 @@ object ReportBundle {
                     }
                 }
             }
+            if (kept.isNotEmpty()) found()
             append("\n## ").append(f.name).append(" (").append(kept.size).append(" lines)\n")
             kept.forEach { append(it).append('\n') }
         }
@@ -176,18 +201,26 @@ object ReportBundle {
     )
     private val THREADTIME = Regex("^\\d\\d-\\d\\d\\s+\\d\\d:\\d\\d:\\d\\d\\.\\d+\\s+(\\d+)\\s+\\d+\\s+[VDIWEFA]\\s+([^:]*?)\\s*:")
 
-    /** Lines of our own pids, or of an allowlisted tag (ActivityManager only when it names our package); the last [maxLines]. */
+    /** Per-frame lines of the platform's SurfaceControl client: 90 % of a game's logcat, no cause in them. */
+    private val LOGCAT_SPAM = Regex("Transaction::setDataspace")
+    internal const val LOGCAT_SPAM_KEPT = 20
+
+    /** Lines of our own pids, or of an allowlisted tag (ActivityManager only when it names our package); the last
+     *  [maxLines]. Spam lines ([LOGCAT_SPAM]) count only their first [LOGCAT_SPAM_KEPT]; a last line says how many went. */
     internal fun filterLogcat(lines: Sequence<String>, pids: Set<Int>, packageName: String, maxLines: Int): List<String> {
         val kept = ArrayDeque<String>()
+        var spam = 0
         for (line in lines) {
             val m = THREADTIME.find(line) ?: continue
             val pid = m.groupValues[1].toIntOrNull()
             val tag = m.groupValues[2]
             val ok = pid in pids || (LOGCAT_TAGS.matches(tag) && (tag != "ActivityManager" || line.contains(packageName)))
             if (!ok) continue
+            if (LOGCAT_SPAM.containsMatchIn(line) && ++spam > LOGCAT_SPAM_KEPT) continue
             kept.addLast(line)
             if (kept.size > maxLines) kept.removeFirst()
         }
+        if (spam > LOGCAT_SPAM_KEPT) kept.addLast("# ${spam - LOGCAT_SPAM_KEPT} more Transaction::setDataspace lines left out")
         return kept.toList()
     }
 
@@ -279,6 +312,7 @@ object ReportBundle {
     internal fun envLines(entries: Map<String, String?>): List<String> = maskEnv(entries).map { (k, v) -> if (v == null) "-$k" else "$k=$v" }
 
     private fun envText(context: Context, appId: String?): String = buildString {
+        // appId: the per-game scope (ReportSummary.scopeOf), the key of the app's game settings
         val config = runCatching { GameEnvironmentStore.read(context) }.getOrNull() ?: GameEnvironment.Config()
         append("# Per-game environment (the app's game settings). Game: ").append(appId ?: "unknown").append('\n')
         append("\n[shared]\n")
@@ -306,7 +340,9 @@ object ReportBundle {
         d.digest().joinToString("") { "%02x".format(it) }
     }.getOrDefault("")
 
-    private fun info(context: Context, appId: String?, protonLog: File?, latest: File?): ReportSummary.Info {
+    private fun info(
+        context: Context, appId: String?, scope: String?, protonLog: File?, launch: List<String>, since: Long?, logcat: Lazy<String>,
+    ): ReportSummary.Info {
         val pm = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
         val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val gpu = runCatching { com.droiddeck.launcher.gpu.GpuInfo.detect() }.getOrNull()
@@ -314,7 +350,7 @@ object ReportBundle {
         val bf = runCatching { com.droiddeck.launcher.gpu.BlobferryPackage.status(context) }.getOrNull()
         val root = LinuxRuntime.rootDir(context)
         val config = runCatching { GameEnvironmentStore.read(context) }.getOrNull() ?: GameEnvironment.Config()
-        val gameEnv = if (appId != null) config.entries(appId) else emptyMap()
+        val gameEnv = if (scope != null) config.entries(scope) else emptyMap()
         val shared = config.shared
         fun flag(name: String) = gameEnv[name] ?: shared[name]
         val bridgeGame = (flag("ENABLE_MALI_COMPAT") ?: flag("ENABLE_MALI_WSI")) == "1" || flag(GameEnvironment.GAME_DRIVER) == "bridge" ||
@@ -329,24 +365,41 @@ object ReportBundle {
                 (gameEnv[SessionPrefs.BOOST_KEY]?.let { " (game BL_GAME_BOOST=$it; Epic titles share one entry)" } ?: shared[SessionPrefs.BOOST_KEY]?.let { " (BL_GAME_BOOST=$it)" } ?: "") +
                 if (SessionPrefs.boostCheck(context)) ", check on" else ""
         }.getOrDefault("?")
-        val gameName = appId?.toIntOrNull()?.let { id ->
+        val fromLaunch = ReportSummary.launchGame(launch)
+        val shortcut = scope != null && appId != scope
+        val added = if (!shortcut) null else runCatching {
+            com.droiddeck.launcher.frontend.AddedGames.scan(context).firstOrNull { it.appId.toString() == scope || java.lang.Long.toUnsignedString(it.gameId) == appId }
+        }.getOrNull()
+        val gameName = (if (shortcut) added?.name else scope?.toIntOrNull()?.let { id ->
             runCatching { com.droiddeck.launcher.frontend.Library.steamGames(context).firstOrNull { it.appId == id }?.name }.getOrNull()
-        }
+        }) ?: fromLaunch?.first
+        val storeKey = added?.storeId?.let { "${added.source}:$it" } ?: fromLaunch?.second?.takeIf { it.contains(':') && !it.startsWith("steam:") }
         val proton = runCatching {
             val all = ComponentsManager.protons(context)
             ProtonDefault.selectedId(context, all)?.let { id -> all.firstOrNull { it.id == id }?.let { "${it.name} ${it.version}".trim() } ?: id }
         }.getOrNull()
-        val lastExit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) runCatching {
+        val exit = ReportCause.exitOf(launch)
+        // the app's own exit only when it ended during this session (an older force stop is not this launch's exit)
+        val appExit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && since != null) runCatching {
             context.getSystemService(android.app.ActivityManager::class.java).getHistoricalProcessExitReasons(context.packageName, 0, 1)
-                .firstOrNull()?.let { com.droiddeck.launcher.core.DeviceReport.exitSummary(it.processName, it.reason, it.status, it.description) }
+                .firstOrNull()?.takeIf { it.timestamp >= since }
+                ?.let { "app: " + com.droiddeck.launcher.core.DeviceReport.exitSummary(it.processName, it.reason, it.status, it.description) }
         }.getOrNull() else null
-        val scan = listOfNotNull(protonLog, latest?.let { File(it, "session.log") }).filter { it.isFile }
-        val vulkanError = scan.any { f -> runCatching { ReportSummary.vulkanDriverError(tailLines(f, 1024 * 1024)) }.getOrDefault(false) }
+        val lastExit = listOfNotNull(exit?.text ?: if (launch.isNotEmpty()) "no game exit logged for the last launch" else "no game launch in this session",
+            appExit).joinToString("; ")
+        val protonLines = protonLog?.let { runCatching { excerptLines(it) }.getOrNull() }.orEmpty()
+        // only this launch's lines: an earlier launch's error in session.log is not this one's
+        val vulkanErrorLine = ReportSummary.vulkanErrorLine((launch + protonLines).asReversed().asSequence())
+        val vulkanError = vulkanErrorLine != null
+        val keys = protonLog?.let { ReportCause.keyLines(protonLines, exit?.stopped == true) }
         val lastLaunch = runCatching {
-            val session = latest?.let { File(it, "session.log") }?.takeIf { it.isFile }
-            ReportSummary.lastLaunch(session?.let { tailLines(it, LAUNCH_SCAN_BYTES) }.orEmpty(),
-                protonLog?.let { headLines(it, LAUNCH_SCAN_BYTES) }.orEmpty())
+            ReportSummary.lastLaunch(launch, protonLines, protonLog?.name, keys, exit?.stopped == true)
         }.getOrDefault(emptyList())
+        val finding = runCatching {
+            ReportCause.analyse(launch, protonLines, logcat.value.lineSequence().toList(), System.currentTimeMillis(),
+                java.util.TimeZone.getDefault(), vulkanErrorLine, since)
+        }.getOrNull()
+        val defaults = fromLaunch?.second?.let { key -> runCatching { MaliEnvDefaults.inForceGames(context)[key]?.env }.getOrNull() }
         return ReportSummary.Info(
             written = SimpleDateFormat("yyyy-MM-dd HH:mm zzz", Locale.US).format(Date()),
             appVersion = pm?.let { "${it.versionName} (${if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else 0})" } ?: "?",
@@ -369,8 +422,11 @@ object ReportBundle {
             runtimeDriver = runCatching { SessionPrefs.linuxDriver(context) }.getOrDefault("").ifEmpty { "runtime default" },
             sessionDriver = SessionState.sessionDriver ?: "-",
             gameDriver = flag(GameEnvironment.GAME_DRIVER) ?: SessionState.gameDriver ?: "-",
-            game = if (appId == null) "unknown" else "${gameName ?: "app"} ($appId)",
+            game = if (appId == null) "unknown" else "${gameName ?: "app"} (" +
+                listOfNotNull(storeKey, if (shortcut) "shortcut $scope" else appId).joinToString(", ") + ")",
             gameEnv = maskEnv(gameEnv),
+            envCell = ReportSummary.envCell(maskEnv(gameEnv), ReportSummary.keptOwnKeys(launch), fromLaunch?.second,
+                defaults?.let { d -> maskEnv(d).mapValues { it.value.orEmpty() } }),
             focusGuard = focus,
             boost = boost,
             logs = (if (SessionPrefs.logsEnabled(context)) "session logs on" else "session logs OFF") +
@@ -380,7 +436,7 @@ object ReportBundle {
                 protonLog != null -> "found (${protonLog.name})"
                 else -> "not found (PROTON_LOG off)"
             },
-            lastExit = lastExit ?: "?",
+            lastExit = lastExit,
             vulkanError = vulkanError,
             blobferryDevFiles = bf?.devFiles.orEmpty(),
             blobferryBaseCommit = bf?.baseCommit.orEmpty(),
@@ -393,6 +449,8 @@ object ReportBundle {
             envDefaults = if (!com.droiddeck.launcher.core.DeviceSupport.mali()) "" else
                 runCatching { MaliEnvDefaults.status(context).label }.getOrDefault("?"),
             lastLaunch = lastLaunch,
+            cause = finding?.bullets.orEmpty(),
+            causeWsi = finding?.wsiLines.orEmpty(),
         ).also { knownHashes(context, bf, it) }
     }
 
@@ -410,16 +468,30 @@ object ReportBundle {
 
     private const val LAUNCH_SCAN_BYTES = 2L * 1024 * 1024
 
-    private fun headLines(f: File, bytes: Long): Sequence<String> {
-        val text = RandomAccessFile(f, "r").use { r -> ByteArray(minOf(r.length(), bytes).toInt()).also { r.readFully(it) } }
-        return String(text, Charsets.ISO_8859_1).lineSequence()
+    private const val EXCERPT_HEAD = 1L * 1024 * 1024
+    private const val EXCERPT_TAIL = 2L * 1024 * 1024
+
+    /** A Proton log's lines: all of a small one, else its first 1 MiB and last 2 MiB (cut at line ends). */
+    internal fun excerptLines(f: File): List<String> = RandomAccessFile(f, "r").use { r ->
+        val size = r.length()
+        fun read(start: Long, n: Long) = ByteArray(n.toInt()).also { r.seek(start); r.readFully(it) }.toString(Charsets.UTF_8)
+        if (size <= EXCERPT_HEAD + EXCERPT_TAIL) return@use read(0, size).lines()
+        read(0, EXCERPT_HEAD).lines().dropLast(1) + read(size - EXCERPT_TAIL, EXCERPT_TAIL).lines().drop(1)
     }
+
+    private val EVENT_TIME = Regex("\"t\":(\\d+)")
+
+    /** When a session began: the first event's time in its events.jsonl, else the folder's own time. */
+    internal fun sessionStart(folder: File): Long? = runCatching {
+        File(folder, "events.jsonl").takeIf { it.isFile }?.bufferedReader()?.use { it.readLine() }
+            ?.let { EVENT_TIME.find(it)?.groupValues?.get(1)?.toLongOrNull() }
+    }.getOrNull() ?: folder.lastModified().takeIf { it > 0 }
 
     private fun tailLines(f: File, bytes: Long): Sequence<String> {
         val size = f.length()
         val start = (size - bytes).coerceAtLeast(0)
         val text = RandomAccessFile(f, "r").use { r -> r.seek(start); ByteArray((size - start).toInt()).also { r.readFully(it) } }
-        return String(text, Charsets.ISO_8859_1).lineSequence()
+        return String(text, Charsets.UTF_8).lineSequence()
     }
 
     /** Names the redactor removes wherever they appear: store accounts, the device name, the guest host name. */

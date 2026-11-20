@@ -188,7 +188,7 @@ class ReportActivity : ComponentActivity() {
 
     private fun issueText(): Pair<String, String>? {
         val p = plan ?: return null
-        val title = ReportSummary.issueTitle(category, p.info)
+        val title = ReportRedactor.redactText(ReportSummary.issueTitle(category, p.info))
         val body = ReportRedactor.redactText(ReportSummary.issue(p.info, category, built?.name))
         return title to body
     }
@@ -223,7 +223,7 @@ class ReportActivity : ComponentActivity() {
     private fun openIssuePage(zipName: String, saved: Boolean, target: IssueTarget) {
         val p = plan ?: return
         val attach = ReportSummary.attachLine(zipName, saved)
-        val title = ReportSummary.issueTitle(category, p.info)
+        val title = ReportRedactor.redactText(ReportSummary.issueTitle(category, p.info))
         val body = attach + ReportRedactor.redactText(ReportSummary.issue(p.info, category, zipName))
         val clipboard = getSystemService(ClipboardManager::class.java)
         if (target == IssueTarget.GITHUB_APP) {
