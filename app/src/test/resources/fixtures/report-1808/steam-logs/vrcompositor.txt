@@ -1,0 +1,3 @@
+Fri Nov 20 2026 18:04:15.434322 - Vulkan wideLines: yes
+Fri Nov 20 2026 18:04:15.434406 - [Error] - Failed to create VkDevice.
+Fri Nov 20 2026 18:04:15.434500 - [Error] - CHmdWindowVulkanWSI: Failed to create vulkan instance

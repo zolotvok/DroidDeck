@@ -1,0 +1,9 @@
+== droiddeck-session Fri Nov 20 17:59:14 CET 2026 mode=steam 
+droiddeck-steam-compat: app 787790 -> droiddeck-proton-arm64
+Adding process 7881 for gameID 250820
+Removing process 7881 for gameID 250820
+droiddeck-steam-compat: preparing SteamVR for library app(s): 787790
+droiddeck-steam-compat: SteamVR library launch: using the DroidDeck ARM64 helper
+Adding process 8178 for gameID 250820
+Removing process 8178 for gameID 250820
+== leaving behind: 4785

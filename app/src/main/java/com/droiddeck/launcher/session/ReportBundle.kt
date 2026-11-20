@@ -84,11 +84,16 @@ object ReportBundle {
 
     internal fun allowed(relative: String): Boolean = !NEVER.containsMatchIn(relative) && !SAVE_DIRS.containsMatchIn(relative)
 
+    /** A session folder's file: [allowed], and a file of its steam/ copy only when on [SteamLogAllowlist] (folders kept
+     *  from older versions still hold every Steam log). */
+    internal fun sessionFileAllowed(relative: String): Boolean =
+        allowed(relative) && SteamLogAllowlist.sessionFileAllowed(relative)
+
     private fun sessionParts(folder: File, prefix: String, kind: Kind, mainOnly: Boolean): List<Part> {
         if (!folder.isDirectory) return emptyList()
         val main = setOf("session.log", "app.log", "crash.log", "crash-app.txt", "wayland.log", "device.txt", "ended-without-teardown.txt")
         return folder.walkTopDown().filter { it.isFile }.map { it to it.relativeTo(folder).invariantSeparatorsPath }
-            .filter { (f, rel) -> allowed(rel) && (!mainOnly || f.name in main) && !LogRedactor.isBinary(f) }
+            .filter { (f, rel) -> sessionFileAllowed(rel) && (!mainOnly || f.name in main) && !LogRedactor.isBinary(f) }
             .sortedBy { it.second }
             .map { (f, rel) -> Part("$prefix/${folder.name}/$rel", kind, f.length(), file = f) }.toList()
     }
@@ -588,7 +593,8 @@ object ReportBundle {
 
     internal fun manifest(entries: List<Entry>, notes: List<String>, raw: Boolean): String = buildString {
         append("DroidDeck problem report: ").append(entries.size).append(" parts").append(if (raw) " (RAW, not redacted)" else ", every text redacted").append('\n')
-        append("Never included: saves, Steam config/loginusers/ssfn, store credentials, cookies, shared preferences.\n\n")
+        append("Never included: saves, Steam config/loginusers/ssfn, store credentials, cookies, shared preferences, Steam logs off the allowlist (cloud, connection, content, purchase).\n")
+        append("hits: redaction marks in the written part (session-end scrub and report scrub together).\n\n")
         append(String.format(Locale.US, "%-56s %10s %10s %-8s %-7s %s\n", "part", "source", "written", "redacted", "trimmed", "hits"))
         for (e in entries) append(String.format(Locale.US, "%-56s %10d %10d %-8s %-7s %d\n", e.path, e.source, e.written,
             if (e.redacted) "yes" else "no", if (e.trimmed) "yes" else "no", e.hits))

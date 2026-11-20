@@ -99,8 +99,26 @@ object LogRedactor {
         "(?i)\\b(jwt|token|ticket|sessionid|steamloginsecure|machineauth)\\b[\\s=:]*([A-Za-z0-9+/=_\\-]{12,})"
     )
     private val LONG_TOKEN = Regex("[A-Za-z0-9_\\-]{88,}")
-    private val STEAMID64 = Regex("\\b(76561)(\\d{8})(\\d{4})\\b")
+    private val STEAMID64 = Regex("(?<![0-9])76561\\d{12}(?![0-9])")
     private val STEAMID3 = Regex("\\[U:1:(\\d+)]")
+    // the numeric Steam account id (SteamID64 minus 76561197960265728) in its known spots
+    private val STEAMID2 = Regex("\\b(STEAM_[0-5]:[01]:)(\\d+)")
+    private val STEAMID64_HEX = Regex("(?i)(?<![0-9a-z])0x0*1100001[0-9a-f]{8}(?![0-9a-f])")
+    // r3 kept the last four digits: 76561********1234, [U:1:*****1234]
+    private val OLD_MASKED_STEAMID = Regex("76561\\*{8}\\d{4}(?![0-9])")
+    private val OLD_MASKED_STEAMID3 = Regex("\\[U:1:\\*+\\d+]")
+    // the numeric Steam account id (SteamID64 minus 76561197960265728) in its known spots
+    private val USERDATA_ID = Regex("(?i)((?:userdata|Steam Controller Configs)[/\\\\]+)(\\d+)(?![0-9])")
+    private val USER_ID_PHRASE = Regex(
+        "(?i)(\\b(?:(?:for|of)\\s+(?:user|account)|parental\\s+settings\\s+for|(?:m_)?(?:un)?account[ _-]?id|steam[ _-]?id3?)" +
+            "[\"']?(?:\\s*+[:=])?\\s*+[\"']?)(\\d{3,})(?![0-9])"
+    )
+    private val CLOUD_PATH_ID = Regex("(?<![A-Za-z0-9_/.\\-])\\d{3,10}(?=/config/)")
+    private val GROUP_ID = Regex("(?i)(\\bgroup_?id\\s*=\\s*)(\\d{4,})")
+    // Steam: family info for account N ( groupID=N, name="…', role=1); the name may hold commas
+    private val FAMILY_NAME = Regex("(?i)(\\bfamily info\\b.*?\\bname\\s*=\\s*)([\"']?)(.*?)(?=[\"'],\\s*role=|[\"']?\\)\\s*$|$)")
+    private const val STEAMID64_BASE = 76561197960265728L
+    private val LOGIN_USER_ID = Regex("\"(7656119\\d{10})\"")
     private val EXTERNAL_ADDR = Regex("(?i)(external\\s+(?:ip\\s+)?address\\s*[:=]?\\s*|external\\s+ip\\s*[:=]?\\s*)([0-9A-Fa-f:.]{7,})")
     private val IPV4 = Regex("(?<![0-9.])(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})(?![0-9.])")
     private val IPV6 = Regex("(?<![0-9A-Za-z:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:%[A-Za-z0-9_.]+)?(?![0-9A-Za-z:])")
@@ -131,15 +149,32 @@ object LogRedactor {
     @Volatile
     private var accounts: List<Learned> = emptyList()
 
+    @Volatile
+    private var accountIds: List<Learned> = emptyList()
+
+    /** The numeric account ids of the given SteamID64s: removed wherever they stand alone as a number. */
+    fun learnAccountIds(steamIds: Collection<String>) {
+        accountIds = idMatchers(steamIds)
+    }
+
+    private fun idMatchers(steamIds: Collection<String>): List<Learned> =
+        steamIds.mapNotNull { it.trim().toLongOrNull()?.minus(STEAMID64_BASE)?.takeIf { id -> id > 0 } }
+            .map { it.toString() }.filter { it.length >= 5 }.distinct()
+            .map { id -> Learned(Regex("(?<![0-9])" + id + "(?![0-9])"), id) }
+
     fun learnAccounts(vararg loginUsers: java.io.File) {
         val names = LinkedHashSet<String>()
+        val ids = LinkedHashSet<String>()
         val kv = Regex("\"(AccountName|PersonaName)\"\\s+\"([^\"]*)\"")
         var unread = false
         for (file in loginUsers) {
             if (!file.isFile) continue
             val text = try { file.readText() } catch (e: Exception) { unread = true; continue }
             kv.findAll(text).map { it.groupValues[2].trim() }.filter { it.length >= 3 }.forEach { names += it }
+            LOGIN_USER_ID.findAll(text).forEach { ids += it.groupValues[1] }
         }
+        val learnedIds = idMatchers(ids)
+        accountIds = if (unread) (accountIds + learnedIds).distinctBy { it.regex.pattern } else learnedIds
         val learned = names.map { name ->
             val needs = name.lowercase().takeIf { name.all { it.code < 0x80 } }
             Learned(Regex("(?i)(?<![A-Za-z0-9_])" + Regex.escape(name) + "(?![A-Za-z0-9_])"), needs)
@@ -238,7 +273,7 @@ object LogRedactor {
         true
     }
 
-    const val RULES_VERSION = 3
+    const val RULES_VERSION = 4
 
     private val LAN_IPV4 = Regex(
         "(?<![\\d.])(?:10\\.\\d{1,3}|192\\.168|172\\.(?:1[6-9]|2\\d|3[01])|169\\.254)\\.\\d{1,3}\\.\\d{1,3}(?!\\.?\\d)"
@@ -441,11 +476,26 @@ object LogRedactor {
             }
             if (out.has("guard", "factor", "2fa")) out.set(replaceMatches(out.text, GUARD_CODE) { "${it.group(1)}<redacted:code>" })
             if (out.hasRun(32, ::isHex)) out.set(replaceMatches(out.text, WEBAPI_KEY, "<redacted:key>"))
-            if ("76561" in out.text) out.set(replaceMatches(out.text, STEAMID64) { "${it.group(1)}********${it.group(3)}" })
-            if ("[U:1:" in out.text) out.set(replaceMatches(out.text, STEAMID3) { m ->
-                val id = m.group(1)
-                "[U:1:${if (id.length > 4) "*".repeat(id.length - 4) + id.takeLast(4) else id}]"
+            if ("76561" in out.text) {
+                out.set(replaceMatches(out.text, STEAMID64, "<redacted:steamid>"))
+                out.set(replaceMatches(out.text, OLD_MASKED_STEAMID, "<redacted:steamid>"))
+            }
+            if (out.has("0x")) out.set(replaceMatches(out.text, STEAMID64_HEX, "<redacted:steamid>"))
+            if ("STEAM_" in out.text) out.set(replaceMatches(out.text, STEAMID2) { "${it.group(1)}<redacted:id>" })
+            if ("[U:1:" in out.text) {
+                out.set(replaceMatches(out.text, STEAMID3) { m ->
+                    if (m.group(1).trimStart('0').isEmpty()) m.group() else "[U:1:<redacted:id>]"
+                })
+                out.set(replaceMatches(out.text, OLD_MASKED_STEAMID3, "[U:1:<redacted:id>]"))
+            }
+            if (out.has("userdata", "controller configs")) out.set(replaceMatches(out.text, USERDATA_ID) { m ->
+                if (m.group(2).trimStart('0').isEmpty()) m.group() else "${m.group(1)}<redacted:id>"
             })
+            if (out.has("user", "account", "parental", "steam")) out.set(replaceMatches(out.text, USER_ID_PHRASE) { "${it.group(1)}<redacted:id>" })
+            if ("/config/" in out.text) out.set(replaceMatches(out.text, CLOUD_PATH_ID, "<redacted:id>"))
+            if (out.has("group")) out.set(replaceMatches(out.text, GROUP_ID) { "${it.group(1)}<redacted:id>" })
+            if (out.has("family info")) out.set(replaceMatches(out.text, FAMILY_NAME) { "${it.group(1)}${it.group(2)}<redacted:account>" })
+            for (r in accountIds) if (r.needs == null || out.has(r.needs)) out.set(replaceMatches(out.text, r.regex, "<redacted:id>"))
             if (out.has("external")) out.set(replaceMatches(out.text, EXTERNAL_ADDR) { "${it.group(1)}<redacted:ip>" })
             for (r in own) if (r.needs == null || out.has(r.needs)) out.set(replaceMatches(out.text, r.regex, "<redacted:ip>"))
             if (out.has("onloginstatechange")) out.set(replaceMatches(out.text, LOGIN_STATE) { "${it.group(1)}<redacted:account>" })

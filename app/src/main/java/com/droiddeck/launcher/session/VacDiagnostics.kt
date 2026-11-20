@@ -106,7 +106,7 @@ object VacDiagnostics {
                 report.appendLine()
             }
             report.appendLine("== VAC in the Steam client's logs")
-            val steamHits = File(dir, "steam").listFiles { f -> f.isFile }?.sortedBy { it.name }.orEmpty()
+            val steamHits = File(dir, "steam").listFiles { f -> f.isFile && SteamLogAllowlist.allowed(f.name) }?.sortedBy { it.name }.orEmpty()
                 .flatMap { f -> runCatching { f.readLines() }.getOrDefault(emptyList()).filter { STEAM_VAC.containsMatchIn(it) }.map { "${f.name}: ${it.trim()}" } }
             if (steamHits.isEmpty()) report.appendLine("  none - the client logged no VAC activity this session")
             steamHits.takeLast(MAX_QUOTED).forEach { report.appendLine("  $it") }

@@ -1,0 +1,2 @@
+[2026-11-20 17:59:21] Setting parental settings for 123456789, account flags are 10284085
+	Account ID: 123456789

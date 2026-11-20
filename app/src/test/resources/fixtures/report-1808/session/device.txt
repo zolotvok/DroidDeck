@@ -1,0 +1,4 @@
+Model                   vivo V2514
+Guest host name         DroidDeck
+session uses PanVK_Kbase
+games use Mali_Bridge

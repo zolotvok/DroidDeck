@@ -1,0 +1,4 @@
+[2026-11-20 18:04:01] AppID 250820 adding PID 7881 as a tracked process "/opt/steamvr/bin/vrstartup"
+[2026-11-20 18:04:03] AppID 250820 no longer tracking PID 7881, exit code -1
+[2026-11-20 18:04:14] AppID 250820 adding PID 8178 as a tracked process "/opt/steamvr/bin/vrstartup"
+[2026-11-20 18:04:16] AppID 250820 no longer tracking PID 8178, exit code -1

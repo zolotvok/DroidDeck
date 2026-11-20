@@ -27,8 +27,60 @@ class LogRedactorTest {
         assertEquals("language key=english", LogRedactor.redact("language key=english"))
     }
 
-    @Test fun steamIdIsMaskedNotDeleted() {
-        assertEquals("user 76561********1234", LogRedactor.redact("user 76561198012341234"))
+    @Test fun steamIdIsRedactedWhole() {
+        assertEquals("user <redacted:steamid>", LogRedactor.redact("user 76561198012341234"))
+        assertEquals("[U:1:<redacted:id>] [U:1:0]", LogRedactor.redact("[U:1:52075506] [U:1:0]"))
+    }
+
+    @Test fun aLongWhitespaceRunAfterAnIdKeyStaysFast() {
+        val line = "steam id" + " ".repeat(60_000) + "x"
+        val start = System.nanoTime()
+        assertEquals(line, LogRedactor.redact(line))
+        assertTrue((System.nanoTime() - start) < 2_000_000_000L)
+    }
+
+    @Test fun theNumericAccountIdIsRedactedInItsKnownSpots() {
+        LogRedactor.learnAccountIds(emptyList())
+        val lines = mapOf(
+            "[AppID 7] AutoCloud checking local state for user 123456789" to "[AppID 7] AutoCloud checking local state for user <redacted:id>",
+            "saved to '/root/.local/share/Steam/userdata/123456789/7/remotecache.vdf'" to
+                "saved to '/root/.local/share/Steam/userdata/<redacted:id>/7/remotecache.vdf'",
+            "Steam Controller Configs/123456789/config/configset_controller_neptune.vdf" to
+                "Steam Controller Configs/<redacted:id>/config/configset_controller_neptune.vdf",
+            "Need to download file 123456789/config/configset_controller_generic.vdf" to
+                "Need to download file <redacted:id>/config/configset_controller_generic.vdf",
+            "Setting parental settings for 123456789, account flags are 10284085" to
+                "Setting parental settings for <redacted:id>, account flags are 10284085",
+            "\tAccount ID: 123456789" to "\tAccount ID: <redacted:id>",
+            "-steampid=4900 -accountid=123456789 -steamid=0" to "-steampid=4900 -accountid=<redacted:id> -steamid=0",
+            "family info for account 123456789 ( groupID=1234567, name=\"Somefamily', role=1)" to
+                "family info for account <redacted:id> ( groupID=<redacted:id>, name=\"<redacted:account>', role=1)",
+            "family info for account 123456789 ( groupID=1234567, name=\"Smith, Jones family', role=1)" to
+                "family info for account <redacted:id> ( groupID=<redacted:id>, name=\"<redacted:account>', role=1)",
+            "Source: STEAM_1:1:61728394 0x1100001075bcd15 0x01100001075BCD15" to
+                "Source: STEAM_1:1:<redacted:id> <redacted:steamid> <redacted:steamid>",
+            "older scrub 76561********1234 [U:1:*****1234]" to "older scrub <redacted:steamid> [U:1:<redacted:id>]",
+            "{\"path\":\"userdata\\/123456789\\/7\"} userdata/123456789) userdata/123456789," to
+                "{\"path\":\"userdata\\/<redacted:id>\\/7\"} userdata/<redacted:id>) userdata/<redacted:id>,",
+            "m_unAccountID: 123456789 {\"steamid\":\"123456789\"} for  user 123456789" to
+                "m_unAccountID: <redacted:id> {\"steamid\":\"<redacted:id>\"} for  user <redacted:id>",
+            "vulkan queue family 0 name = graphics, 241100/remote/x process group id: 4321" to
+                "vulkan queue family 0 name = graphics, 241100/remote/x process group id: 4321",
+            "userdata/0/config and for user 0" to "userdata/0/config and for user 0",
+        )
+        for ((line, want) in lines) {
+            assertEquals(want, LogRedactor.redact(line))
+            assertEquals(want, LogRedactor.redact(want))
+        }
+    }
+
+    @Test fun aLearnedAccountIdIsRedactedWhereverItStandsAlone() {
+        LogRedactor.learnAccountIds(listOf("76561198083722517"))
+        try {
+            assertEquals("id <redacted:id> and 11234567890", LogRedactor.redact("id 123456789 and 11234567890"))
+        } finally {
+            LogRedactor.learnAccountIds(emptyList())
+        }
     }
 
     @Test fun webApiKeyIsRedactedButDepotChunkIsKept() {

@@ -1,0 +1,9 @@
+[2026-11-20 17:59:19] SteamUI: INFO: Login: OnLoginStateChange fixtureaccount 2 1 0 0
+[2026-11-20 17:59:21] PostVRRuntimeCall couldn't find the VR Runtime app even though we made it through prepare
+[2026-11-20 17:59:22] Support contact fixture.user@example.com, persona fixturepersona
+[2026-11-20 18:04:14] GameAction [AppID 787790, ActionID 3] : LaunchApp changed task to ProcessingInstallScript with ""
+[2026-11-20 17:59:30] Old account: [U:1:987654321] for  user 987654321 m_unAccountID: 987654321 {"steamid":"987654321"}
+[2026-11-20 17:59:31] Source console: STEAM_1:1:493827160 0x11000013ade68b1 76561198947920049
+[2026-11-20 17:59:32] cloud {"path":"userdata\/987654321\/7\/remotecache.vdf"}, userdata/987654321)
+[2026-11-20 17:59:33] Loaded cached family info for account 987654321 ( groupID=7654321, name="Fixture, Otherfamily', role=1)
+[2026-11-20 17:59:34] Setting parental settings for 987654321, Account ID: 987654321

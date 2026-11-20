@@ -79,6 +79,8 @@ class SessionLogShareTest {
         File(folder, "session.log").writeText("ok\n")
         File(folder, "steam/deep").mkdirs()
         File(folder, "steam/deep/nested.txt").writeText("$secret\n")
+        File(folder, "droiddeck-esync/deep").mkdirs()
+        File(folder, "droiddeck-esync/deep/nested.txt").writeText("$secret\n")
         File(folder, ".hidden.txt").writeText("$secret\n")
         record(folder, "app.log", "session.log")
         File(folder, "app.log").appendText("$secret\n")
@@ -86,8 +88,9 @@ class SessionLogShareTest {
         File(folder, "events.jsonl").writeText("$secret\n")
 
         val out = zip(folder)
-        for (name in listOf("app.log", "session.log", "steam/deep/nested.txt", ".hidden.txt", "events.jsonl"))
+        for (name in listOf("app.log", "session.log", "droiddeck-esync/deep/nested.txt", ".hidden.txt", "events.jsonl"))
             assertFalse(name, out.getValue(name).contains(leaked))
+        assertFalse("nothing nested under steam/ is on the allowlist", out.containsKey("steam/deep/nested.txt"))
     }
 
     @Test fun aRecordUnderOtherRedactorRulesVouchesForNothing() {
@@ -101,12 +104,12 @@ class SessionLogShareTest {
         val folder = tmp.newFolder("2026-10-07-01-steam")
         File(folder, "network.txt").writeText("mac 02:ab:cd:ef:12:34\n")
         File(folder, "steam").mkdirs()
-        File(folder, "steam/controller_support.txt").writeText("Serial number: controller-123456\n")
-        record(folder, "network.txt", "steam/controller_support.txt", rules = 1)
+        File(folder, "steam/controller.txt").writeText("Serial number: controller-123456\n")
+        record(folder, "network.txt", "steam/controller.txt", rules = 1)
 
         val out = zip(folder)
         assertEquals("mac <redacted:mac>\n", out.getValue("network.txt"))
-        assertEquals("Serial number: <redacted:serial>\n", out.getValue("steam/controller_support.txt"))
+        assertEquals("Serial number: <redacted:serial>\n", out.getValue("steam/controller.txt"))
     }
 
     @Test fun withoutARecordEveryFileIsScrubbed() {
@@ -336,7 +339,7 @@ class SessionLogShareTest {
         val folder = File(com.droiddeck.launcher.runtime.LinuxRuntime.logDir(context), "2999-12-31-99-startup-recovery")
         val marker = File(root, "root/.droiddeck-vac-diagnostics")
         val launches = File(root, "root/.droiddeck-vac-launches")
-        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/startup-recovery-vac.log")
+        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/bootstrap_log.txt")
         val sessionLog = File(folder, "session.log")
         val crashLog = File(folder, "crash.log")
         val previousRunning = SessionState.running
@@ -359,7 +362,7 @@ class SessionLogShareTest {
 
             SessionArtifacts.finishAbandoned(context, beforeGuestStart = true)
 
-            assertEquals("startup VAC evidence\n", File(folder, "steam/startup-recovery-vac.log").readText())
+            assertEquals("startup VAC evidence\n", File(folder, "steam/bootstrap_log.txt").readText())
             assertTrue(File(folder, "vac.txt").readText().contains("startup VAC evidence"))
             assertTrue(File(folder, ".recovery-runtime-captured").isFile)
             assertTrue(crashLog.isFile && crashLog.length() > 0L)
@@ -390,7 +393,7 @@ class SessionLogShareTest {
         val folder = File(logs, "$day-9000-deferred-recovery")
         val marker = File(root, "root/.droiddeck-vac-diagnostics")
         val launches = File(root, "root/.droiddeck-vac-launches")
-        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/deferred-recovery-vac.log")
+        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/shader_log.txt")
         val previousRunning = SessionState.running
         val previousPhase = SessionState.phase
         val previousLogsEnabled = SessionPrefs.logsEnabled(context)
@@ -412,7 +415,7 @@ class SessionLogShareTest {
 
             SessionArtifacts.finishAbandoned(context, beforeGuestStart = true)
 
-            assertEquals("deferred VAC evidence\n", File(folder, "steam/deferred-recovery-vac.log").readText())
+            assertEquals("deferred VAC evidence\n", File(folder, "steam/shader_log.txt").readText())
             assertTrue(File(folder, "vac.txt").readText().contains("deferred VAC evidence"))
             assertTrue(File(folder, ".recovery-runtime-captured").isFile)
             assertFalse(File(folder, SessionArtifacts.COMPLETE_MARKER).exists())
@@ -447,7 +450,7 @@ class SessionLogShareTest {
         val folder = File(com.droiddeck.launcher.runtime.LinuxRuntime.logDir(context), "9999-12-31-01-vac-failure")
         val marker = File(root, "root/.droiddeck-vac-diagnostics")
         val launches = File(root, "root/.droiddeck-vac-launches")
-        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/expired-recovery.log")
+        val runtimeSteamLog = File(SessionPrefs.steamRoot(context, "arm64"), "logs/compat_log.txt")
         val crashLog = File(folder, "crash.log")
         val previousRunning = SessionState.running
         try {
@@ -474,7 +477,7 @@ class SessionLogShareTest {
             runtimeSteamLog.writeText("session B\n")
             SessionArtifacts.finishAbandoned(context, beforeGuestStart = true)
 
-            assertEquals("session A\n", File(folder, "steam/expired-recovery.log").readText())
+            assertEquals("session A\n", File(folder, "steam/compat_log.txt").readText())
             assertArrayEquals(firstCrashSnapshot, crashLog.readBytes())
             assertTrue(File(folder, "ended-without-teardown.txt").readText().contains("runtime capture did not finish"))
             assertFalse(File(folder, SessionArtifacts.COMPLETE_MARKER).exists())

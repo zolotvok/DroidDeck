@@ -1,0 +1,1 @@
+[2026-11-20 17:59:21] Loaded store 'userlocal' from '/root/.local/share/Steam/userdata/123456789/config/localconfig.vdf' successfully

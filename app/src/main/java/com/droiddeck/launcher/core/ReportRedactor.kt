@@ -176,10 +176,9 @@ object ReportRedactor {
         return "$u@$h"
     }
 
-    /** How many redaction marks [after] carries that [before] did not (the manifest's hit count). */
-    fun hits(before: String, after: String): Int = marks(after) - marks(before)
-
-    private fun marks(s: String): Int {
+    /** Redaction marks in [s]: the manifest counts those of the written part, including the ones the session-end
+     *  scrub made, so a part scrubbed on disk earlier does not show 0. */
+    fun marks(s: String): Int {
         var n = 0
         for (m in listOf("<redacted", "<lan-address>", "<app-data>", "<storage>", "<card>", "<private IPv", "<public IPv", "<carrier-NAT")) {
             var i = s.indexOf(m)
@@ -212,7 +211,7 @@ object ReportRedactor {
         fun emit() {
             val text = if (oversized) LogRedactor.OVERSIZED_LINE else {
                 val raw = line.toString()
-                if (raw.indexOf('\u0000') >= 0) "<binary line withheld>" else redact(raw).also { stats.hits += hits(raw, it).coerceAtLeast(0) }
+                if (raw.indexOf('\u0000') >= 0) "<binary line withheld>" else redact(raw).also { stats.hits += marks(it) }
             }
             out.write(text)
             out.write("\n")

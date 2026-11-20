@@ -290,12 +290,19 @@ object SessionArtifacts {
         return markScrubbed(record)
     }
 
+    /** Older app versions copied every Steam log; a folder kept from then loses the ones off the allowlist. */
+    internal fun dropUnlistedSteamLogs(dir: File) {
+        File(dir, "steam").listFiles { f -> f.isFile && !f.name.startsWith(".") && !SteamLogAllowlist.allowed(f.name) }
+            ?.forEach { it.delete() }
+    }
+
     private fun scrubTree(
         record: Record,
         listFiles: (File) -> Array<File>? = { it.listFiles() },
         beforeReplace: (File) -> Unit = {},
         shouldStop: () -> Boolean = { false },
     ): Record {
+        dropUnlistedSteamLogs(record.dir)
         for (dir in record.dir.walkTopDown().filter { it.isDirectory }) {
             if (shouldStop() || !scrubFolder(dir, record, shouldStop, beforeReplace, listFiles)) {
                 record.failed = true
@@ -367,6 +374,7 @@ object SessionArtifacts {
         steamArch: String? = null,
         stopWhenSessionStarts: Boolean = false,
     ) {
+        dropUnlistedSteamLogs(dir)
         val logs = File(steamArch?.let { SessionPrefs.steamRoot(context, it) } ?: SessionPrefs.activeSteamRoot(context), "logs")
         if (!logs.isDirectory) return
         val out = File(dir, "steam").apply { mkdirs() }
@@ -395,7 +403,7 @@ object SessionArtifacts {
         val copied = ArrayList<File>()
         var failed = false
         var deferred = false
-        val sources = logs.listFiles { f -> f.isFile } ?: return CopyResult(copied, true, false)
+        val sources = logs.listFiles { f -> f.isFile && SteamLogAllowlist.allowed(f.name) } ?: return CopyResult(copied, true, false)
         for (src in sources) {
             if (shouldStop()) {
                 failed = true

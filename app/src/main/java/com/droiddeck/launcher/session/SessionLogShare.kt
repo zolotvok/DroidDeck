@@ -17,6 +17,7 @@ object SessionLogShare {
     fun zipFolder(context: Context, folder: File, onProgress: ((Float) -> Unit)? = null): File? {
         if (!folder.isDirectory) return null
         val files = folder.walkTopDown().filter { it.isFile }
+            .filter { SteamLogAllowlist.sessionFileAllowed(it.relativeTo(folder).invariantSeparatorsPath) }
             .filterNot { it.parentFile?.name == "steam" && it.length() > STEAM_LOG_MAX_BYTES }.toList()
         if (files.isEmpty()) return null
         val out = shareDir(context).apply { deleteRecursively(); mkdirs() }
@@ -56,8 +57,9 @@ object SessionLogShare {
     internal fun liveSteamLogs(context: Context, folder: File): List<File> {
         if (folder != SessionPaths.current() || File(folder, "steam").exists()) return emptyList()
         val logs = File(SessionPrefs.activeSteamRoot(context), "logs")
-        return logs.listFiles()?.filter { it.isFile && it.length() <= STEAM_LOG_MAX_BYTES }.orEmpty()
+        return logs.listFiles()?.filter { it.isFile && SteamLogAllowlist.allowed(it.name) && it.length() <= STEAM_LOG_MAX_BYTES }.orEmpty()
     }
+
 
     private const val STEAM_LOG_MAX_BYTES = 8L * 1024 * 1024
 

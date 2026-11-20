@@ -1,0 +1,1 @@
+Fri Nov 20 2026 18:04:16.020000 - VR_Init error, exiting: Shared IPC Compositor Invalid Connect Response (307)

@@ -1,0 +1,3 @@
+[2026-11-20 17:59:26] SteamUI: INFO: Login: fixtureaccount fixturepersona 5 1 0 0
+[2026-11-20 18:04:14] SteamUI: ERROR: DroidDeck: SteamVR did not start for 787790
+[2026-11-20 18:04:15] scrubbed by an older app version: UserID 76561********4321 [U:1:*****4321]

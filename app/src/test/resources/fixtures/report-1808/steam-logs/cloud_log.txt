@@ -1,0 +1,5 @@
+[2026-11-20 17:59:21] [AppID 7] AutoCloud checking local state for user 123456789
+[2026-11-20 17:59:21] [AppID 7] YldWriteCacheDirectoryToFile - saved to '/root/.local/share/Steam/userdata/123456789/7/remotecache.vdf'
+[2026-11-20 17:59:24] [AppID 241100] Need to download file 123456789/config/configset_controller_generic.vdf
+[2026-11-20 17:59:25] [AppID 241100] File is in sync 123456789/config/preferences_MT-DROIDDECK0001.vdf
+[2026-11-20 18:04:12] [AppID 787790] AutoCloud force-restoring files for user 123456789 in root /root/.local/share/Steam/steamapps/compatdata/787790/pfx/drive_c/users/steamuser
