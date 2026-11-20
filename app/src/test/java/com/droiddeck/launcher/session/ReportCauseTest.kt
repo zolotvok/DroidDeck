@@ -10,7 +10,8 @@ import java.util.Calendar
 import java.util.TimeZone
 
 /** Fixtures in resources/report: lines cut from two real report zips (11-20: Yooka-Laylee rc2, DOOM Eternal rc rev 3 F1),
- *  already redacted by the app; the device, kernel and account lines are left out. */
+ *  already redacted by the app, and from the rc rev 3 F1 run's own copies (11-20: The Witcher 3 with a DXVK device filter
+ *  that matches no GPU; app data path redacted as the app does); the device, kernel and account lines are left out. */
 class ReportCauseTest {
     private fun fixture(name: String): List<String> = javaClass.classLoader!!.getResource("report/$name")!!.readText().lines()
 
@@ -103,6 +104,81 @@ class ReportCauseTest {
         assertEquals("Game stalled (no frames for 20 s before the report; no game exit was logged).", found.bullets[0])
         assertEquals("GPU fault: `==>[WARN] Received a GROUP_ERROR_FATAL error on group(0)`", found.bullets[1])
         assertEquals("No game exit was logged for this launch (the game may still have been running).", found.bullets.last())
+    }
+
+    @Test fun witcherF1NamesTheDeviceFilterAndDxvksFailedStart() {
+        val launch = ReportSummary.launchLines(fixture("witcher-f1-session.log").asSequence())
+        val proton = fixture("witcher-f1-proton.log")
+        val exit = ReportCause.exitOf(launch)!!
+        assertEquals(5, exit.status)
+        val keys = ReportCause.keyLines(proton, stopped = false)
+        assertEquals(listOf(
+            "warn:  DXVK: No adapters found. Please check your device filter settings",
+            "err:   Failed to initialize DXVK.",
+        ), keys.causes.take(2))
+        // the same evidence ReportBundle hands over: this launch's lines, newest first
+        val vulkanErrorLine = ReportSummary.vulkanErrorLine((launch + proton).asReversed().asSequence())
+        val found = ReportCause.analyse(launch, proton, emptyList(), at(11, 10, 0), zone, vulkanErrorLine)!!
+        assertEquals(listOf(
+            "The game could not find a usable GPU (DXVK found no Vulkan adapter; check DXVK_FILTER_DEVICE_NAME and the driver): " +
+                "`warn:  DXVK: No adapters found. Please check your device filter settings`",
+            "DXVK (Direct3D 8-11 on Vulkan) could not start: `err:   Failed to initialize DXVK.`",
+            "Game exited with status 5 after 9 s (if it crashed: low byte of 0xC0000005 access violation).",
+        ), found.bullets)
+        // the bridge found its HAL here: that line is no cause
+        assertFalse(found.bullets.any { it.contains("vendor HAL") })
+        // game-env's own likely-cause sentence is no Vulkan error evidence, and the launch block leaves it to the bullets
+        val sentence = "droiddeck-game-env: likely cause: The game could not find a usable GPU (vkd3d found no Vulkan device): " +
+            "0123:err:vkd3d_select_physical_device: No physical device available."
+        assertNull(ReportSummary.vulkanErrorLine(sequenceOf(sentence)))
+        val block = ReportSummary.lastLaunch(launch + sentence, proton, "steam-292030.log", keys)
+        assertFalse(block.joinToString("\n"), block.any { it.contains("likely cause") })
+    }
+
+    private fun causeOf(line: String): String? = ReportCause.findings(listOf(line), null, null).bullets
+        .first().takeUnless { it.startsWith("No known cause pattern") }?.substringBefore(": `")
+
+    @Test fun vulkanStartFailuresAreNamed() {
+        assertEquals("Vendor Vulkan HAL rejected or missing", causeOf("mali-bridge: vendor HAL: none found (3 candidates tried); " +
+            "set MALI_BRIDGE_HAL=<path> or send the session log"))
+        assertNull(causeOf("mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)"))
+        assertEquals("The Vulkan loader found no GPU driver (no Vulkan ICD was loaded)", causeOf("terminator_CreateInstance: Found no drivers!"))
+        assertEquals("The Vulkan loader found no GPU driver (no Vulkan ICD was loaded)", causeOf("loader: No ICDs were found"))
+        assertEquals("The Vulkan driver is missing or does not fit (VK_ERROR_INCOMPATIBLE_DRIVER)",
+            causeOf("vkCreateInstance failed with VK_ERROR_INCOMPATIBLE_DRIVER"))
+        assertEquals("The Vulkan driver failed to initialize (VK_ERROR_INITIALIZATION_FAILED)",
+            causeOf("err:vulkan:create_instance returned VK_ERROR_INITIALIZATION_FAILED"))
+        assertEquals("Vulkan could not start (vkCreateInstance failed)", causeOf("vkCreateInstance failed: -9"))
+        assertEquals("DXVK could not start Vulkan (it failed to create a Vulkan instance)",
+            causeOf("err:   DxvkInstance::createInstance: Failed to create Vulkan instance"))
+        assertEquals("The game could not start Vulkan (vkd3d or another component failed to create a Vulkan instance)",
+            causeOf("0123:err:vkd3d_instance_init: Failed to create Vulkan instance, vr -9."))
+        assertEquals("The game could not find a usable GPU (vkd3d found no Vulkan device)",
+            causeOf("0123:err:vkd3d_select_physical_device: No physical device available."))
+        assertEquals("The game could not find a usable GPU (vkd3d found no Vulkan device)",
+            causeOf("0123:err:vkd3d_select_physical_device: Failed to enumerate physical devices, vr -3."))
+        // the next two wordings come from the brief's list, not from a log seen here
+        assertEquals("The game could not find a usable GPU (vkd3d found no Vulkan device)", causeOf("No suitable physical device found"))
+        assertEquals("The game could not open the GPU (vkd3d failed to create the Vulkan device)",
+            causeOf("0123:err:vkd3d_create_vk_device: Failed to create Vulkan device, vr -3."))
+        assertEquals("The game could not open the GPU (vkd3d failed to create the Vulkan device)",
+            causeOf("0123:err:vkd3d-proton:d3d12_device_create: Failed to create device, hr 0x80004005."))
+        // a swapchain that fails to initialise is recreated (RE Village); a recreated vkd3d swapchain names no device
+        assertNull(causeOf("[Gamescope WSI] Failed to create swapchain - vr: VK_ERROR_INITIALIZATION_FAILED xid: 0x1a00034"))
+        assertNull(causeOf("757800.096:0140:018c:err:vkd3d-proton:dxgi_vk_swap_chain_recreate_swapchain_in_present_task: " +
+            "Failed to create swapchain, vr -3."))
+        // DXVK's device filter line alone is no cause (a filter that picks one of two GPUs prints it too)
+        assertNull(causeOf("info:    Skipping: Device filter"))
+        // a line two patterns match is named once, under the first
+        val both = ReportCause.findings(listOf("vkCreateInstance failed with VK_ERROR_INCOMPATIBLE_DRIVER"), null, null)
+        assertEquals(listOf("The Vulkan driver is missing or does not fit (VK_ERROR_INCOMPATIBLE_DRIVER): " +
+            "`vkCreateInstance failed with VK_ERROR_INCOMPATIBLE_DRIVER`", "No game exit was logged for this launch (the game may still have been running)."),
+            both.bullets)
+        // the DXVK instance line is DXVK's, not the general instance pattern's
+        assertEquals(2, ReportCause.findings(listOf("err:   DxvkInstance::createInstance: Failed to create Vulkan instance"), null, null).bullets.size)
+        // the new causes rank as causes in the key lines too
+        assertEquals(listOf("err:   Failed to initialize DXVK."),
+            ReportCause.keyLines(listOf("info:  all fine", "err:   Failed to initialize DXVK."), stopped = true).causes)
     }
 
     @Test fun theExitTimeOrTheStopRequestEndsTheLaunch() {

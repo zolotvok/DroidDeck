@@ -40,14 +40,34 @@ object ReportCause {
         "skipping destruction \\(fork without exec\\?\\)",
     ).map(::Regex)
 
-    /** The known-cause patterns, most telling first, with the words the summary uses for each (KNOWN_CAUSE in
-     *  droiddeck-game-env). */
+    /** The known-cause patterns, most telling first, with the words the summary uses for each (KNOWN_CAUSES in
+     *  droiddeck-game-env: the same labels and patterns, in the same order). A line that matches several is shown
+     *  once, under the first. The Vulkan start-up failures go from the driver up: loader, Vulkan result codes, then
+     *  what DXVK (Direct3D 8-11) and vkd3d (Direct3D 12) print when they find no usable GPU. */
     val KNOWN_CAUSES = listOf(
         "GPU fault" to "GROUP_ERROR_FATAL|TRANSLATION_FAULT|GPU (?:page )?fault",
         "Vulkan device lost" to "VK_ERROR_DEVICE_LOST",
         "Vendor driver did not load" to "hybris_dlopen\\(.*\\) failed",
         "Vendor Vulkan HAL rejected or missing" to
-            "mali-bridge: (?:vendor HAL candidate rejected|no vendor HAL|vendor HAL .*(?:missing|not found|failed))",
+            "mali-bridge: (?:vendor HAL candidate rejected|no vendor HAL|vendor HAL: none|vendor HAL .*(?:missing|not found|failed))",
+        "The Vulkan loader found no GPU driver (no Vulkan ICD was loaded)" to "Found no drivers|\\bNo ICDs\\b",
+        "The Vulkan driver is missing or does not fit (VK_ERROR_INCOMPATIBLE_DRIVER)" to "VK_ERROR_INCOMPATIBLE_DRIVER",
+        // a swapchain that fails this way is recreated and works (RE Village 11-12..16): no cause on its own
+        "The Vulkan driver failed to initialize (VK_ERROR_INITIALIZATION_FAILED)" to
+            "^(?!.*swapchain).*VK_ERROR_INITIALIZATION_FAILED",
+        "Vulkan could not start (vkCreateInstance failed)" to "vkCreateInstance failed",
+        "DXVK could not start Vulkan (it failed to create a Vulkan instance)" to
+            "DxvkInstance\\b.*Failed to create Vulkan(?: [0-9.]+)? instance",
+        "The game could not start Vulkan (vkd3d or another component failed to create a Vulkan instance)" to
+            "^(?!.*DxvkInstance).*Failed to create Vulkan(?: [0-9.]+)? instance",
+        // DXVK's "Skipping: Device filter" is no cause on its own: a filter that picks one of two GPUs prints it too
+        "The game could not find a usable GPU (DXVK found no Vulkan adapter; check DXVK_FILTER_DEVICE_NAME and the driver)" to
+            "DXVK: No adapters found",
+        "The game could not find a usable GPU (vkd3d found no Vulkan device)" to
+            "No suitable physical device|No physical device available|Failed to enumerate physical devices",
+        "The game could not open the GPU (vkd3d failed to create the Vulkan device)" to
+            "Failed to create Vulkan device|vkd3d.*Failed to create device",
+        "DXVK (Direct3D 8-11 on Vulkan) could not start" to "Failed to initialize DXVK",
     ).map { (label, pattern) -> label to Regex(pattern, RegexOption.IGNORE_CASE) }
 
     /** A swapchain recreation is routine; these lines are a cause only next to a swapchain destroy that never returned

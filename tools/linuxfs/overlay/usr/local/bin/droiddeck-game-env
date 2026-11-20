@@ -815,12 +815,35 @@ TEARDOWN_NOISE = re.compile("|".join((
     r"^wine client error:\S+: write: Bad file descriptor",
     r"skipping destruction \(fork without exec\?\)",
 )))
-KNOWN_CAUSE = re.compile("|".join((
-    r"VK_ERROR_DEVICE_LOST",
-    r"GROUP_ERROR_FATAL|TRANSLATION_FAULT|GPU (?:page )?fault",
-    r"hybris_dlopen\(.*\) failed",
-    r"mali-bridge: (?:vendor HAL candidate rejected|no vendor HAL|vendor HAL .*(?:missing|not found|failed))",
-)), re.IGNORECASE)
+# The known-cause patterns, most telling first, with the words the summary uses for each: the same labels, patterns
+# and order as KNOWN_CAUSES in the app's ReportCause.kt. A line that matches several is named once, under the first.
+# The Vulkan start-up failures go from the driver up: loader, Vulkan result codes, then what DXVK (Direct3D 8-11) and
+# vkd3d (Direct3D 12) print when they find no usable GPU.
+KNOWN_CAUSES = [(label, re.compile(pattern, re.IGNORECASE)) for label, pattern in (
+    ("GPU fault", r"GROUP_ERROR_FATAL|TRANSLATION_FAULT|GPU (?:page )?fault"),
+    ("Vulkan device lost", r"VK_ERROR_DEVICE_LOST"),
+    ("Vendor driver did not load", r"hybris_dlopen\(.*\) failed"),
+    ("Vendor Vulkan HAL rejected or missing",
+     r"mali-bridge: (?:vendor HAL candidate rejected|no vendor HAL|vendor HAL: none|vendor HAL .*(?:missing|not found|failed))"),
+    ("The Vulkan loader found no GPU driver (no Vulkan ICD was loaded)", r"Found no drivers|\bNo ICDs\b"),
+    ("The Vulkan driver is missing or does not fit (VK_ERROR_INCOMPATIBLE_DRIVER)", r"VK_ERROR_INCOMPATIBLE_DRIVER"),
+    # a swapchain that fails this way is recreated and works (RE Village 11-12..16): no cause on its own
+    ("The Vulkan driver failed to initialize (VK_ERROR_INITIALIZATION_FAILED)",
+     r"^(?!.*swapchain).*VK_ERROR_INITIALIZATION_FAILED"),
+    ("Vulkan could not start (vkCreateInstance failed)", r"vkCreateInstance failed"),
+    ("DXVK could not start Vulkan (it failed to create a Vulkan instance)",
+     r"DxvkInstance\b.*Failed to create Vulkan(?: [0-9.]+)? instance"),
+    ("The game could not start Vulkan (vkd3d or another component failed to create a Vulkan instance)",
+     r"^(?!.*DxvkInstance).*Failed to create Vulkan(?: [0-9.]+)? instance"),
+    # DXVK's "Skipping: Device filter" is no cause on its own: a filter that picks one of two GPUs prints it too
+    ("The game could not find a usable GPU (DXVK found no Vulkan adapter; check DXVK_FILTER_DEVICE_NAME and the driver)",
+     r"DXVK: No adapters found"),
+    ("The game could not find a usable GPU (vkd3d found no Vulkan device)",
+     r"No suitable physical device|No physical device available|Failed to enumerate physical devices"),
+    ("The game could not open the GPU (vkd3d failed to create the Vulkan device)",
+     r"Failed to create Vulkan device|vkd3d.*Failed to create device"),
+    ("DXVK (Direct3D 8-11 on Vulkan) could not start", r"Failed to initialize DXVK"),
+)]
 # A swapchain recreation is routine; it is a cause only next to a swapchain destroy that never returned.
 WSI_CAUSE = re.compile(r"\[Gamescope WSI\] Forcing swapchain recreation|VK_ERROR_OUT_OF_DATE_KHR", re.IGNORECASE)
 DESTROYING = re.compile(r"\[Gamescope WSI\] Destroying swapchain: (0x[0-9a-fA-F]+)")
@@ -882,6 +905,27 @@ def hung_destroys(lines):
     return set(open_destroys.values())
 
 
+def known_cause(line):
+    return any(pattern.search(line) for _, pattern in KNOWN_CAUSES)
+
+
+def noise(line, stopped):
+    return bool(STARTUP_NOISE.search(line) or (stopped and TEARDOWN_NOISE.search(line)))
+
+
+def likely_causes(lines, stopped):
+    """(label, line) for each known cause in the log, most telling first: the last line of each pattern, noise left
+    out, a line named once (ReportCause.findings in the app)."""
+    found, shown = [], set()
+    for label, pattern in KNOWN_CAUSES:
+        line = next((line for line in reversed(lines) if pattern.search(line) and not noise(line, stopped)), None)
+        if line is None or repeat_key(line) in shown:
+            continue
+        shown.add(repeat_key(line))
+        found.append((label, line.strip()))
+    return found
+
+
 def summary_lines(lines, stopped):
     """(cause lines, other lines, hung destroy lines) of a Proton log, each in log order: start-up noise (and teardown
     noise when a stop ended the game) left out, repeats folded into their last copy. Causes are the known-cause
@@ -892,10 +936,10 @@ def summary_lines(lines, stopped):
     end = max(times) if times else None
     picked = {}
     for index, line in enumerate(lines):
-        if STARTUP_NOISE.search(line) or (stopped and TEARDOWN_NOISE.search(line)):
+        if noise(line, stopped):
             continue
         wine = WINE_LINE.match(line)
-        if index in hung or KNOWN_CAUSE.search(line) or (hung and WSI_CAUSE.search(line)):
+        if index in hung or known_cause(line) or (hung and WSI_CAUSE.search(line)):
             rank = 2
         elif (not stopped and wine and wine.group(2) == "err" and end is not None
               and float(wine.group(1)) >= end - WINE_ERR_SECONDS):
@@ -946,6 +990,8 @@ def game_finished(env, returncode, seconds):
     if hung:
         print("droiddeck-game-env: likely cause: a swapchain destroy never returned (%s has no Destroyed line)%s"
               % (hung[-1].strip(), "; the game hung until it was stopped" if stopped else ""), file=sys.stderr)
+    for label, line in likely_causes(lines, stopped):
+        print("droiddeck-game-env: likely cause: %s: %s" % (label, line[:300]), file=sys.stderr)
     print("droiddeck-game-env: failure summary from %s (%d bridge HAL lines, %d known-cause lines, last %d other "
           "err/warn lines; start-up%s noise and repeats left out):"
           % (os.path.basename(path), len(hal), len(causes), len(last), "/teardown" if stopped else ""), file=sys.stderr)

@@ -1,0 +1,140 @@
+======================
+Error: unable to check /proc/modules for NV driver presence
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-ntsync: up and running.
+Failed to read /etc/machine-id, error Cannot allocate memory.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+1173191.604:003c:0090:err:nsi:poll_events bind failed, errno 13.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+1173192.023:0098:00b0:err:hid:get_container_id_for_usb_udev_device Failed to get parent device.
+1173192.054:0098:00b4:err:hid:sdl_bus_init could not init SDL: Could not initialize UDEV
+1173192.402:0098:00d4:err:wineusb:usb_init Failed to initialize libusb: Other error
+1173192.420:0098:00a4:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+library "libc.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libm.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl_android.so" needed or dlopened by "/system/lib64/libvndksupport.so" is not accessible for the namespace "(default)"
+hybris-lazyinit: blobferry-hybris-lazyinit-cas-1 active (pid 29385)
+mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)
+mali-compat: heapBudget min(heap, 6144 MiB), cumulative usage (old report, MALI_COMPAT_BUDGET_MB unset), budget log off, memlog off
+Could not open module param file '/sys/module/mali_kbase/parameters/large_page_conf'
+mali-compat: RT pipeline (VK_KHR_ray_tracing_pipeline -> VK_KHR_ray_query megakernel) enabled
+mali-compat: FEX thunk patch: libvulkan-host.so not found in process (native run)
+mali-compat: created VkInstance 0x3000132640 (key=0x3000139a90)
+[Gamescope WSI] No application info given.
+[Gamescope WSI] Executable name: explorer.exe
+mali-compat: limits mode: subgroup widened (FAKE), storage-buffer offset alignment clamped to 16 (FAKE) (FAKE_SUBGROUP=1 FAKE_ALIGN=1)
+ATTENTION: default value of option vblank_mode overridden by environment.
+mali-compat: RT pipeline (VK_KHR_ray_tracing_pipeline -> VK_KHR_ray_query megakernel) enabled
+mali-compat: created VkInstance 0x30003461a0 (key=0x300032c670)
+[Gamescope WSI] Application info:
+  pApplicationName: explorer.exe
+  applicationVersion: 0
+  pEngineName: mesa zink
+  engineVersion: 0
+  apiVersion: 4211029
+[Gamescope WSI] Forcing on VK_EXT_swapchain_maintenance1.
+mali-compat: sync-diag armed: hooks on, ctl none, log /root/mali-sync-diag-explorer.exe.txt
+mali-compat: sync-diag mode fb 3 si 0 ms k4 0 at 11:03:15 epoch 1795168995.231 (env) fbm 0x0d6
+mali-compat: subgroup real stages 0x3f30 ops 0x6ff -> reported stages 0x3f3f ops 0x6ff (real=0); minStorageBufferOffsetAlignment real 64 -> reported 16 (real=0)
+mali-compat: rt_scratch: layer-owned AS build scratch ON (MALI_COMPAT_RT_OWN_SCRATCH), pool 128 MB
+mali-compat: real storage16 1111 storage8 111 (only false bits are masked)
+mali-compat: vkCreateDevice masks 4 core feature(s) the driver lacks: fillModeNonSolid(13) textureCompressionBC(22) shaderClipDistance(37) shaderCullDistance(38)
+mali-compat: pipeline cache /root/.cache/mali-compat/explorer.exe.pcache: loaded 0 bytes
+mali-compat: pc2-restore-1 active: VkDevice 0x30003a7780, driver vkCmdPushConstants2 no, vkCmdPushConstants2KHR yes
+mali-compat: created VkDevice 0x30003a7780 (key=0x30003856b0)
+Fossilize INFO: Overriding serialization path: "/root/.local/share/Steam/steamapps/shadercache/292030/fozpipelinesv6/steamapprun_pipeline_cache".
+[Gamescope WSI] Creating Gamescope surface: xid: 0x600004
+[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.
+[Gamescope WSI] Made gamescope surface for xid: 0x600004
+[Gamescope WSI] Surface state:
+  steam app id:                  292030
+  window xid:                    0x600004
+  wayland surface res id:        6
+  layer client flags:            0x0
+  server hdr output enabled:     false
+  hdr formats exposed to client: false
+[Gamescope WSI] minImageCount overridden by GAMESCOPE_WSI_MIN_IMAGE_COUNT: 8
+[Gamescope WSI] Creating swapchain for xid: 0x600004 - oldSwapchain: (nil) - provided minImageCount: 3 - minImageCount: 3 - format: VK_FORMAT_B8G8R8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true
+[Gamescope WSI] Created swapchain for xid: 0x600004 swapchain: 0x3000fa7970 - imageCount: 3
+[Gamescope WSI] Destroying swapchain: 0x3000fa7970
+[Gamescope WSI] Destroyed swapchain: 0x3000fa7970
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+library "libc.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libm.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl.so" needed or dlopened by "/vendor/lib64/hw/mt6993/vulkan.mali.so" is not accessible for the namespace "(default)"
+library "libdl_android.so" needed or dlopened by "/system/lib64/libvndksupport.so" is not accessible for the namespace "(default)"
+hybris-lazyinit: blobferry-hybris-lazyinit-cas-1 active (pid 29450)
+mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)
+mali-compat: heapBudget min(heap, 6144 MiB), cumulative usage (old report, MALI_COMPAT_BUDGET_MB unset), budget log off, memlog off
+Could not open module param file '/sys/module/mali_kbase/parameters/large_page_conf'
+mali-compat: RT pipeline (VK_KHR_ray_tracing_pipeline -> VK_KHR_ray_query megakernel) enabled
+mali-compat: FEX thunk patch: libvulkan-host.so not found in process (native run)
+mali-compat: created VkInstance 0x30002f6cc0 (key=0x3000860890)
+[Gamescope WSI] No application info given.
+[Gamescope WSI] Executable name: witcher3.exe
+mali-compat: limits mode: subgroup widened (FAKE), storage-buffer offset alignment clamped to 16 (FAKE) (FAKE_SUBGROUP=1 FAKE_ALIGN=1)
+info:  Game: witcher3.exe
+info:  DXVK: v3.1.1-209-g1039f682058fa71
+info:  Build: aarch64 clang 22.1.8
+info:  Found config env: dxvk.enableGraphicsPipelineLibrary = False; d3d11.maxTessFactor = 1; d3d11.samplerAnisotropy = 1; d3d11.invariantPosition = True; d3d11.relaxedBarriers = True; dxvk.numCompilerThreads = 4
+info:  Effective configuration:
+info:    dxvk.numCompilerThreads = 4
+info:    dxvk.enableGraphicsPipelineLibrary = False
+info:    d3d11.invariantPosition = True
+info:    d3d11.samplerAnisotropy = 1
+info:    d3d11.maxTessFactor = 1
+info:    d3d11.relaxedBarriers = True
+info:  Vulkan: Found vkGetInstanceProcAddr in winevulkan.dll @ 0x7fee860cc0
+info:  Extension providers:
+info:    Platform WSI
+info:    OpenVR
+info:    OpenXR
+warn:  OpenXR: Unable to get required Vulkan instance extensions size
+info:  Enabled instance extensions:
+info:    VK_KHR_get_surface_capabilities2
+info:    VK_KHR_surface
+info:    VK_KHR_surface_maintenance1
+info:    VK_KHR_win32_surface
+mali-compat: RT pipeline (VK_KHR_ray_tracing_pipeline -> VK_KHR_ray_query megakernel) enabled
+mali-compat: created VkInstance 0x3000899380 (key=0x300089a860)
+[Gamescope WSI] Application info:
+  pApplicationName: witcher3.exe
+  applicationVersion: 0
+  pEngineName: DXVK
+  engineVersion: 12591104
+  apiVersion: 4206592
+info:  Found device: Mali-G1-Ultra MC12 (Mali-G1-Ultra MC12 54.1.0)
+info:    Skipping: Device filter
+warn:  DXVK: No adapters found. Please check your device filter settings
+warn:  and Vulkan drivers. A Vulkan 1.3 capable setup is required.
+err:   Failed to initialize DXVK.
+wine: Unhandled page fault on read access to 0000000000000028 at address 0000007FE9587728 (thread 0140), starting debugger...
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+wine: overriding CPU configuration, 8 logical CPUs, host CPUs 7,4,5,6,0,1,2,3.
+0150:fixme:dbghelp:elf_search_auxv can't find symbol in module
+Unhandled exception: page fault on read access to 0x0000000000000028 in 64-bit code (0x00007fe9587728).
+0150:fixme:dbghelp:elf_search_auxv can't find symbol in module
+1173198.790:003c:0094:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x726de6e0fc stack 0x7ff4dd60

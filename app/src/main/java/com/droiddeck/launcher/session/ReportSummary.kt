@@ -48,7 +48,11 @@ object ReportSummary {
     fun vulkanDriverError(lines: Sequence<String>): Boolean = vulkanErrorLine(lines) != null
 
     /** The first line that shows a Vulkan or driver failure: the evidence the summary quotes. */
-    fun vulkanErrorLine(lines: Sequence<String>): String? = lines.firstOrNull { VULKAN_ERROR.containsMatchIn(it) }?.trim()
+    fun vulkanErrorLine(lines: Sequence<String>): String? =
+        lines.firstOrNull { VULKAN_ERROR.containsMatchIn(it) && !LIKELY_CAUSE.containsMatchIn(it) }?.trim()
+
+    /** game-env's own "likely cause" sentences: our words about a log line, not evidence. */
+    private val LIKELY_CAUSE = Regex("droiddeck-game-env: likely cause: ")
 
     class Info(
         val written: String,
@@ -146,6 +150,8 @@ object ReportSummary {
         val seen = HashSet<String>()
         for (line in launch) {
             if (!LAUNCH_LINE.containsMatchIn(line) || shown.size >= LAUNCH_MAX) continue
+            // the known causes of our own key lines are the summary's "What went wrong" bullets already
+            if (ours && ReportCause.KNOWN_CAUSES.any { line.startsWith("droiddeck-game-env: likely cause: ${it.first}: ") }) continue
             if (SUMMARY_LINE.containsMatchIn(line) && !HAL_LINE.containsMatchIn(line)) {
                 if (ours) continue
                 val text = SUMMARY_TEXT.find(line)?.groupValues?.get(1)

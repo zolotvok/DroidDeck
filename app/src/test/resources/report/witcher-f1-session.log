@@ -1,0 +1,33 @@
+droiddeck-game-env: oom_score_adj 0 for the Steam launch chain: 29141 reaper 900, 29140 pw-audio-namespace 900
+droiddeck-game-env: game driver: Mali system driver (bridge), <app-data>/files/linux_vulkan_drivers/Mali_Bridge/icd.json; the app's setting (games use the Mali system driver)
+droiddeck-game-env: REDlauncher skipped (witcher3.exe)
+droiddeck-game-env: Mali defaults for The Witcher 3 (steam:292030), env defaults 2026.11.19.1 (bundled)
+droiddeck-game-env: The Witcher 3: your own DXVK_CONFIG, FEX_EXTENDEDVOLATILEMETADATA, FEX_HOSTFEATURES, MALI_COMPAT_ASYNC_PSO, MALI_COMPAT_FAKE_LIMITS, MALI_COMPAT_FB_MASK, MALI_COMPAT_NOATT_AREA, MALI_COMPAT_PIPELINE_CACHE, MALI_COMPAT_PIPELINE_CACHE_THREADS, MALI_COMPAT_XFB_VS, VKD3D_CONFIG kept over the defaults
+droiddeck-game-env: ray tracing (DXR): your own VKD3D_CONFIG is kept
+droiddeck-game-env: game logs: PROTON_LOG=1 WINEDEBUG=+timestamp,+pid,+tid,fixme-all DXVK_LOG_LEVEL=info VKD3D_DEBUG=warn FEX_SILENTLOG=1, errors and warnings only
+droiddeck-game-env: FEX arm64ec: Proton Experimental (ARM64) has FEX-2611-45-gab135df (md5 2032f8db9fa34c8d372f4ce2d761ca2c), no row of the bundled table 2026.11.13.1; left as it is
+droiddeck-game-env: OpenGL does not wait for the screen refresh (vblank_mode=0)
+droiddeck-game-env: Windows sees 8 cores (8:7,4,5,6,0,1,2,3)
+droiddeck-game-env: game exited with status 5 after 9 s (if it crashed: low byte of 0xC0000005 access violation)
+droiddeck-game-env: failure summary from steam-292030.log (1 bridge HAL lines, last 20 err/warn lines):
+droiddeck-game-env: | mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | 1173191.604:003c:0090:err:nsi:poll_events bind failed, errno 13.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | 1173192.023:0098:00b0:err:hid:get_container_id_for_usb_udev_device Failed to get parent device.
+droiddeck-game-env: | 1173192.054:0098:00b4:err:hid:sdl_bus_init could not init SDL: Could not initialize UDEV
+droiddeck-game-env: | 1173192.402:0098:00d4:err:wineusb:usb_init Failed to initialize libusb: Other error
+droiddeck-game-env: | 1173192.420:0098:00a4:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | warn:  OpenXR: Unable to get required Vulkan instance extensions size
+droiddeck-game-env: | warn:  DXVK: No adapters found. Please check your device filter settings
+droiddeck-game-env: | warn:  and Vulkan drivers. A Vulkan 1.3 capable setup is required.
+droiddeck-game-env: | err:   Failed to initialize DXVK.
+droiddeck-game-env: | wine: Unhandled page fault on read access to 0000000000000028 at address 0000007FE9587728 (thread 0140), starting debugger...
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | ERROR: ld.so: object '/root/.steam/bin32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.
+droiddeck-game-env: | Unhandled exception: page fault on read access to 0x0000000000000028 in 64-bit code (0x00007fe9587728).
+droiddeck-game-env: | 1173198.790:003c:0094:err:virtual:virtual_setup_exception nested exception on signal stack addr 0x726de6e0fc stack 0x7ff4dd60

@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 from pathlib import Path
+import re
 import runpy
 import shlex
 import subprocess
@@ -654,6 +655,47 @@ class GameExitTest(unittest.TestCase):
         self.assertFalse(any("gameoverlayrenderer" in line or "OpenXR" in line for line in causes + others))
         keys = [MODULE["repeat_key"](line) for line in causes + others]
         self.assertEqual(len(keys), len(set(keys)))
+
+    def test_a_dxvk_start_failure_is_named_in_plain_words(self):
+        fixture = REPORT_FIXTURES / "witcher-f1-proton.log"
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "open(os.path.join(os.environ['HOME'], 'steam-7.log'), 'w').write(open(%r).read())\nsys.exit(5)\n" % str(fixture)
+            result, _ = self.launch(Path(tmp), body)
+            err = result.stderr
+            likely = [line for line in err.splitlines() if line.startswith("droiddeck-game-env: likely cause: ")]
+            self.assertEqual(likely, [
+                "droiddeck-game-env: likely cause: The game could not find a usable GPU (DXVK found no Vulkan adapter; check "
+                "DXVK_FILTER_DEVICE_NAME and the driver): warn:  DXVK: No adapters found. Please check your device filter settings",
+                "droiddeck-game-env: likely cause: DXVK (Direct3D 8-11 on Vulkan) could not start: err:   Failed to initialize DXVK.",
+            ])
+            self.assertIn("droiddeck-game-env: ! err:   Failed to initialize DXVK.", err)
+            self.assertNotIn("likely cause: Vendor", err)
+
+    def test_known_causes_match_the_apps_list(self):
+        source = (REPORT_FIXTURES.parents[2] / "main/java/com/droiddeck/launcher/session/ReportCause.kt").read_text()
+        block = source.split("val KNOWN_CAUSES = listOf(", 1)[1].split(").map", 1)[0]
+        block = "\n".join(line for line in block.splitlines() if not line.strip().startswith("//"))
+        literal = r'"((?:[^"\\]|\\.)*)"'
+        pairs = re.findall(literal + r"\s+to\s+" + literal, block)
+        unescape = lambda text: text.replace("\\\\", "\\")
+        self.assertEqual([(unescape(label), unescape(pattern)) for label, pattern in pairs],
+                         [(label, pattern.pattern) for label, pattern in MODULE["KNOWN_CAUSES"]])
+
+    def test_vulkan_start_failures_are_causes_but_a_recreated_swapchain_is_not(self):
+        causes = MODULE["likely_causes"]
+        self.assertEqual(causes(["mali-bridge: vendor HAL: none found (3 candidates tried); set MALI_BRIDGE_HAL=<path>"], False)[0][0],
+                         "Vendor Vulkan HAL rejected or missing")
+        self.assertEqual(causes(["terminator_CreateInstance: Found no drivers!"], False)[0][0],
+                         "The Vulkan loader found no GPU driver (no Vulkan ICD was loaded)")
+        self.assertEqual(causes(["0123:err:vkd3d_instance_init: Failed to create Vulkan instance, vr -9."], False)[0][0],
+                         "The game could not start Vulkan (vkd3d or another component failed to create a Vulkan instance)")
+        dxvk = causes(["err:   DxvkInstance::createInstance: Failed to create Vulkan instance"], False)
+        self.assertEqual([label for label, _ in dxvk], ["DXVK could not start Vulkan (it failed to create a Vulkan instance)"])
+        both = causes(["vkCreateInstance failed with VK_ERROR_INCOMPATIBLE_DRIVER"], False)
+        self.assertEqual([label for label, _ in both], ["The Vulkan driver is missing or does not fit (VK_ERROR_INCOMPATIBLE_DRIVER)"])
+        self.assertEqual(causes(["info:    Skipping: Device filter"], False), [])
+        self.assertEqual(causes(["[Gamescope WSI] Failed to create swapchain - vr: VK_ERROR_INITIALIZATION_FAILED xid: 0x1"], False), [])
+        self.assertEqual(causes(["mali-bridge: vendor HAL: /vendor/lib64/hw/vulkan.mali.so (via ro.hardware.vulkan=mali)"], False), [])
 
     def test_summary_reads_a_bounded_head_and_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
