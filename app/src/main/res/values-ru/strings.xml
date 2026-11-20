@@ -434,7 +434,6 @@
     <string name="mode_second_library">Вторая библиотека</string>
     <string name="mode_storage_note">Игры, читающие ресурсы с SD-карты или из общего хранилища, могут подтормаживать.</string>
     <string name="mode_storage_diagnostics">Диагностика хранилища</string>
-    <string name="mode_storage_diagnostics_hint">Записывает результаты выделения места и выборочные замеры скорости хранилища в журналы. Пока включено, установка может идти медленнее. Вступит в силу в следующей сессии.</string>
     <string name="mode_choose_folder">Выбрать папку…</string>
     <string name="mode_custom_res_title">Пользовательское разрешение</string>
     <string name="mode_custom_res_text">Заменяет предел разрешения и соотношение сторон. Размеры, не соответствующие экрану, будут отображаться с черными полосами.</string>
@@ -768,7 +767,6 @@
     <string name="drawer_support">Поддержка</string>
     <string name="drawer_logs">Журналы сессии</string>
     <string name="drawer_logs_hint">Приложите к отчету об ошибке</string>
-    <string name="drawer_share_logs">Поделиться журналами</string>
     <string name="drawer_background">В фон</string>
     <string name="drawer_stop">Остановить</string>
     <string name="drawer_stop_title">Остановить сессию?</string>

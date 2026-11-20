@@ -432,7 +432,6 @@
     <string name="mode_second_library">Második könyvtár</string>
     <string name="mode_storage_note">Az SD-kártyáról vagy megosztott tárhelyről streamelő játékok akadhatnak.</string>
     <string name="mode_storage_diagnostics">Tárhely-diagnosztika</string>
-    <string name="mode_storage_diagnostics_hint">Rögzíti a foglalási eredményeket és a mintavételezett tárhelyidőzítéseket a megosztott naplókban. Bekapcsolva lassíthatja a telepítéseket. A következő munkamenettől érvényes.</string>
     <string name="mode_choose_folder">Válasszon mappát…</string>
     <string name="mode_custom_res_title">Egyéni felbontás</string>
     <string name="mode_custom_res_text">Felülírja a korlátot és az arányt. A képernyőhöz nem illő méret sávokat eredményez.</string>
@@ -778,7 +777,6 @@
     <string name="drawer_support">Támogatás</string>
     <string name="drawer_logs">Munkamenet-naplók</string>
     <string name="drawer_logs_hint">Csatolja egy hibajelentéshez</string>
-    <string name="drawer_share_logs">Naplók megosztása</string>
     <string name="drawer_background">Háttér</string>
     <string name="drawer_stop">Leállítás</string>
     <string name="drawer_stop_title">Leállítja a munkamenetet?</string>

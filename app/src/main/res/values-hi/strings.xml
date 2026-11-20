@@ -432,7 +432,6 @@
     <string name="mode_second_library">दूसरी लाइब्रेरी</string>
     <string name="mode_storage_note">SD या शेयर्ड स्टोरेज से एसेट स्ट्रीम करने वाले गेम अटक सकते हैं।</string>
     <string name="mode_storage_diagnostics">स्टोरेज डायग्नोस्टिक्स</string>
-    <string name="mode_storage_diagnostics_hint">Share logs में एलोकेशन नतीजे और सैंपल किए स्टोरेज टाइमिंग रिकॉर्ड करें। चालू रहते हुए इंस्टॉल धीमे हो सकते हैं। अगले सेशन से लागू होता है।</string>
     <string name="mode_choose_folder">फ़ोल्डर चुनें…</string>
     <string name="mode_custom_res_title">कस्टम रिज़ॉल्यूशन</string>
     <string name="mode_custom_res_text">सीमा और रेशियो को बदल देता है। स्क्रीन से न मिलने वाले आकार में बार दिखेंगे।</string>
@@ -764,7 +763,6 @@
     <string name="drawer_support">सपोर्ट</string>
     <string name="drawer_logs">सेशन लॉग</string>
     <string name="drawer_logs_hint">बग रिपोर्ट में जोड़ें</string>
-    <string name="drawer_share_logs">लॉग शेयर करें</string>
     <string name="drawer_background">बैकग्राउंड</string>
     <string name="drawer_stop">बंद करें</string>
     <string name="drawer_stop_title">सेशन बंद करें?</string>

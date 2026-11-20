@@ -434,7 +434,6 @@
     <string name="mode_second_library">Друга бібліотека</string>
     <string name="mode_storage_note">Ігри, які підвантажують ресурси з SD-карти або спільного сховища, можуть працювати ривками.</string>
     <string name="mode_storage_diagnostics">Діагностика сховища</string>
-    <string name="mode_storage_diagnostics_hint">Записує результати виділення місця та вибіркові заміри швидкості сховища в «Поділитися журналами». Поки ввімкнено, встановлення може сповільнюватися. Застосовується в наступному сеансі.</string>
     <string name="mode_choose_folder">Вибрати папку…</string>
     <string name="mode_custom_res_title">Власна роздільна здатність</string>
     <string name="mode_custom_res_text">Замінює обмеження та співвідношення сторін. Якщо розмір не збігається з екраном, з’являться смуги.</string>
@@ -768,7 +767,6 @@
     <string name="drawer_support">Підтримка</string>
     <string name="drawer_logs">Журнали сеансу</string>
     <string name="drawer_logs_hint">Додайте до звіту про помилку</string>
-    <string name="drawer_share_logs">Поділитися журналами</string>
     <string name="drawer_background">Фон</string>
     <string name="drawer_stop">Завершити</string>
     <string name="drawer_stop_title">Завершити сеанс?</string>

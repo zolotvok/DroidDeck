@@ -434,7 +434,6 @@
     <string name="mode_second_library">Druhá knihovna</string>
     <string name="mode_storage_note">Hry, které streamují data z karty SD nebo sdíleného úložiště, mohou trhat.</string>
     <string name="mode_storage_diagnostics">Diagnostika úložiště</string>
-    <string name="mode_storage_diagnostics_hint">Zaznamenává výsledky alokace a vzorky časování úložiště do sdílených protokolů. Když je zapnuto, může zpomalit instalace. Použije se od příští relace.</string>
     <string name="mode_choose_folder">Vybrat složku…</string>
     <string name="mode_custom_res_title">Vlastní rozlišení</string>
     <string name="mode_custom_res_text">Nahradí limit i poměr stran. Velikost, která neodpovídá obrazovce, získá pruhy.</string>
@@ -768,7 +767,6 @@
     <string name="drawer_support">Podpora</string>
     <string name="drawer_logs">Protokoly relace</string>
     <string name="drawer_logs_hint">Přiložit k hlášení chyby</string>
-    <string name="drawer_share_logs">Sdílet protokoly</string>
     <string name="drawer_background">Pozadí</string>
     <string name="drawer_stop">Ukončit</string>
     <string name="drawer_stop_title">Ukončit relaci?</string>

@@ -821,7 +821,7 @@ def exit_text(returncode, seconds):
 
 def game_finished(env, returncode, seconds):
     """After the game: its exit in the session log and, for a failed exit, the bridge's HAL lines and the last
-    err/warn lines of its Proton log (session.log is in both "Share logs" and the problem report)."""
+    err/warn lines of its Proton log (session.log is in the problem report)."""
     print("droiddeck-game-env: " + exit_text(returncode, seconds), file=sys.stderr)
     if returncode == 0:
         return

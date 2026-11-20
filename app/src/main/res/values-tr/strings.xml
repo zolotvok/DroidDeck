@@ -432,7 +432,6 @@
     <string name="mode_second_library">İkinci kütüphane</string>
     <string name="mode_storage_note">Varlıkları SD karttan veya paylaşılan depolamadan akışla yükleyen oyunlarda takılmalar olabilir.</string>
     <string name="mode_storage_diagnostics">Depolama tanılaması</string>
-    <string name="mode_storage_diagnostics_hint">Ayırma sonuçlarını ve örneklenmiş depolama sürelerini “Günlükleri paylaş” çıktısına ekler. Açıkken yüklemeleri yavaşlatabilir. Sonraki oturumda uygulanır.</string>
     <string name="mode_choose_folder">Klasör seçin…</string>
     <string name="mode_custom_res_title">Özel çözünürlük</string>
     <string name="mode_custom_res_text">Sınırın ve oranın yerine geçer. Ekrana uymayan bir boyutta siyah şeritler görünür.</string>
@@ -764,7 +763,6 @@
     <string name="drawer_support">Destek</string>
     <string name="drawer_logs">Oturum günlükleri</string>
     <string name="drawer_logs_hint">Hata raporuna ekleyin</string>
-    <string name="drawer_share_logs">Günlükleri paylaş</string>
     <string name="drawer_background">Arka plan</string>
     <string name="drawer_stop">Durdur</string>
     <string name="drawer_stop_title">Oturum durdurulsun mu?</string>

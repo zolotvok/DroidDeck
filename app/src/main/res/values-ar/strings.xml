@@ -436,7 +436,6 @@
     <string name="mode_second_library">مكتبة ثانية</string>
     <string name="mode_storage_note">قد تتقطع الألعاب التي تحمّل ملفاتها باستمرار من بطاقة SD أو من مساحة التخزين المشتركة.</string>
     <string name="mode_storage_diagnostics">تشخيص التخزين</string>
-    <string name="mode_storage_diagnostics_hint">يسجّل نتائج تخصيص المساحة وعينات من توقيتات التخزين في «مشاركة السجلات». قد يبطئ عمليات التثبيت أثناء تفعيله. يُطبَّق في الجلسة التالية.</string>
     <string name="mode_choose_folder">اختيار مجلد…</string>
     <string name="mode_custom_res_title">دقة مخصّصة</string>
     <string name="mode_custom_res_text">تحل محل الحد والنسبة. يُعرض الحجم غير المطابق للشاشة مع أشرطة.</string>
@@ -772,7 +771,6 @@
     <string name="drawer_support">الدعم</string>
     <string name="drawer_logs">سجلات الجلسة</string>
     <string name="drawer_logs_hint">أرفقها بتقرير خلل</string>
-    <string name="drawer_share_logs">مشاركة السجلات</string>
     <string name="drawer_background">الخلفية</string>
     <string name="drawer_stop">إيقاف</string>
     <string name="drawer_stop_title">إيقاف الجلسة؟</string>

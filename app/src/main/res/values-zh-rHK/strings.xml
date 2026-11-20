@@ -431,7 +431,6 @@
     <string name="mode_second_library">第二個收藏庫</string>
     <string name="mode_storage_note">從 SD 卡或共用儲存空間串流資源的遊戲可能會卡頓。</string>
     <string name="mode_storage_diagnostics">儲存空間診斷</string>
-    <string name="mode_storage_diagnostics_hint">在分享的記錄中加入空間分配結果和抽樣的儲存時間數據。啟用時可能會減慢安裝速度。下次會話生效。</string>
     <string name="mode_choose_folder">選擇資料夾…</string>
     <string name="mode_custom_res_title">自訂解像度</string>
     <string name="mode_custom_res_text">取代解像度上限和螢幕比例。尺寸與螢幕不符時會顯示黑邊。</string>
@@ -762,7 +761,6 @@
     <string name="drawer_support">支援</string>
     <string name="drawer_logs">會話記錄</string>
     <string name="drawer_logs_hint">附加到錯誤報告</string>
-    <string name="drawer_share_logs">分享記錄</string>
     <string name="drawer_background">背景</string>
     <string name="drawer_stop">停止</string>
     <string name="drawer_stop_title">停止會話？</string>

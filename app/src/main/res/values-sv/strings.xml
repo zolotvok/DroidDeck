@@ -432,7 +432,6 @@
     <string name="mode_second_library">Andra biblioteket</string>
     <string name="mode_storage_note">Spel som strömmar tillgångar från SD-kortet eller delad lagring kan hacka.</string>
     <string name="mode_storage_diagnostics">Lagringsdiagnostik</string>
-    <string name="mode_storage_diagnostics_hint">Registrerar allokeringsresultat och uppmätta lagringstider i Dela loggar. Kan göra installationer långsammare medan funktionen är aktiverad. Gäller från nästa session.</string>
     <string name="mode_choose_folder">Välj en mapp…</string>
     <string name="mode_custom_res_title">Anpassad upplösning</string>
     <string name="mode_custom_res_text">Ersätter gränsen och bildförhållandet. En storlek som inte matchar skärmen får ränder.</string>
@@ -764,7 +763,6 @@
     <string name="drawer_support">Support</string>
     <string name="drawer_logs">Sessionsloggar</string>
     <string name="drawer_logs_hint">Bifoga till en felrapport</string>
-    <string name="drawer_share_logs">Dela loggar</string>
     <string name="drawer_background">Bakgrund</string>
     <string name="drawer_stop">Stoppa</string>
     <string name="drawer_stop_title">Stoppa sessionen?</string>

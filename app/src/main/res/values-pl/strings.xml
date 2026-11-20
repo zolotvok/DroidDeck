@@ -434,7 +434,6 @@
     <string name="mode_second_library">Druga biblioteka</string>
     <string name="mode_storage_note">Gry, które strumieniują zasoby z karty SD lub pamięci współdzielonej, mogą się zacinać.</string>
     <string name="mode_storage_diagnostics">Diagnostyka pamięci</string>
-    <string name="mode_storage_diagnostics_hint">Zapisuje wyniki alokacji i próbkowane czasy dostępu do pamięci w „Udostępnij logi”. Po włączeniu może spowalniać instalacje. Działa od następnej sesji.</string>
     <string name="mode_choose_folder">Wybierz folder…</string>
     <string name="mode_custom_res_title">Własna rozdzielczość</string>
     <string name="mode_custom_res_text">Zastępuje limit i proporcje. Przy rozmiarze niepasującym do ekranu pojawią się pasy.</string>
@@ -768,7 +767,6 @@
     <string name="drawer_support">Pomoc</string>
     <string name="drawer_logs">Logi sesji</string>
     <string name="drawer_logs_hint">Dołącz do zgłoszenia błędu</string>
-    <string name="drawer_share_logs">Udostępnij logi</string>
     <string name="drawer_background">Przenieś w tło</string>
     <string name="drawer_stop">Zatrzymaj</string>
     <string name="drawer_stop_title">Zatrzymać sesję?</string>

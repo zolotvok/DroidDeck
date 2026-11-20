@@ -431,7 +431,6 @@
     <string name="mode_second_library">ไลบรารีที่สอง</string>
     <string name="mode_storage_note">เกมที่สตรีมข้อมูลจาก SD หรือพื้นที่จัดเก็บที่ใช้ร่วมกันอาจกระตุก</string>
     <string name="mode_storage_diagnostics">การวินิจฉัยพื้นที่จัดเก็บ</string>
-    <string name="mode_storage_diagnostics_hint">บันทึกผลการจัดสรรและเวลาพื้นที่จัดเก็บที่สุ่มตรวจไว้ในล็อกที่แชร์ อาจทำให้การติดตั้งช้าลงขณะเปิดใช้งาน จะมีผลในเซสชันถัดไป</string>
     <string name="mode_choose_folder">เลือกโฟลเดอร์…</string>
     <string name="mode_custom_res_title">ความละเอียดกำหนดเอง</string>
     <string name="mode_custom_res_text">แทนที่ขีดจำกัดและอัตราส่วน ขนาดที่ไม่ตรงกับหน้าจอจะมีแถบดำ</string>
@@ -762,7 +761,6 @@
     <string name="drawer_support">การสนับสนุน</string>
     <string name="drawer_logs">ล็อกเซสชัน</string>
     <string name="drawer_logs_hint">แนบไปกับรายงานข้อบกพร่อง</string>
-    <string name="drawer_share_logs">แชร์ล็อก</string>
     <string name="drawer_background">พื้นหลัง</string>
     <string name="drawer_stop">หยุด</string>
     <string name="drawer_stop_title">หยุดเซสชัน?</string>

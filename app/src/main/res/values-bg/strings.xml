@@ -432,7 +432,6 @@
     <string name="mode_second_library">Втора библиотека</string>
     <string name="mode_storage_note">Игри, които стриймват ресурси от SD картата или общото хранилище, може да заекват.</string>
     <string name="mode_storage_diagnostics">Диагностика на хранилището</string>
-    <string name="mode_storage_diagnostics_hint">Записва резултатите от заделянето и извадкови времена на хранилището в „Споделяне на дневници“. Може да забави инсталациите, докато е включено. Прилага се от следващата сесия.</string>
     <string name="mode_choose_folder">Изберете папка…</string>
     <string name="mode_custom_res_title">Персонализирана резолюция</string>
     <string name="mode_custom_res_text">Заменя ограничението и пропорцията. Размер, който не съвпада с екрана, получава ленти.</string>
@@ -764,7 +763,6 @@
     <string name="drawer_support">Поддръжка</string>
     <string name="drawer_logs">Дневници на сесията</string>
     <string name="drawer_logs_hint">Прикачете към доклад за грешка</string>
-    <string name="drawer_share_logs">Споделяне на дневници</string>
     <string name="drawer_background">Фонов режим</string>
     <string name="drawer_stop">Спри</string>
     <string name="drawer_stop_title">Спиране на сесията?</string>

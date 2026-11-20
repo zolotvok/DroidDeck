@@ -433,7 +433,6 @@
     <string name="mode_second_library">Bibliothèque secondaire</string>
     <string name="mode_storage_note">Les jeux lisant des ressources depuis une carte SD ou un stockage partagé peuvent saccader.</string>
     <string name="mode_storage_diagnostics">Diagnostic du stockage</string>
-    <string name="mode_storage_diagnostics_hint">Enregistre les résultats d\'allocation et des mesures de temps du stockage dans « Partager les journaux ». Peut ralentir les installations lorsqu\'il est activé. Prendra effet à la prochaine session.</string>
     <string name="mode_choose_folder">Choisir un dossier…</string>
     <string name="mode_custom_res_title">Résolution personnalisée</string>
     <string name="mode_custom_res_text">Remplace la limite de résolution et le format d\'écran. Les dimensions ne correspondant pas à l\'écran afficheront des bandes noires.</string>
@@ -766,7 +765,6 @@
     <string name="drawer_support">Assistance</string>
     <string name="drawer_logs">Journaux de session</string>
     <string name="drawer_logs_hint">Joindre au rapport d\'erreur</string>
-    <string name="drawer_share_logs">Partager les journaux</string>
     <string name="drawer_background">Arrière-plan</string>
     <string name="drawer_stop">Arrêter</string>
     <string name="drawer_stop_title">Arrêter la session ?</string>

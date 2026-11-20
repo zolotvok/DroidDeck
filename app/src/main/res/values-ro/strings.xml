@@ -433,7 +433,6 @@
     <string name="mode_second_library">A doua bibliotecă</string>
     <string name="mode_storage_note">Jocurile care transmit fișiere de pe SD sau din stocarea partajată pot avea sacadări.</string>
     <string name="mode_storage_diagnostics">Diagnosticare stocare</string>
-    <string name="mode_storage_diagnostics_hint">Înregistrează rezultatele alocărilor și timpii de stocare eșantionați în Partajare jurnale. Poate încetini instalările cât este activă. Se aplică la sesiunea următoare.</string>
     <string name="mode_choose_folder">Alege un folder…</string>
     <string name="mode_custom_res_title">Rezoluție personalizată</string>
     <string name="mode_custom_res_text">Înlocuiește limita și raportul. O dimensiune care nu se potrivește cu ecranul primește benzi.</string>
@@ -766,7 +765,6 @@
     <string name="drawer_support">Asistență</string>
     <string name="drawer_logs">Jurnalele sesiunii</string>
     <string name="drawer_logs_hint">Atașează la un raport de eroare</string>
-    <string name="drawer_share_logs">Partajează jurnalele</string>
     <string name="drawer_background">Fundal</string>
     <string name="drawer_stop">Oprește</string>
     <string name="drawer_stop_title">Oprești sesiunea?</string>
