@@ -119,13 +119,23 @@ object GamesFolderMigration {
         else Log.i(TAG, "games: ${waiting.size} bind(s) wait for their volume: ${waiting.joinToString()}")
     }
 
+    /**
+     * Whether a bind nested under another bind must stay. It stays when its folder cannot be listed
+     * (volume unplugged or still mounting, permission revoked: a missing nested bind is harmless) or
+     * when it holds a Steam library. Never cached, so a remounted volume is read again.
+     */
+    @Volatile
+    internal var keepNestedBind: (File) -> Boolean = { dir -> dir.list() == null || GameStorage.hasInstalledGames(dir) }
+
     internal fun pruneNestedBinds(context: Context) {
         val binds = SessionPrefs.gameFolderBinds(context)
         if (binds.size < 2) return
-        val nested = binds.filterNot { GameStorage.hasInstalledGames(File(it.first)) }.mapNotNull { bind ->
+        val candidates = binds.mapNotNull { bind ->
             binds.filter { it.first != bind.first && bind.first.startsWith(it.first.trimEnd('/') + "/") }
                 .minByOrNull { it.first.length }?.let { bind to it }
         }
+        if (candidates.isEmpty()) return
+        val nested = candidates.filterNot { keepNestedBind(File(it.first.first)) }
         if (nested.isEmpty()) return
         for ((inner, outer) in nested) {
             val moved = outer.second + "/" + inner.first.removePrefix(outer.first.trimEnd('/') + "/")

@@ -28,6 +28,7 @@ class AddedGamesStorageBindTest {
     @get:Rule val tmp = TemporaryFolder()
     private lateinit var stick: File
     private lateinit var volumes: (Context) -> List<File>
+    private lateinit var keepNested: (File) -> Boolean
 
     private fun exe(path: File): File = path.apply { parentFile!!.mkdirs(); writeBytes(ByteArray(16)) }
 
@@ -42,9 +43,25 @@ class AddedGamesStorageBindTest {
         stick = tmp.newFolder("0A1B-2C3D")
         volumes = AddedGames.volumeRoots
         AddedGames.volumeRoots = { listOf(stick) }
+        keepNested = GamesFolderMigration.keepNestedBind
     }
 
-    @After fun tearDown() { AddedGames.volumeRoots = volumes }
+    @After fun tearDown() {
+        AddedGames.volumeRoots = volumes
+        GamesFolderMigration.keepNestedBind = keepNested
+    }
+
+    /** Records every folder the prune touches on disk. */
+    private fun countNestedProbes(): MutableList<String> {
+        val probes = mutableListOf<String>()
+        GamesFolderMigration.keepNestedBind = { dir -> probes.add(dir.path); keepNested(dir) }
+        return probes
+    }
+
+    private fun library(dir: File): File = dir.apply {
+        File(this, "steamapps").mkdirs()
+        File(this, "steamapps/appmanifest_1.acf").writeText("\"AppState\" { }")
+    }
 
     private fun added(result: AddedGames.AddResult) = (result as AddedGames.AddResult.Added).game
 
@@ -327,6 +344,75 @@ class AddedGamesStorageBindTest {
         GamesFolderMigration.run(app)
         assertTrue(SessionPrefs.gameFolderBinds(app).any { it == lib.path to "$g/Lib" })
         assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+    }
+
+    @Test fun aNestedLibraryBindStaysWhileTheStickIsOutAndIsALibraryAgainOnceItIsBack() {
+        SessionPrefs.setGameStorage(app, "", "")
+        val a = File(stick, "A")
+        val lib = library(File(a, "Lib"))
+        val foo = exe(File(lib, "Foo/Foo.exe"))
+        val binds = listOf(lib.path to "$g/Lib", a.path to "$g/A")
+        SessionPrefs.setGameFolderBinds(app, binds)
+        AddedExes.put(app, AddedExes.Entry(foo.parentFile!!.path, foo.path))
+        SessionPrefs.setAddedGameStartIn(app, foo.parentFile!!.path, "$g/Lib/Foo")
+        assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+        val probes = countNestedProbes()
+
+        val away = File(tmp.root, "unplugged")
+        assertTrue(stick.renameTo(away))
+        AddedGames.volumeRoots = { emptyList() }
+        migrate()
+        GamesFolderMigration.run(app)
+        assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+        assertEquals("$g/Lib/Foo", SessionPrefs.addedGameStartIn(app, foo.parentFile!!.path))
+        assertFalse(SessionPrefs.addedGameRootsMigrated(app))
+        assertEquals(listOf(lib.path, lib.path), probes)
+
+        assertTrue(away.renameTo(stick))
+        AddedGames.volumeRoots = { listOf(stick) }
+        GamesFolderMigration.rootsTried = 0L
+        GamesFolderMigration.run(app)
+        assertEquals(3, probes.size)
+        assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+        assertTrue(SessionPrefs.addedGameRootsMigrated(app))
+        assertEquals("$g/Lib/Foo", SessionPrefs.addedGameStartIn(app, foo.parentFile!!.path))
+        assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+    }
+
+    @Test fun anUnreadableNestedBindIsKeptAndPrunedOnceItIsReadableWithoutALibrary() {
+        val a = File(stick, "A")
+        val inner = File(a, "Inner").apply { mkdirs() }
+        val binds = listOf(inner.path to "$g/Inner", a.path to "$g/A")
+        SessionPrefs.setGameFolderBinds(app, binds)
+        inner.setReadable(false, false)
+        try {
+            assumeFalse(inner.canRead())
+            GamesFolderMigration.run(app)
+            assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+        } finally {
+            inner.setReadable(true, false)
+        }
+        GamesFolderMigration.run(app)
+        assertEquals(listOf(a.path to "$g/A"), SessionPrefs.gameFolderBinds(app))
+    }
+
+    @Test fun guestPathTouchesNoFolderForBindsThatAreNotNested() {
+        val a = File(stick, "A")
+        val b = library(File(stick, "B"))
+        val game = exe(File(a, "Game/Game.exe"))
+        SessionPrefs.setGameFolderBinds(app, listOf(a.path to "$g/A", b.path to "$g/B", File(stick, "AB").path to "$g/AB"))
+        AddedExes.put(app, AddedExes.Entry(game.parentFile!!.path, game.path))
+        val probes = countNestedProbes()
+
+        repeat(5) { assertEquals("$g/A/Game/Game.exe", AddedGames.guestPath(app, game)) }
+        AddedGames.roots(app)
+        assertEquals(emptyList<String>(), probes)
+
+        val inner = File(a, "Game").path
+        SessionPrefs.setGameFolderBinds(app, SessionPrefs.gameFolderBinds(app) + (inner to "$g/Game"))
+        assertEquals("$g/A/Game/Game.exe", AddedGames.guestPath(app, game))
+        assertEquals(listOf(inner), probes)
+        assertEquals(3, SessionPrefs.gameFolderBinds(app).size)
     }
 
     @Test fun aBindThatNeverComesBackOnlyWaitsAndBindsMadeAfterTheUpdateAreNotWidened() {
