@@ -71,7 +71,7 @@ object AddedGames {
         return null
     }
 
-    private fun mappedGuestPath(context: Context, host: File): String? {
+    internal fun mappedGuestPath(context: Context, host: File): String? {
         val path = host.absolutePath
         SessionPrefs.romsDir(context).takeIf { it.isNotEmpty() }?.let { roms ->
             if (path.startsWith("$roms/")) return "/root/ROMs/" + path.removePrefix("$roms/")
@@ -255,7 +255,7 @@ object AddedGames {
 
     private fun canonical(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
 
-    private fun inside(path: String, folder: String) = path.startsWith(folder.trimEnd('/') + "/")
+    internal fun inside(path: String, folder: String) = path.startsWith(folder.trimEnd('/') + "/")
 
     private fun ownerFolder(context: Context, exe: File): File? {
         GamesFolderMigration.run(context)
@@ -307,7 +307,7 @@ object AddedGames {
         val path = canonical(exe)
         val owner = ownerFolder(app, exe)
         val volume = exe.parentFile?.takeIf { mappedGuestPath(app, exe) == null }?.let { removableVolume(app, it) }
-        val top = volume?.let { topFolder(it, exe) }
+        val top = volume?.let { topFolder(it, exe) }?.let { bindTarget(app, it, exe) }
         val rebound = top != null && guestPath(app, top) == null
         if (rebound) bindFolder(app, top!!)
         if (owner != null && owner.path !in SessionPrefs.removedAddedGames(app)) {
@@ -346,6 +346,20 @@ object AddedGames {
         if (!inside(dir, base)) return null
         return File(base, dir.removePrefix("$base/").substringBefore('/'))
     }
+
+    internal fun bindTarget(context: Context, top: File, exe: File): File {
+        val roots = mappedRoots(context)
+        fun covers(dir: File) = dir.absolutePath.let { base -> roots.any { it == base || inside(it, base) } }
+        if (!covers(top)) return top
+        val dir = exe.parentFile?.absolutePath ?: return top
+        var folder = gameFolder(top, exe, entryFolders(context))
+        while (covers(folder) && inside(dir, folder.absolutePath)) folder = File(folder, dir.removePrefix(folder.absolutePath + "/").substringBefore('/'))
+        return folder
+    }
+
+    private fun mappedRoots(context: Context): List<String> =
+        listOfNotNull(SessionPrefs.romsDir(context).takeIf { it.isNotEmpty() }, GameStorage.effective(context)?.path) +
+            StoreInstallRoot.externalRoots(context).map { it.first.absolutePath } + SteamLibraries.list(context).map { it.path }
 
     private val CONTAINERS = setOf("games", "pc games", "gog games", "epic games", "steam", "steamlibrary", "steam library", "common")
 
@@ -390,8 +404,7 @@ object AddedGames {
         return FolderResult(added, already)
     }
 
-    @Synchronized
-    internal fun bindFolder(context: Context, dir: File) {
+    internal fun bindFolder(context: Context, dir: File) { synchronized(GamesFolderMigration) {
         if (!dir.isDirectory || !dir.canRead()) return
         val binds = SessionPrefs.gameFolderBinds(context)
         if (binds.any { it.first == dir.path }) return
@@ -402,7 +415,7 @@ object AddedGames {
         while (guest in taken) guest = "$base-${n++}"
         SessionPrefs.setGameFolderBinds(context, binds + (dir.path to guest))
         Log.i(TAG, "games: bound $dir at $guest")
-    }
+    } }
 
     private fun listedFolders(context: Context, removed: Set<String>): List<String> {
         val out = ArrayList<String>()

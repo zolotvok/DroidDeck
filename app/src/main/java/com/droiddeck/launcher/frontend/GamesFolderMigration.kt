@@ -11,9 +11,19 @@ import java.util.zip.CRC32
 object GamesFolderMigration {
     private const val TAG = "GamesFolderMigration"
 
+    private const val ROOTS_RETRY_MS = 60_000L
+
+    @Volatile
+    internal var rootsTried = 0L
+
     @Synchronized
     fun run(context: Context) {
+        migrateLegacyDirs(context)
+        rebindGameRoots(context)
         pruneNestedBinds(context)
+    }
+
+    private fun migrateLegacyDirs(context: Context) {
         val dirs = SessionPrefs.addedGamesDirs(context)
         if (dirs.isEmpty()) return
         val roots = legacyRoots(SessionPrefs.gameFolderBinds(context).map { it.first } + dirs)
@@ -57,6 +67,39 @@ object GamesFolderMigration {
         }
         SessionPrefs.setAddedGamesDirs(context, emptyList())
         SessionPrefs.setGamesFoldersMigrated(context)
+    }
+
+    internal fun rebindGameRoots(context: Context) {
+        if (SessionPrefs.addedGameRootsMigrated(context)) return
+        val now = System.currentTimeMillis()
+        if (now - rootsTried < ROOTS_RETRY_MS) return
+        rootsTried = now
+        val volumes = AddedGames.volumeRoots(context).filter { it.list() != null }
+        val exes = AddedExes.list(context).map { it.exe }
+        val dead = HashSet<String>()
+        var pending = false
+        for ((host, guest) in SessionPrefs.gameFolderBinds(context)) {
+            val dir = File(host)
+            val volume = volumes.firstOrNull { AddedGames.inside(dir.absolutePath, it.absolutePath) }
+            if (!dir.isDirectory) {
+                if (volume != null) dead.add(host) else pending = true
+                continue
+            }
+            if (volume == null || exes.none { AddedGames.inside(it, dir.absolutePath) }) continue
+            if (AddedGames.mappedGuestPath(context, dir) != null) continue
+            val probe = File(dir, "game.exe")
+            val top = AddedGames.topFolder(volume, probe) ?: continue
+            val target = AddedGames.bindTarget(context, top, probe)
+            if (target.absolutePath == dir.absolutePath || !AddedGames.inside(dir.absolutePath, target.absolutePath)) continue
+            if (SessionPrefs.gameFolderBinds(context).any { it.first != host && AddedGames.inside(host, it.first) }) continue
+            AddedGames.bindFolder(context, target)
+            Log.i(TAG, "games: $host ($guest) is not its game root; bound ${target.path}")
+        }
+        if (dead.isNotEmpty()) {
+            SessionPrefs.setGameFolderBinds(context, SessionPrefs.gameFolderBinds(context).filterNot { it.first in dead })
+            Log.i(TAG, "games: dropped binds of moved or deleted folders: ${dead.joinToString()}")
+        }
+        if (!pending) SessionPrefs.setAddedGameRootsMigrated(context, true)
     }
 
     internal fun pruneNestedBinds(context: Context) {

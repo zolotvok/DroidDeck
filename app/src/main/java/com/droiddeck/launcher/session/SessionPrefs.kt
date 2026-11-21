@@ -1168,6 +1168,12 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("gamesFoldersMigrated", true).apply()
     }
 
+    fun addedGameRootsMigrated(context: Context): Boolean = prefs(context).getBoolean("addedGameRootsMigrated", false)
+
+    fun setAddedGameRootsMigrated(context: Context, done: Boolean) {
+        prefs(context).edit().putBoolean("addedGameRootsMigrated", done).apply()
+    }
+
     fun removedAddedGames(context: Context): List<String> =
         (prefs(context).getString("removedAddedGames", "") ?: "").split('\n').filter { it.isNotEmpty() }
 
@@ -1195,6 +1201,10 @@ object SessionPrefs {
         val edit = p.edit()
         p.all.filterKeys { it.startsWith("addedStartIn:") }.forEach { (key, value) ->
             if (value is String && (value == from || value.startsWith("$from/"))) edit.putString(key, to + value.removePrefix(from))
+        }
+        val inLaunch = Regex("(?<![^\\s\"'=])" + Regex.escape(from) + "(?=[/\\s\"']|$)")
+        p.all.filterKeys { it.startsWith("addedLaunch:") }.forEach { (key, value) ->
+            if (value is String && inLaunch.containsMatchIn(value)) edit.putString(key, inLaunch.replace(value, Regex.escapeReplacement(to)))
         }
         edit.apply()
     }
