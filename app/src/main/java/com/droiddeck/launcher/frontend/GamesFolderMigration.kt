@@ -13,6 +13,7 @@ object GamesFolderMigration {
 
     @Synchronized
     fun run(context: Context) {
+        pruneNestedBinds(context)
         val dirs = SessionPrefs.addedGamesDirs(context)
         if (dirs.isEmpty()) return
         val roots = legacyRoots(SessionPrefs.gameFolderBinds(context).map { it.first } + dirs)
@@ -56,6 +57,23 @@ object GamesFolderMigration {
         }
         SessionPrefs.setAddedGamesDirs(context, emptyList())
         SessionPrefs.setGamesFoldersMigrated(context)
+    }
+
+    internal fun pruneNestedBinds(context: Context) {
+        val binds = SessionPrefs.gameFolderBinds(context)
+        if (binds.size < 2) return
+        val nested = binds.mapNotNull { bind ->
+            binds.filter { it.first != bind.first && bind.first.startsWith(it.first.trimEnd('/') + "/") }
+                .minByOrNull { it.first.length }?.let { bind to it }
+        }
+        if (nested.isEmpty()) return
+        for ((inner, outer) in nested) {
+            val moved = outer.second + "/" + inner.first.removePrefix(outer.first.trimEnd('/') + "/")
+            SessionPrefs.moveAddedGameStartIns(context, inner.second, moved)
+            Log.i(TAG, "games: ${inner.first} lies inside ${outer.first}; dropped its bind ${inner.second}")
+        }
+        val dropped = nested.map { it.first }.toSet()
+        SessionPrefs.setGameFolderBinds(context, binds.filterNot { it in dropped })
     }
 
     internal fun legacyRoots(paths: List<String>): List<AddedGames.Root> {

@@ -59,13 +59,20 @@ object AddedGames {
 
     const val GUEST_DIR = "/root/Games"
 
-    fun guestPath(context: Context, host: File): String? {
+    fun guestPath(context: Context, host: File): String? = bindGuestPath(roots(context), host) ?: mappedGuestPath(context, host)
+
+    internal fun bindGuestPath(roots: List<Root>, host: File): String? {
         val path = host.absolutePath
-        for (root in roots(context)) {
+        for (root in roots.sortedBy { it.host.absolutePath.length }) {
             val dir = root.host.absolutePath
             if (path == dir) return root.guest
             if (path.startsWith("$dir/")) return root.guest + "/" + path.removePrefix("$dir/")
         }
+        return null
+    }
+
+    private fun mappedGuestPath(context: Context, host: File): String? {
+        val path = host.absolutePath
         SessionPrefs.romsDir(context).takeIf { it.isNotEmpty() }?.let { roms ->
             if (path.startsWith("$roms/")) return "/root/ROMs/" + path.removePrefix("$roms/")
         }
@@ -299,14 +306,21 @@ object AddedGames {
         if (!exe.isFile) return AddResult.NotFound
         val path = canonical(exe)
         val owner = ownerFolder(app, exe)
+        val volume = exe.parentFile?.takeIf { mappedGuestPath(app, exe) == null }?.let { removableVolume(app, it) }
+        val top = volume?.let { topFolder(it, exe) }
+        val rebound = top != null && guestPath(app, top) == null
+        if (rebound) bindFolder(app, top!!)
         if (owner != null && owner.path !in SessionPrefs.removedAddedGames(app)) {
-            single(app, owner.path)?.takeIf { canonical(it.exe) == path }?.let { return AddResult.Existing(it) }
+            single(app, owner.path)?.takeIf { canonical(it.exe) == path }?.let { game ->
+                if (rebound) AddedGamesPublisher.later(app) { com.droiddeck.launcher.stores.SteamLiveShortcuts.sync(app, listOf(game)) { true } }
+                return AddResult.Existing(game)
+            }
         }
         if (guestPath(app, exe) == null) {
-            (owner ?: exe.parentFile)?.takeIf { guestPath(app, it) == null }?.let { bindFolder(app, it) }
+            if (volume == null) (owner ?: exe.parentFile)?.takeIf { guestPath(app, it) == null }?.let { bindFolder(app, it) }
             if (guestPath(app, exe) == null) return AddResult.Unreachable
         }
-        val folder = owner ?: exe.parentFile ?: return AddResult.NotFound
+        val folder = owner ?: top?.let { gameFolder(it, exe, entryFolders(app)) } ?: exe.parentFile ?: return AddResult.NotFound
         SessionPrefs.setAddedGameRemoved(app, folder.path, false)
         SessionPrefs.setAddedGameExe(app, folder.path, exe.path)
         if (owner == null) AddedExes.put(app, AddedExes.Entry(folder.path, exe.path))
@@ -314,6 +328,37 @@ object AddedGames {
         AddedGamesPublisher.later(app) { com.droiddeck.launcher.stores.SteamLiveShortcuts.sync(app, listOf(game)) { true } }
         Log.i(TAG, "added ${game.name} from its exe")
         return if (owner == null) AddResult.Added(game) else AddResult.Switched(game)
+    }
+
+    internal var volumeRoots: (Context) -> List<File> = { context ->
+        GameStorage.options(context).mapNotNull { o -> File(o.path.substringBefore("/Android/")).takeIf { it.isDirectory } }
+            .distinctBy { it.absolutePath }
+    }
+
+    private fun removableVolume(context: Context, dir: File): File? {
+        val path = dir.absolutePath
+        return volumeRoots(context).firstOrNull { path == it.absolutePath || inside(path, it.absolutePath) }
+    }
+
+    internal fun topFolder(volume: File, exe: File): File? {
+        val dir = exe.parentFile?.absolutePath ?: return null
+        val base = volume.absolutePath.trimEnd('/')
+        if (!inside(dir, base)) return null
+        return File(base, dir.removePrefix("$base/").substringBefore('/'))
+    }
+
+    private val CONTAINERS = setOf("games", "pc games", "gog games", "epic games", "steam", "steamlibrary", "steam library", "common")
+
+    internal fun gameFolder(top: File, exe: File, taken: Set<String>): File {
+        val dir = exe.parentFile?.absolutePath ?: return top
+        var folder = top
+        while (inside(dir, folder.absolutePath)) {
+            val container = folder.name.lowercase() in CONTAINERS || isSteamLibraryFolder(folder.name) ||
+                folder.path in taken || groupGames(folder) != null
+            if (!container) break
+            folder = File(folder, dir.removePrefix(folder.absolutePath + "/").substringBefore('/'))
+        }
+        return folder
     }
 
     class FolderResult(val added: List<Game>, val already: Int)

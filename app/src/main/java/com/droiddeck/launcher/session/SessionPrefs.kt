@@ -1190,6 +1190,15 @@ object SessionPrefs {
         prefs(context).edit().putString("addedStartIn:$folderPath", guestDir.trim()).apply()
     }
 
+    fun moveAddedGameStartIns(context: Context, from: String, to: String) = synchronized(addedGameLock) {
+        val p = prefs(context)
+        val edit = p.edit()
+        p.all.filterKeys { it.startsWith("addedStartIn:") }.forEach { (key, value) ->
+            if (value is String && (value == from || value.startsWith("$from/"))) edit.putString(key, to + value.removePrefix(from))
+        }
+        edit.apply()
+    }
+
     fun addedGameLaunch(context: Context, folderPath: String): String = prefs(context).getString("addedLaunch:$folderPath", "") ?: ""
 
     fun setAddedGameLaunch(context: Context, folderPath: String, options: String) {
