@@ -1174,6 +1174,14 @@ object SessionPrefs {
         prefs(context).edit().putBoolean("addedGameRootsMigrated", done).apply()
     }
 
+    /** Hosts of the binds the one-time root migration still has to look at; null until its first run took the snapshot. */
+    fun addedGameRootsPending(context: Context): List<String>? =
+        prefs(context).getString("addedGameRootsPending", null)?.split('\n')?.filter { it.isNotEmpty() }
+
+    fun setAddedGameRootsPending(context: Context, hosts: List<String>?) {
+        prefs(context).edit().apply { if (hosts == null) remove("addedGameRootsPending") else putString("addedGameRootsPending", hosts.joinToString("\n")) }.apply()
+    }
+
     fun removedAddedGames(context: Context): List<String> =
         (prefs(context).getString("removedAddedGames", "") ?: "").split('\n').filter { it.isNotEmpty() }
 

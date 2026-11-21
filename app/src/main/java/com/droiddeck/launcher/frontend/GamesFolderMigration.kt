@@ -2,6 +2,7 @@ package com.droiddeck.launcher.frontend
 
 import android.content.Context
 import android.util.Log
+import com.droiddeck.launcher.session.GameStorage
 import com.droiddeck.launcher.session.SessionPrefs
 import com.droiddeck.launcher.stores.StoreGameSidecar
 import com.droiddeck.launcher.stores.StoreInstallRoot
@@ -69,23 +70,37 @@ object GamesFolderMigration {
         SessionPrefs.setGamesFoldersMigrated(context)
     }
 
+    @Volatile
+    internal var lastVolumes: Set<String>? = null
+
+    /** The binds that existed before the update; the migration never looks at a bind made later. */
+    internal fun rootsSnapshot(context: Context): List<String> =
+        SessionPrefs.addedGameRootsPending(context)
+            ?: SessionPrefs.gameFolderBinds(context).map { it.first }.also { SessionPrefs.setAddedGameRootsPending(context, it) }
+
     internal fun rebindGameRoots(context: Context) {
         if (SessionPrefs.addedGameRootsMigrated(context)) return
+        val todo = rootsSnapshot(context).toSet()
         val now = System.currentTimeMillis()
-        if (now - rootsTried < ROOTS_RETRY_MS) return
+        if (todo.isNotEmpty() && now - rootsTried < ROOTS_RETRY_MS) return
         rootsTried = now
-        val volumes = AddedGames.volumeRoots(context).filter { it.list() != null }
-        val exes = AddedExes.list(context).map { it.exe }
+        val volumes = if (todo.isEmpty()) emptyList() else AddedGames.volumeRoots(context).filter { it.list() != null }
+        val mounted = volumes.map { it.absolutePath }.toSet()
+        if (todo.isNotEmpty() && mounted == lastVolumes) return
+        lastVolumes = mounted
+        val storage = android.os.Environment.getExternalStorageDirectory().absolutePath
+        val exes by lazy { AddedExes.list(context).map { it.exe } }
         val dead = HashSet<String>()
-        var pending = false
+        val waiting = ArrayList<String>()
         for ((host, guest) in SessionPrefs.gameFolderBinds(context)) {
+            if (host !in todo) continue
             val dir = File(host)
             val volume = volumes.firstOrNull { AddedGames.inside(dir.absolutePath, it.absolutePath) }
             if (!dir.isDirectory) {
-                if (volume != null) dead.add(host) else pending = true
+                if (volume != null) dead.add(host) else if (!AddedGames.inside(dir.absolutePath, storage)) waiting.add(host)
                 continue
             }
-            if (volume == null || exes.none { AddedGames.inside(it, dir.absolutePath) }) continue
+            if (volume == null || GameStorage.hasInstalledGames(dir) || exes.none { AddedGames.inside(it, dir.absolutePath) }) continue
             if (AddedGames.mappedGuestPath(context, dir) != null) continue
             val probe = File(dir, "game.exe")
             val top = AddedGames.topFolder(volume, probe) ?: continue
@@ -99,13 +114,15 @@ object GamesFolderMigration {
             SessionPrefs.setGameFolderBinds(context, SessionPrefs.gameFolderBinds(context).filterNot { it.first in dead })
             Log.i(TAG, "games: dropped binds of moved or deleted folders: ${dead.joinToString()}")
         }
-        if (!pending) SessionPrefs.setAddedGameRootsMigrated(context, true)
+        SessionPrefs.setAddedGameRootsPending(context, waiting)
+        if (waiting.isEmpty()) SessionPrefs.setAddedGameRootsMigrated(context, true)
+        else Log.i(TAG, "games: ${waiting.size} bind(s) wait for their volume: ${waiting.joinToString()}")
     }
 
     internal fun pruneNestedBinds(context: Context) {
         val binds = SessionPrefs.gameFolderBinds(context)
         if (binds.size < 2) return
-        val nested = binds.mapNotNull { bind ->
+        val nested = binds.filterNot { GameStorage.hasInstalledGames(File(it.first)) }.mapNotNull { bind ->
             binds.filter { it.first != bind.first && bind.first.startsWith(it.first.trimEnd('/') + "/") }
                 .minByOrNull { it.first.length }?.let { bind to it }
         }

@@ -2,6 +2,7 @@ package com.droiddeck.launcher.frontend
 
 import android.content.Context
 import android.os.Environment
+import com.droiddeck.launcher.session.GameStorage
 import com.droiddeck.launcher.session.SessionPrefs
 import java.io.File
 import org.junit.After
@@ -35,7 +36,9 @@ class AddedGamesStorageBindTest {
         SessionPrefs.setGameStorage(app, SessionPrefs.GAME_STORAGE_OFF, "")
         SessionPrefs.setAddedGamesDirs(app, emptyList())
         SessionPrefs.setAddedGameRootsMigrated(app, true)
+        SessionPrefs.setAddedGameRootsPending(app, null)
         GamesFolderMigration.rootsTried = 0L
+        GamesFolderMigration.lastVolumes = null
         stick = tmp.newFolder("0A1B-2C3D")
         volumes = AddedGames.volumeRoots
         AddedGames.volumeRoots = { listOf(stick) }
@@ -49,7 +52,9 @@ class AddedGamesStorageBindTest {
 
     private fun migrate() {
         SessionPrefs.setAddedGameRootsMigrated(app, false)
+        SessionPrefs.setAddedGameRootsPending(app, null)
         GamesFolderMigration.rootsTried = 0L
+        GamesFolderMigration.lastVolumes = null
         GamesFolderMigration.run(app)
     }
 
@@ -297,6 +302,72 @@ class AddedGamesStorageBindTest {
         AddedExes.put(app, AddedExes.Entry(x64.path, pick.path))
         migrate()
         assertEquals(listOf(File(stuff, "Game").path to "$g/Game"), SessionPrefs.gameFolderBinds(app))
+    }
+
+    @Test fun aBindThatHoldsASteamLibraryIsNeverWidenedAndStaysALibrary() {
+        SessionPrefs.setGameStorage(app, "", "")
+        val lib = File(stick, "A/Lib")
+        File(lib, "steamapps").mkdirs()
+        File(lib, "steamapps/appmanifest_1.acf").writeText("\"AppState\" { }")
+        val foo = exe(File(lib, "Foo/Foo.exe"))
+        SessionPrefs.setGameFolderBinds(app, listOf(lib.path to "$g/Lib"))
+        AddedExes.put(app, AddedExes.Entry(File(lib, "Foo").path, foo.path))
+        assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+
+        migrate()
+
+        assertEquals(listOf(lib.path to "$g/Lib"), SessionPrefs.gameFolderBinds(app))
+        assertTrue(SessionPrefs.addedGameRootsMigrated(app))
+        assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+
+        val other = exe(File(stick, "A/Other/bin/x64/Other.exe"))
+        added(AddedGames.addExe(app, other))
+        assertEquals(listOf(lib.path to "$g/Lib", File(stick, "A/Other").path to "$g/Other"), SessionPrefs.gameFolderBinds(app))
+        AddedGames.bindFolder(app, File(stick, "A"))
+        GamesFolderMigration.run(app)
+        assertTrue(SessionPrefs.gameFolderBinds(app).any { it == lib.path to "$g/Lib" })
+        assertEquals(listOf(lib.path), GameStorage.gamesFolderLibraries(app).map { it.host.path })
+    }
+
+    @Test fun aBindThatNeverComesBackOnlyWaitsAndBindsMadeAfterTheUpdateAreNotWidened() {
+        val gone = File(tmp.root, "DEAD-BEEF/Game/bin/x64")
+        SessionPrefs.setGameFolderBinds(app, listOf(gone.path to "$g/x64"))
+        AddedExes.put(app, AddedExes.Entry(gone.path, File(gone, "Game.exe").path))
+
+        migrate()
+        assertFalse(SessionPrefs.addedGameRootsMigrated(app))
+        assertEquals(listOf(gone.path), SessionPrefs.addedGameRootsPending(app))
+
+        val shelf = File(stick, "Games/Shelf")
+        val pick = exe(File(shelf, "Bar/bin/x64/Bar.exe"))
+        AddedGames.bindFolder(app, shelf)
+        AddedExes.put(app, AddedExes.Entry(File(shelf, "Bar").path, pick.path))
+        repeat(2) {
+            GamesFolderMigration.rootsTried = 0L
+            GamesFolderMigration.lastVolumes = null
+            GamesFolderMigration.run(app)
+        }
+        assertEquals(listOf(gone.path to "$g/x64", shelf.path to "$g/Shelf"), SessionPrefs.gameFolderBinds(app))
+        assertEquals(listOf(gone.path), SessionPrefs.addedGameRootsPending(app))
+        assertFalse(SessionPrefs.addedGameRootsMigrated(app))
+
+        val second = tmp.newFolder("5E5E-1111")
+        AddedGames.volumeRoots = { listOf(stick, second) }
+        GamesFolderMigration.rootsTried = 0L
+        GamesFolderMigration.run(app)
+        assertEquals(listOf(gone.path), SessionPrefs.addedGameRootsPending(app))
+        assertFalse(SessionPrefs.addedGameRootsMigrated(app))
+    }
+
+    @Test fun aFreshInstallFinishesTheMigrationAtOnceAndLaterBindsAreNotTouched() {
+        migrate()
+        assertTrue(SessionPrefs.addedGameRootsMigrated(app))
+        val shelf = File(stick, "Games/Shelf")
+        exe(File(shelf, "Bar/bin/x64/Bar.exe"))
+        AddedGames.bindFolder(app, shelf)
+        GamesFolderMigration.rootsTried = 0L
+        GamesFolderMigration.run(app)
+        assertEquals(listOf(shelf.path to "$g/Shelf"), SessionPrefs.gameFolderBinds(app))
     }
 
     @Test fun anUnreadableTopFolderIsUnreachable() {

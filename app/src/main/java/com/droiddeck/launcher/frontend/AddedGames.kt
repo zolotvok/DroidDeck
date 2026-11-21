@@ -359,7 +359,8 @@ object AddedGames {
 
     private fun mappedRoots(context: Context): List<String> =
         listOfNotNull(SessionPrefs.romsDir(context).takeIf { it.isNotEmpty() }, GameStorage.effective(context)?.path) +
-            StoreInstallRoot.externalRoots(context).map { it.first.absolutePath } + SteamLibraries.list(context).map { it.path }
+            StoreInstallRoot.externalRoots(context).map { it.first.absolutePath } + SteamLibraries.list(context).map { it.path } +
+            SessionPrefs.gameFolderBinds(context).map { it.first }.filter { GameStorage.hasInstalledGames(File(it)) }
 
     private val CONTAINERS = setOf("games", "pc games", "gog games", "epic games", "steam", "steamlibrary", "steam library", "common")
 
@@ -406,6 +407,7 @@ object AddedGames {
 
     internal fun bindFolder(context: Context, dir: File) { synchronized(GamesFolderMigration) {
         if (!dir.isDirectory || !dir.canRead()) return
+        if (!SessionPrefs.addedGameRootsMigrated(context)) GamesFolderMigration.rootsSnapshot(context)
         val binds = SessionPrefs.gameFolderBinds(context)
         if (binds.any { it.first == dir.path }) return
         val taken = binds.map { it.second }.toSet()
