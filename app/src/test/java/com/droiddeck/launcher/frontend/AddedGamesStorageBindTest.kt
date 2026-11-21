@@ -44,6 +44,7 @@ class AddedGamesStorageBindTest {
         volumes = AddedGames.volumeRoots
         AddedGames.volumeRoots = { listOf(stick) }
         keepNested = GamesFolderMigration.keepNestedBind
+        GamesFolderMigration.forgetNestedKeeps()
     }
 
     @After fun tearDown() {
@@ -360,19 +361,21 @@ class AddedGamesStorageBindTest {
 
         val away = File(tmp.root, "unplugged")
         assertTrue(stick.renameTo(away))
+        GamesFolderMigration.forgetNestedKeeps()
         AddedGames.volumeRoots = { emptyList() }
         migrate()
         GamesFolderMigration.run(app)
         assertEquals(binds, SessionPrefs.gameFolderBinds(app))
         assertEquals("$g/Lib/Foo", SessionPrefs.addedGameStartIn(app, foo.parentFile!!.path))
         assertFalse(SessionPrefs.addedGameRootsMigrated(app))
-        assertEquals(listOf(lib.path, lib.path), probes)
+        assertEquals(listOf(lib.path), probes)
 
         assertTrue(away.renameTo(stick))
+        GamesFolderMigration.forgetNestedKeeps()
         AddedGames.volumeRoots = { listOf(stick) }
         GamesFolderMigration.rootsTried = 0L
         GamesFolderMigration.run(app)
-        assertEquals(3, probes.size)
+        assertEquals(2, probes.size)
         assertEquals(binds, SessionPrefs.gameFolderBinds(app))
         assertTrue(SessionPrefs.addedGameRootsMigrated(app))
         assertEquals("$g/Lib/Foo", SessionPrefs.addedGameStartIn(app, foo.parentFile!!.path))
@@ -392,7 +395,58 @@ class AddedGamesStorageBindTest {
         } finally {
             inner.setReadable(true, false)
         }
+        GamesFolderMigration.forgetNestedKeeps()
         GamesFolderMigration.run(app)
+        assertEquals(listOf(a.path to "$g/A"), SessionPrefs.gameFolderBinds(app))
+    }
+
+    @Test fun aNestedLibraryWhoseManifestsAreHiddenStays() {
+        val a = File(stick, "A")
+        val lib = File(a, "Lib/steamapps").apply { mkdirs() }.parentFile!!
+        val binds = listOf(lib.path to "$g/Lib", a.path to "$g/A")
+        SessionPrefs.setGameFolderBinds(app, binds)
+        assertFalse(GameStorage.hasInstalledGames(lib))
+
+        GamesFolderMigration.run(app)
+        assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+    }
+
+    @Test fun theNestedProbeReadsTheLibraryFirstAndTheFolderLast() {
+        val lib = library(File(stick, "A/Lib"))
+        val away = File(tmp.root, "unplugged")
+        val unplugsAfterList = object : File(lib.path) {
+            override fun list(): Array<String>? = super.list().also { assertTrue(stick.renameTo(away)) }
+        }
+        assertTrue(keepNested(unplugsAfterList))
+        assertTrue(stick.exists())
+
+        val empty = File(stick, "A/Empty").apply { mkdirs() }
+        var probes = 0
+        val unplugsAfterTheFirstProbe = object : File(empty.path) {
+            override fun list(): Array<String>? { probes++; return null }
+        }
+        assertTrue(keepNested(unplugsAfterTheFirstProbe))
+        assertEquals(1, probes)
+        assertFalse(keepNested(empty))
+    }
+
+    @Test fun aKeptNestedBindIsProbedOnceUntilTheVolumesChange() {
+        val a = File(stick, "A")
+        val lib = library(File(a, "Lib"))
+        val binds = listOf(lib.path to "$g/Lib", a.path to "$g/A")
+        SessionPrefs.setGameFolderBinds(app, binds)
+        val probes = countNestedProbes()
+
+        repeat(3) { GamesFolderMigration.run(app) }
+        assertEquals(listOf(lib.path), probes)
+        assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+
+        File(lib, "steamapps").deleteRecursively()
+        GamesFolderMigration.run(app)
+        assertEquals(binds, SessionPrefs.gameFolderBinds(app))
+        GamesFolderMigration.forgetNestedKeeps()
+        GamesFolderMigration.run(app)
+        assertEquals(listOf(lib.path, lib.path), probes)
         assertEquals(listOf(a.path to "$g/A"), SessionPrefs.gameFolderBinds(app))
     }
 

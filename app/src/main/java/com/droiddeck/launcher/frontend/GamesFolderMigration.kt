@@ -120,12 +120,24 @@ object GamesFolderMigration {
     }
 
     /**
-     * Whether a bind nested under another bind must stay. It stays when its folder cannot be listed
-     * (volume unplugged or still mounting, permission revoked: a missing nested bind is harmless) or
-     * when it holds a Steam library. Never cached, so a remounted volume is read again.
+     * Whether a bind nested under another bind must stay. It stays when it holds a Steam library (any
+     * `steamapps` folder counts, because a filtered storage view may hide the `.acf` files) or when its
+     * folder cannot be listed (volume unplugged or still mounting, permission revoked: a missing nested
+     * bind is harmless). The folder is listed LAST: a stick pulled after the library probe makes that
+     * list fail, so the bind is kept instead of dropped.
      */
     @Volatile
-    internal var keepNestedBind: (File) -> Boolean = { dir -> dir.list() == null || GameStorage.hasInstalledGames(dir) }
+    internal var keepNestedBind: (File) -> Boolean = { dir -> File(dir, "steamapps").isDirectory || GameStorage.hasInstalledGames(dir) || dir.list() == null }
+
+    /**
+     * Nested binds [keepNestedBind] chose to keep in this process. Only "keep" is remembered: a stale
+     * keep never loses data, while a drop is always decided from the disk. [forgetNestedKeeps] clears it
+     * on every media broadcast and when the launcher comes back to the front, so a remounted or changed
+     * volume is read again.
+     */
+    private val keptNested: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    fun forgetNestedKeeps() = keptNested.clear()
 
     internal fun pruneNestedBinds(context: Context) {
         val binds = SessionPrefs.gameFolderBinds(context)
@@ -135,7 +147,9 @@ object GamesFolderMigration {
                 .minByOrNull { it.first.length }?.let { bind to it }
         }
         if (candidates.isEmpty()) return
-        val nested = candidates.filterNot { keepNestedBind(File(it.first.first)) }
+        val nested = candidates.filterNot { (inner, _) ->
+            inner.first in keptNested || keepNestedBind(File(inner.first)).also { if (it) keptNested.add(inner.first) }
+        }
         if (nested.isEmpty()) return
         for ((inner, outer) in nested) {
             val moved = outer.second + "/" + inner.first.removePrefix(outer.first.trimEnd('/') + "/")

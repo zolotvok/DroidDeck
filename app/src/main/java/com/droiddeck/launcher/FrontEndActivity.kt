@@ -224,6 +224,7 @@ class FrontEndActivity : ComponentActivity() {
     }
     private val mediaReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            com.droiddeck.launcher.frontend.GamesFolderMigration.forgetNestedKeeps()
             usbScan++
             ui.removeCallbacks(mediaRefresh)
             ui.postDelayed(mediaRefresh, MEDIA_SETTLE_MS)
@@ -1742,6 +1743,7 @@ class FrontEndActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        com.droiddeck.launcher.frontend.GamesFolderMigration.forgetNestedKeeps()
         registerReceiver(wifiLocationReceiver, android.content.IntentFilter(android.location.LocationManager.MODE_CHANGED_ACTION))
         registerReceiver(mediaReceiver, android.content.IntentFilter().apply {
             for (action in listOf(Intent.ACTION_MEDIA_MOUNTED, Intent.ACTION_MEDIA_UNMOUNTED, Intent.ACTION_MEDIA_REMOVED,
